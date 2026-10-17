@@ -1,0 +1,152 @@
+// Derived from TigerVNC common/rfb/PixelFormat.cxx (GPL-2.0-or-later).
+package decode
+
+import (
+	"errors"
+	"io"
+
+	"github.com/kyya/myvnc/rfb/pixel"
+)
+
+type convMode int
+
+const (
+	modeNormal convMode = iota
+	modeRGB             // Tight 24-bit TPIXEL: R, G, B bytes
+	modeCLow            // ZRLE CPIXEL, 3 bytes in the low memory bytes
+	modeCHigh           // ZRLE CPIXEL, 3 bytes in the high memory bytes
+)
+
+// conv converts wire pixels to RGBA.
+type conv struct {
+	pf   *pixel.Format
+	mode convMode
+	size int // bytes per wire pixel
+	fast bool
+}
+
+func newConv(pf *pixel.Format) (*conv, error) {
+	if !pf.TrueColor {
+		return nil, errors.New("decode: colour-map pixel formats are not supported")
+	}
+	if pf.BPP != 8 && pf.BPP != 16 && pf.BPP != 32 {
+		return nil, errors.New("decode: unsupported bits per pixel")
+	}
+	if pf.RedMax == 0 || pf.GreenMax == 0 || pf.BlueMax == 0 {
+		return nil, errors.New("decode: bad colour maximum")
+	}
+	return &conv{pf: pf, size: int(pf.BPP) / 8, fast: *pf == pixel.RGBA}, nil
+}
+
+func is888(pf *pixel.Format) bool {
+	return pf.TrueColor && pf.BPP == 32 && pf.Depth == 24 &&
+		pf.RedMax == 255 && pf.GreenMax == 255 && pf.BlueMax == 255
+}
+
+// newTightConv returns the converter for Tight pixels (TPIXEL).
+func newTightConv(pf *pixel.Format) (*conv, error) {
+	c, err := newConv(pf)
+	if err == nil && is888(pf) {
+		c.mode, c.size = modeRGB, 3
+	}
+	return c, err
+}
+
+// newZRLEConv returns the converter for ZRLE pixels (CPIXEL).
+func newZRLEConv(pf *pixel.Format) (*conv, error) {
+	c, err := newConv(pf)
+	if err != nil || pf.BPP != 32 || pf.Depth > 24 {
+		return c, err
+	}
+	max := uint32(pf.RedMax)<<pf.RedShift | uint32(pf.GreenMax)<<pf.GreenShift | uint32(pf.BlueMax)<<pf.BlueShift
+	ls3 := max < 1<<24
+	ms3 := max&0xff == 0
+	switch {
+	case (ls3 && !pf.BigEndian) || (ms3 && pf.BigEndian):
+		c.mode, c.size = modeCLow, 3
+	case (ls3 && pf.BigEndian) || (ms3 && !pf.BigEndian):
+		c.mode, c.size = modeCHigh, 3
+	}
+	return c, nil
+}
+
+func up(v uint32, shift uint8, max uint16) byte {
+	return byte((v >> shift & uint32(max)) * 255 / uint32(max))
+}
+
+// put converts one wire pixel src into 4 RGBA bytes in dst.
+func (c *conv) put(dst, src []byte) {
+	dst[3] = 0xff
+	switch c.mode {
+	case modeRGB:
+		copy(dst[:3], src)
+		return
+	case modeCLow:
+		src = []byte{src[0], src[1], src[2], 0}
+	case modeCHigh:
+		src = []byte{0, src[0], src[1], src[2]}
+	}
+	if c.fast {
+		copy(dst[:3], src)
+		return
+	}
+	pf := c.pf
+	var v uint32
+	switch pf.BPP {
+	case 8:
+		v = uint32(src[0])
+	case 16:
+		if pf.BigEndian {
+			v = uint32(src[0])<<8 | uint32(src[1])
+		} else {
+			v = uint32(src[1])<<8 | uint32(src[0])
+		}
+	default:
+		if pf.BigEndian {
+			v = uint32(src[0])<<24 | uint32(src[1])<<16 | uint32(src[2])<<8 | uint32(src[3])
+		} else {
+			v = uint32(src[3])<<24 | uint32(src[2])<<16 | uint32(src[1])<<8 | uint32(src[0])
+		}
+	}
+	dst[0] = up(v, pf.RedShift, pf.RedMax)
+	dst[1] = up(v, pf.GreenShift, pf.GreenMax)
+	dst[2] = up(v, pf.BlueShift, pf.BlueMax)
+}
+
+// read reads one pixel from r.
+func (c *conv) read(r io.Reader) (px [4]byte, err error) {
+	var b [4]byte
+	if _, err = io.ReadFull(r, b[:c.size]); err != nil {
+		return
+	}
+	c.put(px[:], b[:c.size])
+	return
+}
+
+// readN reads n pixels into out (4*n bytes).
+func (c *conv) readN(r io.Reader, n int, out []byte) error {
+	raw := make([]byte, n*c.size)
+	if _, err := io.ReadFull(r, raw); err != nil {
+		return err
+	}
+	c.convert(raw, n, out)
+	return nil
+}
+
+func (c *conv) convert(raw []byte, n int, out []byte) {
+	for i := 0; i < n; i++ {
+		c.put(out[i*4:i*4+4], raw[i*c.size:(i+1)*c.size])
+	}
+}
+
+// quantize mimics bufferFromRGB followed by rgbFromBuffer.
+func (c *conv) quantize(p []byte) {
+	if c.mode == modeRGB || c.fast {
+		return
+	}
+	pf := c.pf
+	for i, m := range [3]uint16{pf.RedMax, pf.GreenMax, pf.BlueMax} {
+		d := (uint32(p[i])*uint32(m) + 128) / 255
+		p[i] = byte(d * 255 / uint32(m))
+	}
+}
