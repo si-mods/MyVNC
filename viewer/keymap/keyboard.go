@@ -34,6 +34,9 @@ type Layout interface {
 	VKToChar(vk uint16) uint32
 	// VKToScan is MapVirtualKeyW(vk, MAPVK_VK_TO_VSC).
 	VKToScan(vk uint16) uint16
+	// ScanToVK is MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX); extended scan
+	// codes come as 0xe0XX.
+	ScanToVK(scan uint16) uint16
 	// PrimaryLang is PRIMARYLANGID of the layout's language.
 	PrimaryLang() uint16
 	// HasAltGr reports whether Ctrl+Alt produces characters on the layout.
@@ -106,6 +109,7 @@ type Keyboard struct {
 
 	altGrArmed    bool
 	altGrCtrlTime uint32
+	altGrID       uint64 // counts the held back Ctrl presses
 	vkPacketHigh  uint16
 	leftShift     bool
 	rightShift    bool
@@ -115,11 +119,25 @@ type Keyboard struct {
 func NewKeyboard(layout Layout) *Keyboard { return &Keyboard{layout: layout} }
 
 // AltGrPending reports that a left Ctrl press is held back because it may
-// be the first half of AltGr. Call FlushAltGr after 100 ms without keys.
+// be the first half of AltGr. Prefer AltGrTimer for the timeout.
 func (k *Keyboard) AltGrPending() bool { return k.altGrArmed }
 
-// FlushAltGr sends the held back Ctrl press. Call it before any mouse event
-// and when the AltGr timeout runs out.
+// AltGrTimer reports a held back left Ctrl press and its id. Every call of
+// Handle that leaves a press pending holds back a new one: start a 100 ms
+// timer then, and call ExpireAltGr(id) when it runs out.
+func (k *Keyboard) AltGrTimer() (id uint64, pending bool) { return k.altGrID, k.altGrArmed }
+
+// ExpireAltGr is the timeout of the held back press id. It sends the Ctrl
+// press only if that press is still pending, so a timer left over from an
+// earlier press can't flush a later one early.
+func (k *Keyboard) ExpireAltGr(id uint64) []Event {
+	if id != k.altGrID {
+		return nil
+	}
+	return k.FlushAltGr()
+}
+
+// FlushAltGr sends the held back Ctrl press. Call it before any mouse event.
 func (k *Keyboard) FlushAltGr() []Event { return k.resolveAltGr(false, nil) }
 
 // Reset releases all pressed keys and forgets pending state; call it when
@@ -237,6 +255,7 @@ func (k *Keyboard) keyDown(ev WinKey) []Event {
 		if sys == 0x1d && ks == XK_Control_L {
 			k.altGrArmed = true
 			k.altGrCtrlTime = ev.Time
+			k.altGrID++
 			return out
 		}
 	}
@@ -414,6 +433,71 @@ func lookupVKey(vk uint16, ext bool, m [][3]uint32) uint32 {
 		return e[1]
 	}
 	return NoSymbol
+}
+
+// KeySyms lists the keysyms the key with RFB code could give with any of
+// Ctrl, Shift, Alt and AltGr, the plain one first, then a Latin one from
+// the layout. The shortcuts use it, because the modifiers change the keysym
+// of a key. Port of KeyboardWin32::translateToKeySyms.
+func (k *Keyboard) KeySyms(code uint32) []uint32 {
+	sys := int(code)
+	switch code { // undo translateSystemKeyCode
+	case 0xc6:
+		sys = 0x45
+	case 0x45:
+		sys = 0xc5
+	}
+	ext := sys&0x80 != 0
+	scan := uint16(sys & 0x7f)
+	if ext {
+		// TigerVNC writes 0xe0|scan here, which is no extended scan code.
+		scan |= 0xe000
+	}
+	vk := k.layout.ScanToVK(scan)
+	if vk == 0 {
+		return nil
+	}
+	var out []uint32
+	add := func(ks uint32) {
+		if ks != NoSymbol && !slices.Contains(out, ks) {
+			out = append(out, ks)
+		}
+	}
+	// No modifiers, then one at a time, then every combination.
+	try := func(mods int) {
+		var state [256]byte
+		if mods&1 != 0 {
+			state[VK_CONTROL], state[VK_LCONTROL] = 0x80, 0x80
+		}
+		if mods&2 != 0 {
+			state[VK_SHIFT], state[VK_LSHIFT] = 0x80, 0x80
+		}
+		if mods&4 != 0 {
+			state[VK_MENU], state[VK_LMENU] = 0x80, 0x80
+		}
+		if mods&8 != 0 { // AltGr
+			state[VK_CONTROL], state[VK_LCONTROL] = 0x80, 0x80
+			state[VK_MENU], state[VK_RMENU] = 0x80, 0x80
+		}
+		add(k.translateVKey(vk, ext, &state))
+	}
+	try(0)
+	for mods := 1; mods < 16; mods <<= 1 {
+		try(mods)
+	}
+	for mods := range 16 {
+		try(mods)
+	}
+	// MapVirtualKey gives a Latin character even on non-Latin layouts.
+	if ch := k.layout.VKToChar(vk); ch != 0 {
+		if ch&0x80000000 != 0 {
+			ch = ucsCombining(ch & 0xffff)
+		} else {
+			ch &= 0xffff
+		}
+		add(UCSToKeysym(ch))
+	}
+	return out
 }
 
 func (k *Keyboard) translateVKey(vk uint16, ext bool, state *[256]byte) uint32 {

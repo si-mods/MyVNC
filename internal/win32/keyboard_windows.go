@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 // Package win32 feeds a window's keyboard messages to a callback before
-// mygo sees them, and can grab system keys (Win, Alt+Tab) while the window
-// has focus.
+// mygo sees them, can grab system keys (Win, Alt+Tab) while the window has
+// focus, and reads and sets the lock key LEDs. On other systems it is a
+// stub that does nothing.
 package win32
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -20,10 +22,12 @@ import (
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	ntdll    = syscall.NewLazyDLL("ntdll.dll")
 
 	procCallNextHookEx           = user32.NewProc("CallNextHookEx")
 	procGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	procGetKeyState              = user32.NewProc("GetKeyState")
 	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
 	procGetKeyboardState         = user32.NewProc("GetKeyboardState")
 	procGetMessageW              = user32.NewProc("GetMessageW")
@@ -33,12 +37,14 @@ var (
 	procPeekMessageW             = user32.NewProc("PeekMessageW")
 	procPostMessageW             = user32.NewProc("PostMessageW")
 	procPostThreadMessageW       = user32.NewProc("PostThreadMessageW")
+	procSendInput                = user32.NewProc("SendInput")
 	procSetKeyboardState         = user32.NewProc("SetKeyboardState")
 	procSetWindowsHookExW        = user32.NewProc("SetWindowsHookExW")
 	procToUnicodeEx              = user32.NewProc("ToUnicodeEx")
 	procUnhookWindowsHookEx      = user32.NewProc("UnhookWindowsHookEx")
 	procGetCurrentThreadId       = kernel32.NewProc("GetCurrentThreadId")
 	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
+	procRtlGetVersion            = ntdll.NewProc("RtlGetVersion")
 )
 
 const (
@@ -207,6 +213,8 @@ var (
 // Grab intercepts all keys, including Win, Alt+Tab and Ctrl+Esc, with a
 // low-level hook while hwnd is the foreground window, and reposts them to
 // hwnd so the Install callback gets them. Lock keys still reach Windows.
+// Injected keys (LLKHF_INJECTED: on-screen keyboards, input tools) are
+// grabbed like hardware keys, as TigerVNC does, so they reach the server.
 // Call it when the window gains focus and release it when it loses focus,
 // on the thread of hwnd, after Install.
 func Grab(hwnd uintptr) (release func(), err error) {
@@ -292,30 +300,78 @@ func lowLevelProc(code, wp, lp uintptr) uintptr {
 // Layout implements keymap.Layout with the keyboard layout of the calling
 // thread. Use it on the thread of the window.
 type Layout struct {
-	hkl   uintptr
+	hkl   uintptr // the layout altGr is for
 	altGr bool
+
+	fixed  uintptr // tests: this layout instead of the thread's
+	legacy bool    // tests: the path for Windows before 10 1607
 }
 
 const toUnicodeKeepState = 4 // ToUnicodeEx: don't change the dead-key state (Windows 10 1607+)
+
+// keepStateWorks reports whether ToUnicodeEx knows toUnicodeKeepState: it
+// came with Windows 10 1607, build 14393. Older versions ignore the flag.
+var keepStateWorks = sync.OnceValue(func() bool { return windowsBuild() >= 14393 })
+
+// windowsBuild is the real build number; GetVersionEx lies to programs
+// without a compatibility manifest.
+func windowsBuild() uint32 {
+	var vi struct {
+		Size, Major, Minor, Build, Platform uint32
+		CSDVersion                          [128]uint16
+	}
+	vi.Size = uint32(unsafe.Sizeof(vi))
+	if r, _, _ := procRtlGetVersion.Call(uintptr(unsafe.Pointer(&vi))); r != 0 {
+		return 0
+	}
+	return vi.Build
+}
 
 func keyboardLayout() uintptr {
 	r, _, _ := procGetKeyboardLayout.Call(0)
 	return r
 }
 
-func toUnicode(vk uint16, state *[256]byte, hkl uintptr) (rune, int) {
+func (l *Layout) layout() uintptr {
+	if l.fixed != 0 {
+		return l.fixed
+	}
+	return keyboardLayout()
+}
+
+// toUnicode calls ToUnicodeEx without leaving a dead key behind. Without
+// toUnicodeKeepState it does what TigerVNC did before: a dead key is
+// pressed again until the state is clear, the method recommended by
+// Microsoft (michkap, 2007/10/27).
+func toUnicode(vk uint16, state *[256]byte, hkl uintptr, keep bool) (rune, int) {
 	var buf [10]uint16
-	r, _, _ := procToUnicodeEx.Call(uintptr(vk), 0, uintptr(unsafe.Pointer(state)),
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), toUnicodeKeepState, hkl)
-	n := int(int32(r))
+	call := func(flags uintptr) int {
+		r, _, _ := procToUnicodeEx.Call(uintptr(vk), 0, uintptr(unsafe.Pointer(state)),
+			uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), flags, hkl)
+		return int(int32(r))
+	}
+	if keep {
+		if n := call(toUnicodeKeepState); n != 0 {
+			return rune(buf[0]), n
+		}
+		return 0, 0
+	}
+	n := call(0)
+	r := rune(buf[0])
+	// ponytail: bounded where upstream loops forever; no layout needs more than two.
+	for i := 0; n < 0 && i < 4; i++ {
+		if call(0) >= 0 {
+			break
+		}
+	}
 	if n == 0 {
 		return 0, 0
 	}
-	return rune(buf[0]), n
+	return r, n
 }
 
 func (l *Layout) ToUnicode(vk uint16, state *[256]byte) (rune, int) {
-	return toUnicode(vk, state, keyboardLayout())
+	return toUnicode(vk, state, l.layout(), !l.legacy && keepStateWorks())
 }
 
 func (l *Layout) VKToChar(vk uint16) uint32 {
@@ -328,12 +384,17 @@ func (l *Layout) VKToScan(vk uint16) uint16 {
 	return uint16(r)
 }
 
-func (l *Layout) PrimaryLang() uint16 { return uint16(keyboardLayout()) & 0x3ff }
+func (l *Layout) ScanToVK(scan uint16) uint16 {
+	r, _, _ := procMapVirtualKeyW.Call(uintptr(scan), 3) // MAPVK_VSC_TO_VK_EX
+	return uint16(r)
+}
+
+func (l *Layout) PrimaryLang() uint16 { return uint16(l.layout()) & 0x3ff }
 
 // HasAltGr tests whether Ctrl+Alt makes any key produce a character; the
 // answer is cached per layout.
 func (l *Layout) HasAltGr() bool {
-	hkl := keyboardLayout()
+	hkl := l.layout()
 	if hkl == l.hkl {
 		return l.altGr
 	}
@@ -345,10 +406,75 @@ func (l *Layout) HasAltGr() bool {
 		if vk == keymap.VK_PACKET {
 			continue
 		}
-		if _, n := toUnicode(uint16(vk), &state, hkl); n == 1 {
+		if _, n := toUnicode(uint16(vk), &state, hkl, !l.legacy && keepStateWorks()); n == 1 {
 			l.altGr = true
 			break
 		}
 	}
 	return l.altGr
+}
+
+// LEDState gives the local lock keys as RFB LED bits, as the thread's
+// message queue sees them. Call it on the thread of the window.
+func LEDState() uint32 {
+	return keymap.LEDState(func(vk uint16) bool {
+		r, _, _ := procGetKeyState.Call(uintptr(vk))
+		return r&1 != 0
+	})
+}
+
+type keybdInput struct {
+	VK, Scan    uint16
+	Flags, Time uint32
+	ExtraInfo   uintptr
+}
+
+type input struct {
+	Type uint32
+	Ki   keybdInput
+	_    [8]byte // the union is as big as MOUSEINPUT
+}
+
+const (
+	inputKeyboard       = 1
+	keyEventExtendedKey = 0x1
+	keyEventKeyUp       = 0x2
+	scanFake            = 0xaa // keymap ignores this scan code
+)
+
+// keyInputs is a press and release of each key, as SendInput wants them.
+func keyInputs(vks []uint16) []input {
+	var in []input
+	for _, vk := range vks {
+		var flags uint32
+		if vk == keymap.VK_NUMLOCK {
+			flags = keyEventExtendedKey
+		}
+		in = append(in,
+			input{Type: inputKeyboard, Ki: keybdInput{VK: vk, Scan: scanFake, Flags: flags}},
+			input{Type: inputKeyboard, Ki: keybdInput{VK: vk, Scan: scanFake, Flags: flags | keyEventKeyUp}})
+	}
+	return in
+}
+
+func sendInput(in []input) error {
+	if len(in) == 0 {
+		return nil
+	}
+	r, _, e := procSendInput.Call(uintptr(len(in)), uintptr(unsafe.Pointer(&in[0])), unsafe.Sizeof(in[0]))
+	if int(r) < len(in) {
+		return fmt.Errorf("win32: SendInput sent %d of %d events: %w", r, len(in), e)
+	}
+	return nil
+}
+
+// SetLEDState turns the local lock keys on or off to match the RFB LED
+// bits state, with injected key presses as TigerVNC does. The presses carry
+// a fake scan code, so the keyboard callback doesn't send them back to the
+// server. Call it on the thread of the window while it has focus.
+func SetLEDState(state uint32) error {
+	if state == keymap.LEDUnknown {
+		return nil
+	}
+	return sendInput(keyInputs(keymap.LEDToggles(LEDState(), state)))
 }

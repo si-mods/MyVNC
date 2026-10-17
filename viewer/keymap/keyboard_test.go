@@ -51,11 +51,23 @@ func (l *fakeLayout) ToUnicode(vk uint16, s *[256]byte) (rune, int) {
 }
 
 func (l *fakeLayout) VKToChar(vk uint16) uint32 {
-	if vk == VK_DECIMAL {
+	switch {
+	case vk == VK_DECIMAL:
 		return '.'
+	case vk >= 'A' && vk <= 'Z':
+		return uint32(vk)
 	}
 	return 0
 }
+
+// fakeScans are the scan codes ScanToVK knows.
+var fakeScans = map[uint16]uint16{
+	0x1e: 'A', 0x30: 'B', 0x2e: 'C', 0x22: 'G', 0x32: 'M',
+	0x39: VK_SPACE, 0x1c: VK_RETURN, 0xe01c: VK_RETURN,
+	0x1d: VK_CONTROL, 0x38: VK_MENU, 0x2a: VK_SHIFT,
+}
+
+func (l *fakeLayout) ScanToVK(scan uint16) uint16 { return fakeScans[scan] }
 
 func (l *fakeLayout) VKToScan(vk uint16) uint16 {
 	if vk == VK_VOLUME_MUTE {
@@ -348,6 +360,63 @@ func TestUCSToKeysym(t *testing.T) {
 	} {
 		if got := UCSToKeysym(tt.ucs); got != tt.want {
 			t.Errorf("UCSToKeysym(%#x) = %#x, want %#x", tt.ucs, got, tt.want)
+		}
+	}
+}
+
+func TestAltGrStaleTimer(t *testing.T) {
+	ctrl := press(0x1d, XK_Control_L)
+	k := NewKeyboard(deLayout())
+	run(t, k, []step{{at(down(VK_CONTROL, 0x1d, false), 1000), nil}})
+	first, ok := k.AltGrTimer()
+	if !ok {
+		t.Fatal("Ctrl not held back")
+	}
+	run(t, k, []step{
+		{at(down('C', 0x2e, false, VK_LCONTROL), 1030), []Event{ctrl, press(0x2e, 'c')}},
+		{at(up('C', 0x2e, false), 1040), []Event{release(0x2e, 'c')}},
+		{at(up(VK_CONTROL, 0x1d, false), 1050), []Event{release(0x1d, XK_Control_L)}},
+		{at(down(VK_CONTROL, 0x1d, false), 1080), nil},
+	})
+	second, ok := k.AltGrTimer()
+	if !ok || second == first {
+		t.Fatalf("second press: id %d pending %v, first id %d", second, ok, first)
+	}
+	// The first press's timer runs out at 1100, 20 ms into the second.
+	if got := k.ExpireAltGr(first); got != nil {
+		t.Fatalf("stale timer flushed %#v", got)
+	}
+	run(t, k, []step{
+		{at(down(VK_MENU, 0x38, true, VK_LCONTROL), 1110), []Event{press(0xb8, XK_ISO_Level3_Shift)}},
+	})
+	if got := k.ExpireAltGr(second); got != nil {
+		t.Fatalf("timer of a resolved press flushed %#v", got)
+	}
+	k.Reset()
+	run(t, k, []step{{at(down(VK_CONTROL, 0x1d, false), 2000), nil}})
+	third, _ := k.AltGrTimer()
+	if got := k.ExpireAltGr(third); !reflect.DeepEqual(got, []Event{ctrl}) {
+		t.Fatalf("timeout: got %#v", got)
+	}
+}
+
+func TestKeySyms(t *testing.T) {
+	ru := usLayout()
+	ru.keys['G'] = [3]rune{0x43f, 0x41f} // Cyrillic pe
+	for _, c := range []struct {
+		name   string
+		layout *fakeLayout
+		code   uint32
+		want   []uint32
+	}{
+		{"g", usLayout(), 0x22, []uint32{XK_g, 0x1000007, XK_G}}, // Ctrl+G is BEL, as on Windows
+		{"g on cyrillic", ru, 0x22, []uint32{UCSToKeysym(0x43f), 0x1000007, UCSToKeysym(0x41f), XK_G}},
+		{"return", usLayout(), 0x1c, []uint32{XK_Return}},
+		{"keypad enter", usLayout(), 0x9c, []uint32{XK_KP_Enter}},
+		{"unknown scan", usLayout(), 0x10, nil},
+	} {
+		if got := NewKeyboard(c.layout).KeySyms(c.code); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %#x, want %#x", c.name, got, c.want)
 		}
 	}
 }
