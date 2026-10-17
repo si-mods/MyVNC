@@ -22,6 +22,7 @@ import (
 const (
 	maxCursorSize = 256
 	maxCutText    = 256 * 1024
+	maxAudioData  = 1 << 20
 )
 
 func (c *Client) readMsg() error {
@@ -29,6 +30,7 @@ func (c *Client) readMsg() error {
 	if c.rd.err != nil {
 		return c.rd.err
 	}
+	c.log.Debug("rfb: message", "type", t)
 	if c.appleARD {
 		switch t {
 		case 0x04, 0x07, 0x14, 0x1f, 0x20, 0x51:
@@ -49,6 +51,16 @@ func (c *Client) readMsg() error {
 		return nil
 	case msgServerCutText:
 		return c.readServerCutText()
+	case msgEndOfCU:
+		if !c.serverCU {
+			c.log.Info("rfb: server supports continuous updates")
+		}
+		c.serverCU = true
+		return nil
+	case msgServerFence:
+		return c.readFence()
+	case msgQEMUServer:
+		return c.readQEMUServerMessage()
 	}
 	return fmt.Errorf("rfb: unknown message type %d", t)
 }
@@ -60,13 +72,14 @@ func (c *Client) readFramebufferUpdate() error {
 		return c.rd.err
 	}
 
-	// Request the next update before decoding this one.
+	// Request the next update before decoding this one, unless the
+	// server sends them unasked (continuous updates).
 	c.mu.Lock()
 	var err error
 	if c.appleARD && c.width > 0 && c.height > 0 {
 		err = c.writeLocked(ardAutoFBUpdate(true, c.width, c.height))
 	}
-	if err == nil {
+	if err == nil && !c.cuEnabled {
 		err = c.writeLocked(framebufferUpdateRequest(true, c.width, c.height))
 	}
 	c.mu.Unlock()
@@ -81,6 +94,7 @@ func (c *Client) readFramebufferUpdate() error {
 		if c.rd.err != nil {
 			return c.rd.err
 		}
+		c.log.Debug("rfb: rect", "x", x, "y", y, "w", w, "h", h, "encoding", enc)
 		last, err := c.readRect(image.Rect(x, y, x+w, y+h), enc)
 		if err != nil {
 			return err
@@ -93,21 +107,106 @@ func (c *Client) readFramebufferUpdate() error {
 }
 
 func (c *Client) updateEnd() error {
-	if k := c.ardPending; k != nil && !c.ardEnabled {
-		c.ardPending = nil
-		c.mu.Lock()
-		err := c.writeLocked(ardSetEncryption(true))
-		if err == nil {
-			c.rd.r = bufio.NewReader(ard.NewReader(c.rd.r, k[0], k[1]))
-			c.out = ard.NewWriter(c.out, k[0], k[1])
-			c.ardEnabled = true
+	c.mu.Lock()
+	err := c.updateEndLocked()
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// The -259 rect says the server can send audio; ask once.
+	if ah, ok := c.h.(AudioHandler); ok && c.serverAudio && !c.audioAsked {
+		c.audioAsked = true
+		f, ch, hz := ah.AudioFormat()
+		c.log.Info("rfb: requesting audio", "format", f, "channels", ch, "frequency", hz)
+		if err := c.write(qemuAudioSetFormat(f, ch, hz)); err != nil {
+			return err
 		}
-		c.mu.Unlock()
-		if err != nil {
+		if err := c.write(qemuAudioEnable(true)); err != nil {
 			return err
 		}
 	}
 	c.h.UpdateDone()
+	return nil
+}
+
+func (c *Client) updateEndLocked() error {
+	// ponytail: the switch happens here, as in the C++, so the request
+	// for the next update already went out in plain text (#6); the log
+	// shows the order until it is checked against a Mac.
+	if k := c.ardPending; k != nil && !c.ardEnabled {
+		c.ardPending = nil
+		if err := c.writeLocked(ardSetEncryption(true)); err != nil {
+			return err
+		}
+		c.rd.r = bufio.NewReader(ard.NewReader(c.rd.r, k[0], k[1]))
+		c.out = ard.NewWriter(c.out, k[0], k[1])
+		c.ardEnabled = true
+		c.log.Info("rfb: ARD session encryption active", "afterUpdate", c.updates+1)
+	}
+	c.updates++
+	if c.updates == 1 && c.serverCU {
+		c.cuEnabled = true
+		c.log.Info("rfb: enabling continuous updates")
+		if err := c.writeLocked(enableCU(true, c.width, c.height)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) readFence() error {
+	c.rd.skip(3)
+	flags := c.rd.u32()
+	n := c.rd.u8()
+	data := c.rd.bytes(int(n))
+	if c.rd.err != nil {
+		return c.rd.err
+	}
+	if !c.fenceSeen {
+		c.fenceSeen = true
+		c.log.Info("rfb: server supports fences")
+	}
+	c.log.Debug("rfb: fence", "flags", flags)
+	if n > 64 || flags&fenceRequest == 0 {
+		return nil // too large (ignored, as TigerVNC does) or a reply
+	}
+	// Messages are handled synchronously, in order, so BlockBefore and
+	// BlockAfter already hold; SyncNext is dropped, as TigerVNC does.
+	return c.write(fenceMsg(flags&(fenceBlockBefore|fenceBlockAfter), data))
+}
+
+func (c *Client) readQEMUServerMessage() error {
+	sub := c.rd.u8()
+	op := c.rd.u16()
+	if c.rd.err != nil {
+		return c.rd.err
+	}
+	// No length field: anything unknown loses the message boundary.
+	if sub != qemuAudio {
+		return fmt.Errorf("rfb: unknown QEMU submessage %d", sub)
+	}
+	ah, ok := c.h.(AudioHandler)
+	if !ok || !c.audioAsked {
+		return errors.New("rfb: unexpected audio message")
+	}
+	switch op {
+	case 0:
+		ah.AudioEnd()
+	case 1:
+		ah.AudioBegin()
+	case 2:
+		n := c.rd.u32()
+		if c.rd.err == nil && n > maxAudioData {
+			return errors.New("rfb: audio data is too large")
+		}
+		data := c.rd.bytes(int(n))
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		ah.AudioData(data)
+	default:
+		return fmt.Errorf("rfb: unknown QEMU audio operation %d", op)
+	}
 	return nil
 }
 
@@ -119,6 +218,18 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		return false, c.readSetCursor(r)
 	case PseudoEncodingCursorWithAlpha:
 		return false, c.readSetCursorWithAlpha(r)
+	case PseudoEncodingXCursor:
+		return false, c.readSetXCursor(r)
+	case PseudoEncodingLEDState:
+		return false, c.ledState(uint32(c.rd.u8()))
+	case PseudoEncodingVMwareLEDState:
+		return false, c.ledState(c.rd.u32()) // same bits as -261
+	case PseudoEncodingQEMUAudio:
+		if !c.serverAudio {
+			c.log.Info("rfb: server supports QEMU audio")
+		}
+		c.serverAudio = true
+		return false, nil
 	case PseudoEncodingDesktopName:
 		n := c.rd.u32()
 		if c.rd.err == nil && n > 1<<20 {
@@ -131,20 +242,39 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		}
 		return false, c.rd.err
 	case PseudoEncodingDesktopSize:
-		c.resize(r.Dx(), r.Dy())
-		return false, nil
+		return false, c.resize(r.Dx(), r.Dy())
 	case PseudoEncodingExtendedDesktopSize:
 		screens := c.rd.u8()
-		c.rd.skip(3 + 16*int64(screens))
+		c.rd.skip(3)
+		var id, flags uint32
+		for i := 0; i < int(screens); i++ {
+			sid := c.rd.u32()
+			c.rd.skip(8)
+			sf := c.rd.u32()
+			if i == 0 {
+				id, flags = sid, sf
+			}
+		}
 		if c.rd.err != nil {
 			return false, c.rd.err
 		}
+		c.mu.Lock()
+		c.setDesktop = true
+		c.mu.Unlock()
 		// x is the reason, y the result; a failed client request changes nothing.
-		if r.Min.X != reasonClient || r.Min.Y == resultSuccess {
-			c.resize(r.Dx(), r.Dy())
+		if r.Min.X == reasonClient && r.Min.Y != resultSuccess {
+			c.log.Info("rfb: remote resize failed", "result", r.Min.Y)
+			return false, nil
 		}
-		return false, nil
+		c.mu.Lock()
+		c.screenID, c.screenFlag = id, flags
+		c.mu.Unlock()
+		return false, c.resize(r.Dx(), r.Dy())
 	case PseudoEncodingQEMUKeyEvent:
+		c.mu.Lock()
+		c.qemuKeys = true
+		c.mu.Unlock()
+		c.log.Info("rfb: server supports QEMU key events")
 		return false, nil
 	case PseudoEncodingExtendedMouseButtons:
 		c.mu.Lock()
@@ -161,7 +291,7 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 			count := c.rd.u16()
 			c.rd.skip(4 + int64(count)*28)
 			if c.rd.err == nil && w != 0 && h != 0 {
-				c.resize(int(w), int(h))
+				return false, c.resize(int(w), int(h))
 			}
 			return false, c.rd.err
 		case PseudoEncodingARDUserInfo:
@@ -212,14 +342,67 @@ func (c *Client) dataRect(r image.Rectangle, enc int32) error {
 
 // resize reallocates the framebuffer, keeping the still valid area and
 // filling new areas with opaque black.
-func (c *Client) resize(w, h int) {
+func (c *Client) resize(w, h int) error {
 	fb := newFramebuffer(w, h)
 	draw.Draw(fb, fb.Rect, c.fb, image.Point{}, draw.Src)
 	c.fb = fb
 	c.mu.Lock()
 	c.width, c.height = w, h
+	var err error
+	if c.cuEnabled {
+		err = c.writeLocked(enableCU(true, w, h))
+	}
 	c.mu.Unlock()
+	c.log.Info("rfb: desktop resized", "width", w, "height", h)
 	c.h.Resize(w, h)
+	return err
+}
+
+func (c *Client) ledState(state uint32) error {
+	if c.rd.err != nil {
+		return c.rd.err
+	}
+	c.log.Debug("rfb: LED state", "state", state)
+	if lh, ok := c.h.(LEDHandler); ok {
+		lh.LEDState(state)
+	}
+	return nil
+}
+
+// readSetXCursor reads a two-colour cursor: foreground and background
+// RGB, then a bitmap and a mask, both 1 bpp.
+func (c *Client) readSetXCursor(r image.Rectangle) error {
+	w, h := r.Dx(), r.Dy()
+	if w > maxCursorSize || h > maxCursorSize {
+		return errors.New("rfb: received cursor is too large")
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	if w*h > 0 {
+		colors := c.rd.bytes(6)
+		stride := (w + 7) / 8
+		bits := c.rd.bytes(stride * h)
+		mask := c.rd.bytes(stride * h)
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				bit := byte(0x80 >> (x % 8))
+				if mask[y*stride+x/8]&bit == 0 {
+					continue // transparent; premultiplied zero
+				}
+				p := img.Pix[(y*w+x)*4:]
+				col := colors[3:6]
+				if bits[y*stride+x/8]&bit != 0 {
+					col = colors[0:3]
+				}
+				copy(p, col)
+				p[3] = 0xff
+			}
+		}
+	}
+	c.h.Cursor(img, r.Min)
+	return nil
 }
 
 // Cursors
@@ -252,11 +435,15 @@ func (c *Client) readSetCursor(r image.Rectangle) error {
 	return nil
 }
 
-// cursorPF is the format TigerVNC uses for the cursor-with-alpha payload.
+// cursorPF describes the cursor-with-alpha payload for non-Raw decoders.
+// TigerVNC declares (32, 32, LE, 16/8/0) but only ever moves the bytes,
+// which are R, G, B, A in memory (SMsgWriter writes them so, and
+// CMsgReader hands the buffer to setCursor as RGBA); in Go's decoders,
+// which convert by shift, that is red at shift 0.
 var cursorPF = pixel.Format{
 	BPP: 32, Depth: 32, TrueColor: true,
 	RedMax: 255, GreenMax: 255, BlueMax: 255,
-	RedShift: 16, GreenShift: 8, BlueShift: 0,
+	RedShift: 0, GreenShift: 8, BlueShift: 16,
 }
 
 func (c *Client) readSetCursorWithAlpha(r image.Rectangle) error {
@@ -270,20 +457,16 @@ func (c *Client) readSetCursorWithAlpha(r image.Rectangle) error {
 	}
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	if enc == EncodingRaw {
-		// Wire data is already premultiplied RGBA, as image.RGBA wants.
 		c.rd.read(img.Pix)
 		if c.rd.err != nil {
 			return c.rd.err
 		}
-		for i := 0; i < len(img.Pix); i += 4 {
-			a := img.Pix[i+3]
-			img.Pix[i] = min(img.Pix[i], a)
-			img.Pix[i+1] = min(img.Pix[i+1], a)
-			img.Pix[i+2] = min(img.Pix[i+2], a)
-		}
 	} else {
-		// ponytail: pixel.Decoder output is opaque, so non-Raw cursors
-		// lose their alpha; servers (TigerVNC included) send Raw here.
+		// TigerVNC master decodes any encoding here and keeps the
+		// alpha byte. ponytail: pixel.Decoder writes opaque pixels, so
+		// non-Raw cursors lose their alpha until rfb/decode keeps the
+		// fourth byte for Depth 32 formats; servers (TigerVNC included)
+		// send Raw.
 		dec := c.opt.Decoders[enc]
 		if dec == nil {
 			return fmt.Errorf("rfb: unknown cursor encoding %d", enc)
@@ -291,6 +474,13 @@ func (c *Client) readSetCursorWithAlpha(r image.Rectangle) error {
 		if err := dec.Decode(c.rd.r, img.Rect, &cursorPF, img); err != nil {
 			return err
 		}
+	}
+	// Wire data is premultiplied, as image.RGBA wants; clamp bad input.
+	for i := 0; i < len(img.Pix); i += 4 {
+		a := img.Pix[i+3]
+		img.Pix[i] = min(img.Pix[i], a)
+		img.Pix[i+1] = min(img.Pix[i+1], a)
+		img.Pix[i+2] = min(img.Pix[i+2], a)
 	}
 	c.h.Cursor(img, r.Min)
 	return nil
@@ -334,6 +524,12 @@ func (c *Client) readARDCursorAlpha(r image.Rectangle) error {
 		return nil
 	}
 
+	// Premultiplied here because the C++ hands these bytes to
+	// setCursor, which takes straight (unpremultiplied) RGBA, as the
+	// -314 path shows by unpremultiplying first. So the C++ reads the
+	// BGRX plane as straight colour, and premultiplying keeps that
+	// meaning for image.RGBA. If a Mac turns out to send premultiplied
+	// colour, both clients darken soft cursor edges; check on desktop.
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	alpha := raw[w*h*4:]
 	for i := 0; i < w*h; i++ {
@@ -383,15 +579,20 @@ func (c *Client) readARDSessionEncryption() error {
 		return errors.New("rfb: unsupported ARD session encryption version")
 	}
 	if c.ardKey == nil {
-		return errors.New("rfb: ARD session encryption key is unavailable")
+		// 1103 is advertised to every ARD server, as in the C++, which
+		// fails here; without a DH key the session stays in plain text.
+		c.log.Warn("rfb: ARD session encryption offered without a DH key; ignored")
+		return nil
 	}
 	c.ardPending = &[2][16]byte{ard.DecryptBlock(*c.ardKey, ek), ard.DecryptBlock(*c.ardKey, eiv)}
+	c.log.Info("rfb: ARD session encryption offered; switching at the end of this update", "update", c.updates+1)
 	return nil
 }
 
 func (c *Client) readARDServerMessage(t byte) error {
 	switch t {
 	case 0x14:
+		// ARD clipboard; the C++ skips it too, so there is nothing to port.
 		c.rd.skip(1)
 		c.rd.skip(int64(c.rd.u16()))
 	case 0x1f:
