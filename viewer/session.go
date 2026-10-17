@@ -289,6 +289,12 @@ func (s *Session) UpdateDone() {
 	}
 	s.pending[b] = s.pending[b][:0]
 	s.back ^= 1
+	// ponytail: Bitmap.Update uploads the whole texture (8 MB at 1080p,
+	// 33 MB at 4K); mygo 0.5.5 has no dirty-rectangle upload. Measured
+	// with -perftest (RTX 2000 Ada over RDP): present takes about 5 ms at
+	// 4K, under the ~31 ms RDP display interval and the 80 ms of serial
+	// decoding, so it is not the ceiling yet. If it becomes one, split
+	// Screen into tile Bitmaps and update only the dirty tiles.
 	s.post(func() {
 		if s.Screen == nil {
 			s.Screen = ui.NewBitmap(img)

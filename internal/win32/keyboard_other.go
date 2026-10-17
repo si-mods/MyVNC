@@ -6,6 +6,7 @@ package win32
 
 import (
 	"errors"
+	"time"
 
 	"github.com/kyya/myvnc/viewer/keymap"
 )
@@ -38,3 +39,27 @@ func (l *Layout) HasAltGr() bool                                    { return fal
 
 // WatchClipboard does nothing outside Windows.
 func WatchClipboard(cb func()) (stop func(), err error) { return nil, errNotWindows }
+
+// ProcessCPU is unknown here: 0.
+func ProcessCPU() time.Duration { return 0 }
+
+// TouchPhase is what a finger did.
+type TouchPhase int
+
+const (
+	TouchDown TouchPhase = iota
+	TouchMove
+	TouchUp
+)
+
+// Touch is a finger's event.
+type Touch struct {
+	ID    uint32
+	Phase TouchPhase
+	X, Y  float32
+}
+
+// InstallTouch fails: there are no WM_POINTER messages.
+func InstallTouch(hwnd uintptr, cb func(Touch) bool) (uninstall func(), err error) {
+	return nil, errNotWindows
+}
