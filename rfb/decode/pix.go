@@ -23,6 +23,9 @@ type conv struct {
 	mode convMode
 	size int // bytes per wire pixel
 	fast bool
+	// alphaShift is the bit shift of the byte outside R/G/B for Depth-32
+	// formats (CursorWithAlpha), else -1: pixels are opaque.
+	alphaShift int
 }
 
 func newConv(pf *pixel.Format) (*conv, error) {
@@ -35,7 +38,15 @@ func newConv(pf *pixel.Format) (*conv, error) {
 	if pf.RedMax == 0 || pf.GreenMax == 0 || pf.BlueMax == 0 {
 		return nil, errors.New("decode: bad colour maximum")
 	}
-	return &conv{pf: pf, size: int(pf.BPP) / 8, fast: *pf == pixel.RGBA}, nil
+	c := &conv{pf: pf, size: int(pf.BPP) / 8, fast: *pf == pixel.RGBA, alphaShift: -1}
+	if pf.BPP == 32 && pf.Depth == 32 {
+		for _, s := range [4]uint8{0, 8, 16, 24} {
+			if s != pf.RedShift && s != pf.GreenShift && s != pf.BlueShift {
+				c.alphaShift = int(s)
+			}
+		}
+	}
+	return c, nil
 }
 
 func is888(pf *pixel.Format) bool {
@@ -111,6 +122,9 @@ func (c *conv) put(dst, src []byte) {
 	dst[0] = up(v, pf.RedShift, pf.RedMax)
 	dst[1] = up(v, pf.GreenShift, pf.GreenMax)
 	dst[2] = up(v, pf.BlueShift, pf.BlueMax)
+	if c.alphaShift >= 0 {
+		dst[3] = byte(v >> c.alphaShift)
+	}
 }
 
 // read reads one pixel from r.
