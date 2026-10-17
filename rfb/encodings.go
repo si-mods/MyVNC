@@ -32,14 +32,20 @@ const (
 	PseudoEncodingARDMediaStream       int32 = 1110
 
 	PseudoEncodingCursor               int32 = -239
+	PseudoEncodingXCursor              int32 = -240
 	PseudoEncodingDesktopSize          int32 = -223
 	PseudoEncodingLastRect             int32 = -224
 	PseudoEncodingQEMUKeyEvent         int32 = -258
+	PseudoEncodingQEMUAudio            int32 = -259
+	PseudoEncodingLEDState             int32 = -261
 	PseudoEncodingDesktopName          int32 = -307
 	PseudoEncodingExtendedDesktopSize  int32 = -308
+	PseudoEncodingFence                int32 = -312
+	PseudoEncodingContinuousUpdates    int32 = -313
 	PseudoEncodingCursorWithAlpha      int32 = -314
 	PseudoEncodingExtendedMouseButtons int32 = -316
 	PseudoEncodingExtendedClipboard    int32 = -1063131698 // 0xC0A1E5CE
+	PseudoEncodingVMwareLEDState       int32 = 0x574d5668
 
 	PseudoEncodingQualityLevel0  int32 = -32
 	PseudoEncodingCompressLevel0 int32 = -256
@@ -82,6 +88,9 @@ const (
 	msgSetColourMapEntries = 1
 	msgBell                = 2
 	msgServerCutText       = 3
+	msgEndOfCU             = 150
+	msgServerFence         = 248
+	msgQEMUServer          = 255
 
 	msgSetPixelFormat           = 0
 	msgSetEncodings             = 2
@@ -89,6 +98,36 @@ const (
 	msgKeyEvent                 = 4
 	msgPointerEvent             = 5
 	msgClientCutText            = 6
+	msgEnableCU                 = 150
+	msgClientFence              = 248
+	msgSetDesktopSize           = 251
+	msgQEMUClient               = 255
+
+	qemuExtendedKeyEvent = 0
+	qemuAudio            = 1
+)
+
+const (
+	fenceBlockBefore = 1 << 0
+	fenceBlockAfter  = 1 << 1
+	fenceRequest     = 1 << 31
+)
+
+// LED state bits passed to LEDHandler.
+const (
+	LEDScrollLock = 1 << 0
+	LEDNumLock    = 1 << 1
+	LEDCapsLock   = 1 << 2
+)
+
+// QEMU audio sample formats for AudioHandler.AudioFormat.
+const (
+	AudioU8  uint8 = 0
+	AudioS8  uint8 = 1
+	AudioU16 uint8 = 2
+	AudioS16 uint8 = 3
+	AudioU32 uint8 = 4
+	AudioS32 uint8 = 5
 )
 
 const (
