@@ -2,8 +2,11 @@ package viewer
 
 import (
 	"context"
+	"errors"
 	"image"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/kyya/myvnc/rfb"
@@ -23,11 +26,17 @@ type Session struct {
 	Screen      *ui.Bitmap // nil until the first update
 	CursorImage *ui.Bitmap // the remote cursor, nil for none
 	Hotspot     image.Point
+	Shown       *image.RGBA // what Screen shows; the read loop leaves it alone
 	// OnName and OnClipboard, when set, see the desktop name and the
 	// server's clipboard text, on the UI thread.
 	OnName      func(string)
 	OnClipboard func(string)
-	clip        string // last clipboard text either side sent
+	// OnBell and OnLED, when set, hear the bell and the server's lock
+	// key LEDs (rfb.LED* bits), on the UI thread.
+	OnBell  func()
+	OnLED   func(state uint32)
+	clip    string // last clipboard text either side sent
+	ptrMask uint16 // of the last pointer event
 
 	c    *rfb.Client
 	post func(func())
@@ -39,9 +48,13 @@ type Session struct {
 	dirty   []image.Rectangle    // rects of the current update
 	resized bool
 	free    chan struct{} // a token while imgs[back] is not shown
+	audio   *audioOut
+
+	encrypted atomic.Bool
+	n         counters
 
 	mu    sync.Mutex
-	queue []func(*rfb.Client) error
+	queue []input
 	err   error
 	wake  chan struct{}
 	done  chan struct{}
@@ -51,6 +64,12 @@ type Session struct {
 // Connect dials addr and performs the handshake. post runs a function on
 // the UI thread. Options.Decoders defaults to all of package decode.
 func Connect(ctx context.Context, addr string, opt rfb.Options, post func(func())) (*Session, error) {
+	return connect(opt, post, func(opt rfb.Options, h rfb.Handler) (*rfb.Client, error) {
+		return dial(ctx, addr, opt, h.(*Session))
+	})
+}
+
+func connect(opt rfb.Options, post func(func()), dial func(rfb.Options, rfb.Handler) (*rfb.Client, error)) (*Session, error) {
 	if opt.Decoders == nil {
 		opt.Decoders = decode.New()
 	}
@@ -61,11 +80,14 @@ func Connect(ctx context.Context, addr string, opt rfb.Options, post func(func()
 		done: make(chan struct{}),
 	}
 	s.free <- struct{}{}
-	c, err := rfb.Dial(ctx, addr, opt, s)
+	s.n.encoding.Store(-1)
+	opt.Decoders = timeDecoders(opt.Decoders, &s.n)
+	c, err := dial(opt, s)
 	if err != nil {
 		return nil, err
 	}
 	s.c = c
+	s.encrypted.Store(c.Encrypted())
 	go s.writer()
 	return s, nil
 }
@@ -75,6 +97,7 @@ func Connect(ctx context.Context, addr string, opt rfb.Options, post func(func()
 func (s *Session) Run() error {
 	err := s.c.Run()
 	s.Close()
+	s.AudioEnd()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
@@ -102,12 +125,42 @@ func (s *Session) fail(err error) {
 
 // Input, from the UI thread.
 
-func (s *Session) send(f func(*rfb.Client) error) {
+// input is one message for the writer. Pointer events are kept as data,
+// so that a move can replace the move queued before it.
+type input struct {
+	ptr  bool
+	move bool // same button mask as the pointer event before it
+	mask uint16
+	x, y int
+	f    func(*rfb.Client) error
+}
+
+// maxQueue is how many messages may wait for a stalled network before the
+// session fails. Moves coalesce, so only presses, keys and the like count.
+const maxQueue = 1024
+
+// ErrStalled ends a session whose input cannot be sent.
+var ErrStalled = errors.New("the network stalled: input could not be sent")
+
+func (s *Session) send(in input) {
 	s.mu.Lock()
-	// ponytail: unbounded while the network stalls; coalesce pointer
-	// moves if that ever matters.
-	s.queue = append(s.queue, f)
+	n := len(s.queue)
+	// As TigerVNC's pointer rate limit: a move replaces the move before
+	// it, never a press or release.
+	if in.move && n > 0 && s.queue[n-1].move && s.queue[n-1].mask == in.mask {
+		s.queue[n-1].x, s.queue[n-1].y = in.x, in.y
+		s.mu.Unlock()
+		return
+	}
+	full := n >= maxQueue
+	if !full {
+		s.queue = append(s.queue, in)
+	}
 	s.mu.Unlock()
+	if full {
+		s.fail(ErrStalled)
+		return
+	}
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -121,12 +174,26 @@ func (s *Session) writer() {
 		case <-s.done:
 			return
 		}
-		s.mu.Lock()
-		q := s.queue
-		s.queue = nil
-		s.mu.Unlock()
-		for _, f := range q {
-			if err := f(s.c); err != nil {
+		for {
+			// One at a time, so that what waits stays in the queue,
+			// where moves coalesce.
+			s.mu.Lock()
+			if len(s.queue) == 0 {
+				s.queue = nil
+				s.mu.Unlock()
+				break
+			}
+			in := s.queue[0]
+			s.queue[0] = input{}
+			s.queue = s.queue[1:]
+			s.mu.Unlock()
+			var err error
+			if in.ptr {
+				err = s.c.PointerEvent(in.mask, in.x, in.y)
+			} else {
+				err = in.f(s.c)
+			}
+			if err != nil {
 				s.fail(err)
 				return
 			}
@@ -134,15 +201,29 @@ func (s *Session) writer() {
 	}
 }
 
-// Key sends a key press or release.
-func (s *Session) Key(keysym uint32, down bool) {
-	s.send(func(c *rfb.Client) error { return c.KeyEvent(keysym, down) })
+// Key sends a key press or release: code is the RFB key code
+// (keymap.Event.Code), used where the server takes QEMU key events.
+func (s *Session) Key(code, keysym uint32, down bool) {
+	s.send(input{f: func(c *rfb.Client) error { return c.KeyEventCode(code, keysym, down) }})
 }
 
 // Pointer sends the button mask (1 left, 2 middle, 4 right, 8/16 wheel
 // up/down, 32/64 wheel left/right) at framebuffer pixel x, y.
 func (s *Session) Pointer(mask uint16, x, y int) {
-	s.send(func(c *rfb.Client) error { return c.PointerEvent(mask, x, y) })
+	move := mask == s.ptrMask
+	s.ptrMask = mask
+	s.send(input{ptr: true, move: move, mask: mask, x: x, y: y})
+}
+
+// SetDesktopSize asks the server for a w×h desktop; servers that cannot
+// resize ignore it.
+func (s *Session) SetDesktopSize(w, h int) {
+	s.send(input{f: func(c *rfb.Client) error {
+		if err := c.SetDesktopSize(w, h); err != nil && !errors.Is(err, rfb.ErrNoSetDesktopSize) {
+			return err
+		}
+		return nil
+	}})
 }
 
 // SendClipboard announces local clipboard text unless it is what was
@@ -152,8 +233,15 @@ func (s *Session) SendClipboard(text string) {
 		return
 	}
 	s.clip = text
-	s.send(func(c *rfb.Client) error { return c.ClipboardText(text) })
+	s.send(input{f: func(c *rfb.Client) error { return c.ClipboardText(text) }})
 }
+
+// SecurityType is the negotiated security type; see rfb.Client.
+func (s *Session) SecurityType() uint32 { return s.c.SecurityType() }
+
+// Encrypted reports whether the stream is encrypted, as last seen by the
+// read loop; it never waits for the network.
+func (s *Session) Encrypted() bool { return s.encrypted.Load() }
 
 // rfb.Handler, on Run's goroutine.
 
@@ -172,6 +260,9 @@ func (s *Session) Updated(r image.Rectangle) {
 }
 
 func (s *Session) UpdateDone() {
+	s.n.updates.Add(1)
+	// ARD session encryption starts after the handshake.
+	s.encrypted.Store(s.c.Encrypted())
 	if len(s.dirty) == 0 && !s.resized {
 		return
 	}
@@ -204,6 +295,7 @@ func (s *Session) UpdateDone() {
 		} else {
 			s.Screen.Update(img)
 		}
+		s.Shown = img
 		// The image shown until now is free.
 		s.free <- struct{}{}
 	})
@@ -219,15 +311,54 @@ func copyRect(dst, src *image.RGBA, r image.Rectangle) {
 }
 
 func (s *Session) Cursor(img *image.RGBA, hotspot image.Point) {
+	if blank(img) {
+		// As TigerVNC with AlwaysCursor: a dot, so that the pointer
+		// does not vanish.
+		img, hotspot = dotCursor(), image.Pt(2, 2)
+	}
+	s.post(func() { s.CursorImage, s.Hotspot = ui.NewBitmap(img), hotspot })
+}
+
+func blank(img *image.RGBA) bool {
+	for i := 3; i < len(img.Pix); i += 4 {
+		if img.Pix[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// dotCursor is TigerVNC's dotcursor_xpm: black 3×3 in a white frame.
+func dotCursor() *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, 5, 5))
+	for i := range img.Pix {
+		img.Pix[i] = 0xff
+	}
+	for y := 1; y < 4; y++ {
+		for x := 1; x < 4; x++ {
+			o := img.PixOffset(x, y)
+			copy(img.Pix[o:o+3], []byte{0, 0, 0})
+		}
+	}
+	return img
+}
+
+func (s *Session) Bell() {
 	s.post(func() {
-		s.CursorImage, s.Hotspot = nil, hotspot
-		if img.Rect.Dx() > 0 && img.Rect.Dy() > 0 {
-			s.CursorImage = ui.NewBitmap(img)
+		if s.OnBell != nil {
+			s.OnBell()
 		}
 	})
 }
 
-func (s *Session) Bell() {}
+// LEDState is rfb.LEDHandler.
+func (s *Session) LEDState(state uint32) {
+	s.post(func() {
+		if s.OnLED != nil {
+			s.OnLED(state)
+		}
+	})
+}
 
 func (s *Session) Clipboard(text string) {
 	s.post(func() {
@@ -267,3 +398,33 @@ func ToFramebuffer(x, y float32, fit ui.Rect, w, h int) (int, int) {
 	fy := int((y - fit.Y) * float32(h) / fit.H)
 	return min(max(fx, 0), w-1), min(max(fy, 0), h-1)
 }
+
+// Place returns where the w×h image shows: scaling "Fit" fits it in the
+// box of bw×bh, centered; "1:1" shows a framebuffer pixel on each device
+// pixel (scale is device pixels per DIP) and "Zoom" zoom percent of
+// that, from the top-left corner of a box that big, which scrolls.
+func Place(scaling string, zoom int, scale, bw, bh float32, w, h int) ui.Rect {
+	if scaling == "Fit" || scaling == "" {
+		return Fit(bw, bh, w, h)
+	}
+	if scale <= 0 {
+		scale = 1
+	}
+	k := 1 / scale
+	if scaling == "Zoom" {
+		k *= float32(zoom) / 100
+	}
+	return ui.Rect{W: k * float32(w), H: k * float32(h)}
+}
+
+// ReconnectDelay is the wait before reconnect attempt n (from 0) after an
+// unexpected disconnect: 1 s, doubling up to 30 s; false after 8 tries.
+func ReconnectDelay(attempt int) (time.Duration, bool) {
+	if attempt < 0 || attempt >= ReconnectAttempts {
+		return 0, false
+	}
+	return min(time.Second<<attempt, 30*time.Second), true
+}
+
+// ReconnectAttempts is how often a lost session is retried.
+const ReconnectAttempts = 8

@@ -12,29 +12,12 @@ import (
 	"github.com/kyya/myvnc/viewer/keymap"
 )
 
+// procCreateWindowExW, procDefWindowProcW, procDestroyWindow,
+// procRegisterClassExW and wndClassEx are in clipboard_windows.go.
 var (
-	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
-	procDestroyWindow    = user32.NewProc("DestroyWindow")
 	procDispatchMessageW = user32.NewProc("DispatchMessageW")
-	procRegisterClassExW = user32.NewProc("RegisterClassExW")
 	procTranslateMessage = user32.NewProc("TranslateMessage")
 )
-
-type wndClassEx struct {
-	Size       uint32
-	Style      uint32
-	WndProc    uintptr
-	ClsExtra   int32
-	WndExtra   int32
-	Instance   uintptr
-	Icon       uintptr
-	Cursor     uintptr
-	Background uintptr
-	MenuName   *uint16
-	ClassName  *uint16
-	IconSm     uintptr
-}
 
 // seen records the messages the window procedure gets, as mygo's would.
 var seen []uint32
