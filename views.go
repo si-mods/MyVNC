@@ -6,11 +6,15 @@
 package main
 
 import (
-	"fmt"
 	"image"
+	"slices"
+	"strconv"
 	"time"
 
+	"github.com/egoist/mygo/i18n"
+
 	"github.com/egoist/mygo/ui"
+	"github.com/kyya/myvnc/locales"
 	"github.com/kyya/myvnc/viewer"
 )
 
@@ -38,24 +42,24 @@ func (a *app) homeView(c *ui.Context) {
 	ui.Scroll(c).Fill().Padding(24).Gap(16).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, appName).FontSize(24).Bold().Grow(1)
-			if ui.Button(c, "").Label("Settings").Children(func() { ui.Icon(c, gear) }).Clicked() {
+			if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
 				a.openSettings()
 			}
 		})
 		if a.rc.active {
-			banner(c, t.Warning, fmt.Sprintf("Connection to %s lost. Reconnecting (attempt %d of %d)…",
-				a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts), "Cancel", a.cancelReconnect)
+			banner(c, t.Warning, locales.Reconnecting(a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts),
+				locales.Cancel(), a.cancelReconnect)
 		}
 		if a.errText != "" {
-			banner(c, t.Danger, a.errText, "Dismiss", func() { a.errText = "" })
+			banner(c, t.Danger, a.errText, locales.Dismiss(), func() { a.errText = "" })
 		}
 		ui.Grid(c).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1)).Gap(12).Children(func() {
 			for _, s := range a.cfg.Servers {
 				a.card(c.Key(s), s)
 			}
-			card(c, "+ Add computer", func() {
+			card(c, "+ "+locales.AddComputer(), func() {
 				ui.Text(c, "+").FontSize(40).TextColor(t.TextMuted)
-				ui.Text(c, "Add computer").Bold()
+				ui.Text(c, locales.AddComputer()).Bold()
 			}).OnClick(func() { a.server, a.pass, a.addOpen = "", "", true })
 		})
 	})
@@ -94,9 +98,9 @@ func (a *app) card(c *ui.Context, server string) {
 		}
 		ui.Text(c, name).Bold()
 		ui.Text(c, server).TextColor(t.TextMuted)
-		last := "Never connected"
+		last := locales.NeverConnected()
 		if !info.Last.IsZero() {
-			last = "Last connected " + info.Last.Local().Format("2 Jan 2006 15:04")
+			last = locales.LastConnected(info.Last.Local())
 		}
 		ui.Text(c, last).TextColor(t.TextMuted).FontSize(t.FontSize - 1)
 	}).OnClick(func() {
@@ -138,28 +142,28 @@ func (a *app) saveThumbnail(server string, img *image.RGBA) {
 // addView is the form of "+ Add computer".
 func (a *app) addView(c *ui.Context) {
 	ui.Modal(c, &a.addOpen, func() {
-		ui.Text(c, "Add computer").Bold()
+		ui.Text(c, locales.AddComputer()).Bold()
 		submit := false
-		ui.Field(c, "Server", func() {
-			submit = ui.TextInput(c, &a.server).Placeholder("host[:display] or host::port").AutoFocus().Submitted()
+		ui.Field(c, locales.Server(), func() {
+			submit = ui.TextInput(c, &a.server).Placeholder(locales.ServerPlaceholder()).AutoFocus().Submitted()
 		})
-		ui.Field(c, "Username", func() {
-			ui.TextInput(c, &a.user).Placeholder("If the server asks for one")
+		ui.Field(c, locales.Username(), func() {
+			ui.TextInput(c, &a.user).Placeholder(locales.UsernamePlaceholder())
 		})
-		ui.Field(c, "Password", func() {
+		ui.Field(c, locales.Password(), func() {
 			submit = ui.TextInput(c, &a.pass).Password().Submitted() || submit
 		})
-		if ui.Checkbox(c, &a.cfg.Remember, "Remember password").Changed() {
+		if ui.Checkbox(c, &a.cfg.Remember, locales.RememberPassword()).Changed() {
 			if !a.cfg.Remember {
 				a.forgetPassword(a.server)
 			}
 			a.saveConfig()
 		}
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if ui.Button(c, "Cancel").Clicked() {
+			if ui.Button(c, locales.Cancel()).Clicked() {
 				a.addOpen = false
 			}
-			if ui.PrimaryButton(c, "Connect").Clicked() || submit {
+			if ui.PrimaryButton(c, locales.Connect()).Clicked() || submit {
 				a.addOpen = false
 				a.connect()
 			}
@@ -181,53 +185,66 @@ func (a *app) settingsView(c *ui.Context) {
 		a.settingsOpen = false
 	}
 	if ui.Modal(c, &a.settingsOpen, func() {
-		ui.Text(c, "Settings").Bold()
+		ui.Text(c, locales.Settings()).Bold()
 		ui.Scroll(c).MaxHeight(480).Children(func() {
 			ui.Form(c, func() {
-				ui.Field(c, "Preferred encoding", func() { ui.Select(c, &a.cfg.Encoding, viewer.Encodings) })
-				ui.Field(c, "JPEG quality", func() { ui.NumberInput(c, &a.quality, 0, 9, 1) })
-				ui.Field(c, "Compression level", func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
-				ui.Field(c, "Scaling", func() { ui.Select(c, &a.cfg.Scaling, viewer.Scalings) })
-				ui.Field(c, "Zoom (%)", func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
-				ui.Field(c, "Clipboard limit (KiB)", func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
-				ui.Field(c, "Clipboard", func() {
-					ui.Checkbox(c, &a.cfg.AcceptClipboard, "Receive the server's clipboard")
-					ui.Checkbox(c, &a.cfg.SendClipboard, "Send the local clipboard")
+				ui.Field(c, locales.Language(), func() {
+					if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
+						a.saveConfig()
+						if a.setLocale != nil {
+							a.setLocale(a.cfg.Language)
+						}
+					}
 				})
-				ui.Field(c, "Input", func() {
-					ui.Checkbox(c, &a.cfg.ViewOnly, "View only")
-					ui.Checkbox(c, &a.cfg.EmulateMiddleButton, "Emulate middle button (left + right)")
+				ui.Field(c, locales.PreferredEncoding(), func() { ui.Select(c, &a.cfg.Encoding, viewer.Encodings) })
+				ui.Field(c, locales.JpegQuality(), func() { ui.NumberInput(c, &a.quality, 0, 9, 1) })
+				ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
+				ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
+				ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
+				ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
+				ui.Field(c, locales.Clipboard(), func() {
+					ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard())
+					ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard())
 				})
-				ui.Field(c, "Connection", func() {
-					ui.Checkbox(c, &a.cfg.Shared, "Shared (keep other viewers connected)")
-					ui.Checkbox(c, &a.cfg.Reconnect, "Reconnect when the connection drops")
+				ui.Field(c, locales.Input(), func() {
+					ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly())
+					ui.Checkbox(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton())
 				})
-				ui.Field(c, "Security", func() {
-					ui.Checkbox(c, &a.cfg.SecureOnly, "Refuse None, VNC auth, Plain and other weak types")
+				ui.Field(c, locales.Connection(), func() {
+					ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
+					ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
 				})
-				ui.Field(c, "Window", func() {
-					ui.Checkbox(c, &a.cfg.FullScreen, "Full screen")
-					ui.Checkbox(c, &a.cfg.RemoteResize, "Resize the remote desktop to the window")
+				ui.Field(c, locales.Security(), func() {
+					ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
+				})
+				ui.Field(c, locales.Window(), func() {
+					ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
+					ui.Checkbox(c, &a.cfg.RemoteResize, locales.RemoteResize())
 				})
 				if a.displays != nil {
 					if ds := a.displays(); len(ds) > 1 {
-						ui.Field(c, "Full screen on", func() {
-							ui.Select(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...))
+						ui.Field(c, locales.FullScreenOn(), func() {
+							selectLabeled(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
+								if d == "" {
+									return locales.DisplayCurrent()
+								}
+								return d
+							})
 						})
 					}
 				}
 			})
 		})
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if a.importFile != nil && ui.Button(c, "Import .tigervnc…").Clicked() {
+			if a.importFile != nil && ui.Button(c, locales.ImportTiger()).Clicked() {
 				apply()
 				a.importFile()
 			}
-			if a.exportFile != nil && ui.Button(c, "Export .tigervnc…").Clicked() {
+			if a.exportFile != nil && ui.Button(c, locales.ExportTiger()).Clicked() {
 				apply()
 				a.exportFile()
 			}
-			if ui.PrimaryButton(c, "OK").Clicked() {
+			if ui.PrimaryButton(c, locales.Ok()).Clicked() {
 				apply()
 			}
 		})
@@ -242,9 +259,9 @@ func (a *app) connectingView(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Center().Gap(12).Children(func() {
 		ui.Spinner(c)
-		ui.Text(c, a.step).FontSize(18).Bold()
+		ui.Text(c, a.step()).FontSize(18).Bold()
 		ui.Text(c, a.target).TextColor(t.TextMuted)
-		if !a.modal() && ui.Button(c, "Cancel").Clicked() {
+		if !a.modal() && ui.Button(c, locales.Cancel()).Clicked() {
 			if a.sess != nil {
 				a.disconnect()
 			} else if a.cancel != nil {
@@ -266,11 +283,12 @@ func (a *app) sessionView(c *ui.Context) {
 			a.statsView(c)
 		}
 		left := float32(a.cfg.PillPos) * max(ww-pillW, 0)
-		pill := ui.Box(c).Label("Session menu").Absolute().Top(0).Left(left).Size(pillW, pillH).
-			Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M")
+		pill := ui.Box(c).Label(locales.SessionMenu()).Absolute().Top(0).Left(left).Size(pillW, pillH).
+			Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M").Bind(&a.pillBox)
 		pill.HandleInput(func(ev ui.InputEvent) bool { return a.dragPill(ev, left, ww) })
 		ui.Popover(c, pill, &a.menuOpen, func() { a.panel(c) })
 	})
+	a.screenRect, a.pillRect = a.screen.Bounds(c), a.pillBox.Bounds(c)
 }
 
 // dragPill moves the handle along the top edge; a click opens the panel.
@@ -316,49 +334,49 @@ func (a *app) panel(c *ui.Context) {
 	level, kind := a.security()
 	ui.Column(c).Gap(8).Padding(4).Width(300).Children(func() {
 		ui.Text(c, a.name).Bold()
-		color := t.Danger
+		color, text := t.Danger, locales.LevelUnencrypted()
 		switch level {
 		case viewer.LevelSecure:
-			color = t.Success
+			color, text = t.Success, locales.LevelSecure()
 		case viewer.LevelEncrypted:
-			color = t.Warning
+			color, text = t.Warning, locales.LevelEncrypted()
 		}
-		ui.Text(c, level+" · "+kind).TextColor(color)
+		ui.Text(c, text+" · "+kind).TextColor(color)
 		ui.Divider(c)
-		ui.Field(c, "Scaling", func() {
-			if ui.Select(c, &a.cfg.Scaling, viewer.Scalings).Changed() {
+		ui.Field(c, locales.Scaling(), func() {
+			if selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName).Changed() {
 				a.saveConfig()
 			}
 		})
-		if ui.Checkbox(c, &a.cfg.ViewOnly, "View only").Changed() {
+		if ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly()).Changed() {
 			if a.cfg.ViewOnly && a.sc != nil {
 				a.sendKeys(a.sc.Reset())
 			}
 			a.saveConfig()
 		}
-		if ui.Checkbox(c, &a.cfg.RemoteResize, "Resize the remote desktop to the window").Changed() {
+		if ui.Checkbox(c, &a.cfg.RemoteResize, locales.RemoteResize()).Changed() {
 			a.sentSize = image.Point{}
 			a.saveConfig()
 		}
 		fs := a.cfg.FullScreen
-		if ui.Checkbox(c, &fs, "Full screen").Changed() {
+		if ui.Checkbox(c, &fs, locales.FullScreen()).Changed() {
 			a.toggleFullScreen()
 		}
-		if ui.Checkbox(c, &a.cfg.Stats, "Show statistics").Changed() {
+		if ui.Checkbox(c, &a.cfg.Stats, locales.ShowStats()).Changed() {
 			a.saveConfig()
 		}
-		if ui.Checkbox(c, &a.cfg.AcceptClipboard, "Receive the server's clipboard").Changed() {
+		if ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard()).Changed() {
 			a.saveConfig()
 		}
-		if ui.Checkbox(c, &a.cfg.SendClipboard, "Send the local clipboard").Changed() {
+		if ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard()).Changed() {
 			a.saveConfig()
 		}
 		ui.Divider(c)
-		if ui.Button(c, "Send Ctrl+Alt+Del").Clicked() {
+		if ui.Button(c, locales.SendCtrlAltDel()).Clicked() {
 			a.ctrlAltDel()
 			a.menuOpen = false
 		}
-		if ui.Button(c, "Disconnect").Clicked() {
+		if ui.Button(c, locales.Disconnect()).Clicked() {
 			a.menuOpen = false
 			a.disconnect()
 		}
@@ -388,13 +406,14 @@ func (a *app) statsView(c *ui.Context) {
 	if a.sess.Encrypted() {
 		enc = "yes"
 	}
+	n := func(f float64, prec int) string { return strconv.FormatFloat(f, 'f', prec, 64) }
 	ui.Column(c).Absolute().Top(8).Left(8).Padding(6, 8).Radius(6).Background(ui.RGBA(0, 0, 0, 0.6)).Children(func() {
 		for _, l := range []string{
-			fmt.Sprintf("FPS %.0f", a.stats.fps),
-			fmt.Sprintf("Decode %.1f ms", a.stats.decodeMs),
-			fmt.Sprintf("%.1f Mbit/s", a.stats.mbps),
-			"Encoding " + viewer.EncodingName(a.stats.last.Encoding),
-			"Encrypted " + enc,
+			locales.StatsFps(n(a.stats.fps, 0)),
+			locales.StatsDecode(n(a.stats.decodeMs, 1)),
+			locales.StatsBitrate(n(a.stats.mbps, 1)),
+			locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
+			locales.StatsEncrypted(enc),
 		} {
 			ui.Text(c, l).FontSize(11).TextColor(ui.RGBA(255, 255, 255, 1))
 		}
@@ -437,6 +456,9 @@ func (a *app) screenView(c *ui.Context) {
 		w, h := s.Screen.Size()
 		f := viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
 		p.Image(s.Screen, ui.Rect{X: r.X + f.X, Y: r.Y + f.Y, W: f.W, H: f.H}, ui.FillBox)
+		if a.perf != nil {
+			a.painted(s.Shown)
+		}
 		if showCursor && hovered {
 			k := f.W / float32(w)
 			cw, ch := s.CursorImage.Size()
@@ -446,4 +468,46 @@ func (a *app) screenView(c *ui.Context) {
 			}, ui.FillBox)
 		}
 	})
+}
+
+// selectLabeled is ui.Select choosing one of values into *v, each shown
+// as label says.
+func selectLabeled(c *ui.Context, v *string, values []string, label func(string) string) ui.Element {
+	labels := make([]string, len(values))
+	shown := ""
+	for i, x := range values {
+		labels[i] = label(x)
+		if x == *v {
+			shown = labels[i]
+		}
+	}
+	e := ui.Select(c, &shown, labels)
+	if i := slices.Index(labels, shown); i >= 0 {
+		*v = values[i]
+	}
+	return e
+}
+
+func scalingName(s string) string {
+	switch s {
+	case "Fit":
+		return locales.ScalingFit()
+	case "1:1":
+		return locales.ScalingOneToOne()
+	case "Zoom":
+		return locales.ScalingZoom()
+	}
+	return s
+}
+
+// languages are the choices of the language setting: the system's, then
+// the catalogs'.
+var languages = []string{"", "en", "zh-Hans"}
+
+// languageName is a language in itself, as language menus show them.
+func languageName(tag string) string {
+	if tag == "" {
+		return locales.LanguageSystem()
+	}
+	return i18n.Autonym(tag)
 }
