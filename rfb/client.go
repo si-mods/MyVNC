@@ -107,10 +107,6 @@ type Options struct {
 	// bytes; larger ones are dropped. 0 means 256 KiB, TigerVNC's
 	// default MaxCutText.
 	MaxClipboard int
-	// HighPerformance, when set, negotiates ARD High Performance with an
-	// ARD server: the picture comes as HEVC/H.264 over SRTP; see
-	// HighPerformance. nil is Standard mode.
-	HighPerformance *HighPerformance
 }
 
 // Handler receives server events; see the package comment.
@@ -873,4 +869,12 @@ func (r *reader) u8() uint8 {
 
 func (r *reader) u16() uint16 {
 	r.read(r.b[:2])
-	return uint16(r.b[0])<<8 |
+	return uint16(r.b[0])<<8 | uint16(r.b[1])
+}
+
+func (r *reader) u32() uint32 {
+	r.read(r.b[:4])
+	return uint32(r.b[0])<<24 | uint32(r.b[1])<<16 | uint32(r.b[2])<<8 | uint32(r.b[3])
+}
+
+func (r *reader) s32() int32 { return int32(r.u32()) }
