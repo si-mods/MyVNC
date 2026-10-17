@@ -448,3 +448,34 @@ func TestNew(t *testing.T) {
 		}
 	}
 }
+
+// Depth-32 formats (CursorWithAlpha) keep the 4th byte as alpha; Depth 24
+// stays opaque.
+func TestAlphaKept(t *testing.T) {
+	pf32 := pixel.RGBA
+	pf32.Depth = 32
+	wire := []byte{10, 20, 30, 0x40, 1, 2, 3, 0}
+	fb := newFB(2, 1)
+	decodeAll(t, Raw{}, wire, image.Rect(0, 0, 2, 1), &pf32, fb)
+	if got := at(fb, 0, 0); got != (px{10, 20, 30, 0x40}) {
+		t.Errorf("depth 32: %v", got)
+	}
+	if got := at(fb, 1, 0); got != (px{1, 2, 3, 0}) {
+		t.Errorf("depth 32 zero alpha: %v", got)
+	}
+	// ZRLE raw tile and Tight fill carry it too
+	z := newZW()
+	ck := z.chunk(cat([]byte{0}, wire[:4]))
+	decodeAll(t, &ZRLE{}, cat(be32(len(ck)), ck), image.Rect(0, 0, 1, 1), &pf32, fb)
+	if got := at(fb, 0, 0); got != (px{10, 20, 30, 0x40}) {
+		t.Errorf("zrle depth 32: %v", got)
+	}
+	decodeAll(t, &Tight{}, cat([]byte{0x80}, wire[:4]), image.Rect(0, 0, 2, 1), &pf32, fb)
+	if got := at(fb, 1, 0); got != (px{10, 20, 30, 0x40}) {
+		t.Errorf("tight depth 32: %v", got)
+	}
+	decodeAll(t, Raw{}, wire, image.Rect(0, 0, 2, 1), &pixel.RGBA, fb)
+	if got := at(fb, 0, 0); got != rgb(10, 20, 30) {
+		t.Errorf("depth 24 must stay opaque: %v", got)
+	}
+}
