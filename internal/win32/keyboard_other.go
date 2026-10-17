@@ -35,3 +35,6 @@ func (l *Layout) VKToScan(vk uint16) uint16                         { return 0 }
 func (l *Layout) ScanToVK(scan uint16) uint16                       { return 0 }
 func (l *Layout) PrimaryLang() uint16                               { return 0 }
 func (l *Layout) HasAltGr() bool                                    { return false }
+
+// WatchClipboard does nothing outside Windows.
+func WatchClipboard(cb func()) (stop func(), err error) { return nil, errNotWindows }

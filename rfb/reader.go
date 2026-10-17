@@ -609,6 +609,13 @@ func (c *Client) readARDServerMessage(t byte) error {
 
 // Clipboard
 
+func (c *Client) maxCutText() int {
+	if c.opt.MaxClipboard > 0 {
+		return c.opt.MaxClipboard
+	}
+	return maxCutText
+}
+
 func (c *Client) readServerCutText() error {
 	c.rd.skip(3)
 	n := c.rd.u32()
@@ -618,7 +625,7 @@ func (c *Client) readServerCutText() error {
 	if n&0x80000000 != 0 {
 		return c.readExtendedClipboard(int(-int32(n)))
 	}
-	if n > maxCutText {
+	if int64(n) > int64(c.maxCutText()) {
 		c.rd.skip(int64(n))
 		return c.rd.err
 	}
@@ -638,7 +645,7 @@ func (c *Client) readExtendedClipboard(n int) error {
 	if n < 4 {
 		return errors.New("rfb: invalid extended clipboard message")
 	}
-	if n > maxCutText {
+	if n > c.maxCutText() {
 		c.rd.skip(int64(n))
 		return c.rd.err
 	}
@@ -693,7 +700,7 @@ func (c *Client) readExtendedClipboard(n int) error {
 				continue
 			}
 			size := zrd.u32()
-			if i == 0 && size <= maxCutText {
+			if i == 0 && size <= uint32(c.maxCutText()) {
 				text = zrd.bytes(int(size))
 			} else {
 				zrd.skip(int64(size))

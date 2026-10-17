@@ -99,6 +99,18 @@ type Options struct {
 	// per-message detail at Debug level. Passwords, keys and clipboard
 	// contents are never logged. nil discards.
 	Logger *slog.Logger
+	// OnSecurityType, when set, is told the security type as it is
+	// chosen, and again with the VeNCrypt subtype, before authentication
+	// starts and so before Password is called; on the Dial goroutine.
+	OnSecurityType func(secType uint32)
+	// MaxClipboard is the largest server clipboard text accepted, in
+	// bytes; larger ones are dropped. 0 means 256 KiB, TigerVNC's
+	// default MaxCutText.
+	MaxClipboard int
+	// HighPerformance, when set, negotiates ARD High Performance with an
+	// ARD server: the picture comes as HEVC/H.264 over SRTP; see
+	// HighPerformance. nil is Standard mode.
+	HighPerformance *HighPerformance
 }
 
 // Handler receives server events; see the package comment.
@@ -563,6 +575,9 @@ func (c *Client) negotiateSecurity(ctx context.Context) error {
 	}
 	c.secType = secType
 	c.log.Info("rfb: security type chosen", "type", secType, "name", secTypeName(secType))
+	if c.opt.OnSecurityType != nil {
+		c.opt.OnSecurityType(secType)
+	}
 
 	if err := c.runSecurity(ctx, secType, allowed); err != nil {
 		return err
@@ -723,6 +738,9 @@ func (c *Client) veNCrypt(ctx context.Context, allowed []uint32) error {
 	}
 	c.secType = chosen
 	c.log.Info("rfb: VeNCrypt subtype chosen", "type", chosen, "name", secTypeName(chosen))
+	if c.opt.OnSecurityType != nil {
+		c.opt.OnSecurityType(chosen)
+	}
 	return c.runSecurity(ctx, chosen, allowed)
 }
 
@@ -855,12 +873,4 @@ func (r *reader) u8() uint8 {
 
 func (r *reader) u16() uint16 {
 	r.read(r.b[:2])
-	return uint16(r.b[0])<<8 | uint16(r.b[1])
-}
-
-func (r *reader) u32() uint32 {
-	r.read(r.b[:4])
-	return uint32(r.b[0])<<24 | uint32(r.b[1])<<16 | uint32(r.b[2])<<8 | uint32(r.b[3])
-}
-
-func (r *reader) s32() int32 { return int32(r.u32()) }
+	return uint16(r.b[0])<<8 |
