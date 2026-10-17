@@ -298,6 +298,7 @@ type MVS struct {
 	cacheWrite, cacheLast, cacheN int
 	cachePixels                   []byte
 	cachePixelGen                 []uint32
+	org                           image.Point // fb.Rect.Min; coordinates below are relative to it
 	threshold                     []uint8
 	cbValid, crValid              []bool
 	descY                         []int8
@@ -364,7 +365,7 @@ func (m *MVS) blit(dst *image.RGBA, x, y, w, h int) {
 		return
 	}
 	for r := 0; r < h; r++ {
-		o := dst.PixOffset(x, y+r)
+		o := dst.PixOffset(x+m.org.X, y+m.org.Y+r)
 		copy(dst.Pix[o:o+w*4], m.fb[((y+r)*m.width+x)*4:((y+r)*m.width+x+w)*4])
 	}
 }
@@ -831,6 +832,8 @@ func (m *MVS) Decode(r io.Reader, rect image.Rectangle, _ *pixel.Format, fb *ima
 		return err
 	}
 	m.ensure(fb.Rect.Dx(), fb.Rect.Dy())
+	m.org = fb.Rect.Min
+	rel := rect.Sub(m.org)
 	if n == 0 {
 		return nil
 	}
@@ -851,10 +854,10 @@ func (m *MVS) Decode(r io.Reader, rect image.Rectangle, _ *pixel.Format, fb *ima
 		copy(m.cq[:], d[65:129])
 		m.quantGen++
 	case 0:
-		m.full(d, rect)
-		m.blit(fb, rect.Min.X, rect.Min.Y, rect.Dx(), rect.Dy())
+		m.full(d, rel)
+		m.blit(fb, rel.Min.X, rel.Min.Y, rel.Dx(), rel.Dy())
 	case 1:
-		m.partial(d, rect, fb)
+		m.partial(d, rel, fb)
 	default:
 		return badFmt("MVS unknown update type")
 	}

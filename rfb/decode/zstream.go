@@ -18,6 +18,9 @@ const zWindow = 32768
 type zstream struct {
 	hist    []byte
 	started bool
+	fr      io.ReadCloser // reused via flate.Resetter; avoids a new decompressor per rect
+	src     bytes.Reader
+	hr      histReader
 }
 
 func (z *zstream) reset() { z.hist, z.started = nil, false }
@@ -45,7 +48,14 @@ func (z *zstream) run(chunk []byte, fn func(io.Reader) error) error {
 		}
 		chunk, z.started = chunk[2:], true
 	}
-	h := &histReader{flate.NewReaderDict(bytes.NewReader(chunk), z.hist), z}
+	z.src.Reset(chunk)
+	if z.fr == nil {
+		z.fr = flate.NewReaderDict(&z.src, z.hist)
+	} else if err := z.fr.(flate.Resetter).Reset(&z.src, z.hist); err != nil {
+		return err
+	}
+	z.hr = histReader{z.fr, z}
+	h := &z.hr
 	if err := fn(h); err != nil {
 		return err
 	}

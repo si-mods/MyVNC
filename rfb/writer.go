@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"strings"
 
 	"github.com/kyya/myvnc/rfb/ard"
@@ -49,6 +50,30 @@ func framebufferUpdateRequest(incremental bool, w, h int) []byte {
 	b := []byte{msgFramebufferUpdateRequest, bool8(incremental), 0, 0, 0, 0}
 	b = be.AppendUint16(b, uint16(w))
 	return be.AppendUint16(b, uint16(h))
+}
+
+func enableCU(enable bool, w, h int) []byte {
+	b := []byte{msgEnableCU, bool8(enable), 0, 0, 0, 0}
+	b = be.AppendUint16(b, uint16(w))
+	return be.AppendUint16(b, uint16(h))
+}
+
+func fenceMsg(flags uint32, data []byte) []byte {
+	b := be.AppendUint32([]byte{msgClientFence, 0, 0, 0}, flags)
+	return append(append(b, byte(len(data))), data...)
+}
+
+func qemuAudioEnable(enable bool) []byte {
+	op := uint16(1) // disable
+	if enable {
+		op = 0
+	}
+	return be.AppendUint16([]byte{msgQEMUClient, qemuAudio}, op)
+}
+
+func qemuAudioSetFormat(format, channels uint8, frequency uint32) []byte {
+	b := be.AppendUint16([]byte{msgQEMUClient, qemuAudio}, 2)
+	return be.AppendUint32(append(b, format, channels), frequency)
 }
 
 func bool8(v bool) byte {
@@ -117,6 +142,15 @@ const (
 // KeyEvent sends a key press or release. On ARD servers it uses the
 // encrypted keyboard message until session encryption is active.
 func (c *Client) KeyEvent(keysym uint32, down bool) error {
+	return c.KeyEventCode(0, keysym, down)
+}
+
+// KeyEventCode sends a key press or release with its QEMU/RFB scan code
+// (keymap.Event.Code) as a QEMU extended key event when the server
+// confirmed -258, as TigerVNC's CMsgWriter::writeKeyEvent does. It
+// falls back to KeyEvent when code is 0 or the server does not support
+// it, and ARD servers always get keysyms.
+func (c *Client) KeyEventCode(code, keysym uint32, down bool) error {
 	switch keysym {
 	case xkHyperL:
 		keysym = xkSuperL
@@ -132,10 +166,43 @@ func (c *Client) KeyEvent(keysym uint32, down bool) error {
 		blk := ard.KeyEventBlock(*c.ardKey, keysym, down)
 		return c.writeLocked(append([]byte{0x10, 0}, blk[:]...))
 	}
+	if c.qemuKeys && code != 0 && !c.appleARD {
+		b := be.AppendUint16([]byte{msgQEMUClient, qemuExtendedKeyEvent}, uint16(bool8(down)))
+		b = be.AppendUint32(b, keysym)
+		return c.writeLocked(be.AppendUint32(b, code))
+	}
 	if keysym == 0 {
-		return nil
+		return nil // meaningless without a keysym
 	}
 	return c.writeLocked(be.AppendUint32([]byte{msgKeyEvent, bool8(down), 0, 0}, keysym))
+}
+
+// ErrNoSetDesktopSize is returned by SetDesktopSize before the server
+// has confirmed ExtendedDesktopSize (-308).
+var ErrNoSetDesktopSize = errors.New("rfb: server does not support SetDesktopSize")
+
+// SetDesktopSize asks the server to resize the remote desktop to one
+// screen of w x h at 0,0, keeping the server's first screen id and
+// flags, as TigerVNC's remote resize does outside full-screen mode. The
+// result arrives as a Resize, or not at all if the server refuses.
+func (c *Client) SetDesktopSize(w, h int) error {
+	if w <= 0 || h <= 0 || w > 0xffff || h > 0xffff {
+		return errors.New("rfb: invalid desktop size")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.setDesktop {
+		return ErrNoSetDesktopSize
+	}
+	b := []byte{msgSetDesktopSize, 0}
+	b = be.AppendUint16(b, uint16(w))
+	b = be.AppendUint16(b, uint16(h))
+	b = append(b, 1, 0)
+	b = be.AppendUint32(b, c.screenID)
+	b = be.AppendUint32(b, 0) // x, y
+	b = be.AppendUint16(b, uint16(w))
+	b = be.AppendUint16(b, uint16(h))
+	return c.writeLocked(be.AppendUint32(b, c.screenFlag))
 }
 
 // PointerEvent sends the button mask (bit 0 left, 1 middle, 2 right,

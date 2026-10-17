@@ -7,8 +7,13 @@ package keymap
 // NoSymbol is the absent keysym.
 const NoSymbol = 0
 
-// X11 keysyms used by the translation.
+// X11 keysyms used by the translation and the shortcuts.
 const (
+	XK_space             = 0x0020
+	XK_G                 = 0x0047
+	XK_M                 = 0x004d
+	XK_g                 = 0x0067
+	XK_m                 = 0x006d
 	XK_BackSpace         = 0xff08
 	XK_Tab               = 0xff09
 	XK_Clear             = 0xff0b

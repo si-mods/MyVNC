@@ -6,11 +6,19 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"image"
+	"io"
 	"log"
+	"log/slog"
+	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -18,7 +26,9 @@ import (
 	"github.com/kyya/myvnc/internal/win32"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
+	"github.com/kyya/myvnc/viewer/emulatemb"
 	"github.com/kyya/myvnc/viewer/keymap"
+	"github.com/kyya/myvnc/viewer/params"
 )
 
 const appName = "MyVNC"
@@ -34,23 +44,48 @@ type app struct {
 	dir   string // where config.json and known_hosts.json live
 	cfg   viewer.Config
 	known *viewer.KnownHosts
+	log   *slog.Logger
 
-	// The connect view.
+	// From the command line or a .tigervnc file, for this run.
+	secTypes []uint32 // nil for the default
+	mods     keymap.Modifier
+
+	// The home and connecting views.
 	server, user, pass string
-	optionsOpen        bool
+	addOpen            bool
+	settingsOpen       bool
 	quality, compress  float64
+	zoom, clipKiB      float64
 	connecting         bool
 	cancel             context.CancelFunc
+	step, target       string // what connecting does, and to what
 	errText            string
+	rc                 reconnect
+	thumbs             map[string]*ui.Bitmap // by server, nil for none
 
 	// The session view.
 	sess       *viewer.Session
+	addr       string // of sess
+	sessServer string // what the user chose, as in Config.Servers
+	emb        *emulatemb.Emulator
+	pill       pillDrag
+	stats      statsSample
+	sessPass   string // kept for reconnecting, never written anywhere
+	secType    uint32
 	name       string
+	title      string // shown in the title bar
 	screen     ui.Handle
 	buttons    uint16
 	ptrX, ptrY float32 // pointer in the screen box
 	scrollAcc  [2]float32
 	svc        ui.Services
+	menuOpen   bool
+	focused    bool
+	ungrabbed  bool // the user released the grab with the shortcut keys
+	pxScale    float32
+	sentSize   image.Point // last remote resize asked for
+	lastResize time.Time
+	srvLED     uint32
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -58,23 +93,52 @@ type app struct {
 	authReply          chan creds
 	keyOpen            bool
 	keyMsg             string
-	keyReply           chan bool
+	keyReply           chan int
+	warnOpen           bool
+	warnMsg            string
+	warnReply          chan int
+	certOpen           bool
+	certMsg            string
+	certReply          chan int
 
 	// Platform hooks; nil in tests but post.
 	post          func(func())
 	win           *mygo.Window
 	kb            *keymap.Keyboard
+	sc            *keymap.Shortcuts
 	setFullScreen func(bool)
 	grab          func(on bool) // the keyboard grab of Win, Alt+Tab…
+	beep          func()
+	localLED      func() uint32
+	setLED        func(uint32) error
+	displays      func() []string
+	importFile    func()
+	exportFile    func()
+}
+
+// reconnect is the auto-reconnect state after a session dropped.
+type reconnect struct {
+	active  bool
+	attempt int // of the next try, from 0
+	server  string
+	gen     int // invalidates the timers of canceled tries
+	timer   *time.Timer
 }
 
 func newApp(dir string) *app {
-	a := &app{dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")}}
+	a := &app{
+		dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")},
+		log: slog.New(slog.DiscardHandler), focused: true, srvLED: keymap.LEDUnknown,
+		mods: keymap.DefaultShortcutModifiers, thumbs: map[string]*ui.Bitmap{},
+	}
 	cfg, err := viewer.LoadConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		log.Print(err)
 	}
 	a.cfg = cfg
+	if a.cfg.Computers == nil {
+		a.cfg.Computers = map[string]viewer.Computer{}
+	}
 	a.user = cfg.Username
 	if len(cfg.Servers) > 0 {
 		a.server = cfg.Servers[0]
@@ -82,147 +146,85 @@ func newApp(dir string) *app {
 	return a
 }
 
+// openLog writes the log to dir/myvnc.log, keeping the previous run's as
+// myvnc.log.1.
+func openLog(dir string, level slog.Level) (*slog.Logger, io.Closer, error) {
+	path := filepath.Join(dir, "myvnc.log")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, nil, err
+	}
+	os.Rename(path, path+".1") // none the first time
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	return slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: level})), f, nil
+}
+
+// logLevel is Debug with -verbose or MYVNC_LOG=debug.
+func logLevel(args []string, env string) slog.Level {
+	if slices.Contains(args, "-verbose") || slices.Contains(args, "--verbose") || strings.EqualFold(env, "debug") {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
+}
+
 func (a *app) saveConfig() {
 	if err := a.cfg.Save(filepath.Join(a.dir, "config.json")); err != nil {
-		log.Print(err)
+		a.log.Error("saving the config", "err", err)
 	}
 }
 
-func (a *app) view(c *ui.Context) {
-	a.svc = c.Services()
-	if a.sess != nil {
-		a.sessionView(c)
-	} else {
-		a.connectView(c)
-	}
-	a.prompts(c)
+// security is the session panel's word on the connection's protection.
+func (a *app) security() (level, kind string) {
+	return viewer.SecurityLevel(a.secType, a.sess.Encrypted()), viewer.SecTypeName(a.secType)
 }
 
-func (a *app) connectView(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Center().Padding(24).Children(func() {
-		ui.Column(c).Width(360).Gap(10).Children(func() {
-			ui.Text(c, appName).FontSize(24).Bold()
-			submit := false
-			ui.Field(c, "Server", func() {
-				submit = ui.TextInput(c, &a.server).Placeholder("host[:display] or host::port").Submitted()
-			})
-			ui.Field(c, "Username", func() {
-				ui.TextInput(c, &a.user).Placeholder("If the server asks for one")
-			})
-			ui.Field(c, "Password", func() {
-				submit = ui.TextInput(c, &a.pass).Password().Submitted() || submit
-			})
-			if submit {
-				a.connect()
-			}
-			if ui.Checkbox(c, &a.cfg.Remember, "Remember password").Changed() {
-				if !a.cfg.Remember {
-					a.forgetPassword(a.server)
-				}
-				a.saveConfig()
-			}
-			if ui.Checkbox(c, &a.cfg.ViewOnly, "View only").Changed() {
-				a.saveConfig()
-			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "Options…").Clicked() {
-					a.quality, a.compress = float64(a.cfg.Quality), float64(a.cfg.Compress)
-					a.optionsOpen = true
-				}
-				if a.connecting {
-					if ui.Button(c, "Cancel").Clicked() && a.cancel != nil {
-						a.cancel()
-					}
-				}
-				if ui.PrimaryButton(c, "Connect").Disabled(a.connecting).Clicked() {
-					a.connect()
-				}
-			})
-			if a.connecting {
-				ui.Text(c, "Connecting…").TextColor(t.TextMuted)
-			}
-			if a.errText != "" {
-				ui.Text(c, a.errText).TextColor(t.Danger).Wrap()
-			}
-			if len(a.cfg.Servers) > 0 {
-				ui.Text(c, "Recent").TextColor(t.TextMuted)
-				for i, s := range a.cfg.Servers {
-					if ui.Button(c.Key(i), s).Clicked() {
-						a.server = s
-					}
-				}
-			}
-		})
-	})
-	applyOptions := func() {
-		a.cfg.Quality, a.cfg.Compress = int(a.quality), int(a.compress)
-		a.saveConfig()
-		a.optionsOpen = false
+func (a *app) openMenu() {
+	if a.sess == nil {
+		return
 	}
-	if ui.Modal(c, &a.optionsOpen, func() {
-		ui.Text(c, "Options").Bold()
-		ui.Form(c, func() {
-			ui.Field(c, "Preferred encoding", func() { ui.Select(c, &a.cfg.Encoding, viewer.Encodings) })
-			ui.Field(c, "JPEG quality", func() { ui.NumberInput(c, &a.quality, 0, 9, 1) })
-			ui.Field(c, "Compression level", func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
-			ui.Field(c, "Connection", func() { ui.Checkbox(c, &a.cfg.Shared, "Shared (keep other viewers connected)") })
-			ui.Field(c, "Window", func() { ui.Checkbox(c, &a.cfg.FullScreen, "Full screen") })
-		})
-		ui.Row(c).Justify(ui.End).Children(func() {
-			if ui.PrimaryButton(c, "OK").Clicked() {
-				applyOptions()
-			}
-		})
-	}).Dismissed() {
-		applyOptions()
+	if a.sc != nil {
+		a.sendKeys(a.sc.Reset())
 	}
+	a.menuOpen = true
 }
 
-func (a *app) sessionView(c *ui.Context) {
-	ui.Column(c).Fill().Children(func() {
-		ui.Row(c).Gap(8).Padding(4, 8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.name).Grow(1)
-			label := "Full screen"
-			if a.cfg.FullScreen {
-				label = "Exit full screen"
-			}
-			if ui.Button(c, label).Clicked() {
-				a.cfg.FullScreen = !a.cfg.FullScreen
-				a.saveConfig()
-				a.fullScreen(a.cfg.FullScreen)
-			}
-			ui.Button(c, "Disconnect").OnClick(a.disconnect)
-		})
-		a.screenView(c)
-	})
+// ctrlAltDel presses and releases Ctrl+Alt+Del, as TigerVNC's menu.
+func (a *app) ctrlAltDel() {
+	keys := []keymap.Event{
+		{Down: true, Code: 0x1d, KeySym: keymap.XK_Control_L},
+		{Down: true, Code: 0x38, KeySym: keymap.XK_Alt_L},
+		{Down: true, Code: 0xd3, KeySym: keymap.XK_Delete},
+	}
+	for i := len(keys) - 1; i >= 0; i-- {
+		e := keys[i]
+		e.Down = false
+		keys = append(keys, e)
+	}
+	a.sendKeys(keys)
 }
 
-func (a *app) screenView(c *ui.Context) {
-	s := a.sess
-	box := ui.Box(c).Grow(1).Bind(&a.screen).Background(ui.RGBA(0, 0, 0, 1))
-	showCursor := s.CursorImage != nil && !a.cfg.ViewOnly
-	if showCursor {
-		box.Cursor(ui.CursorNone)
+func (a *app) toggleFullScreen() {
+	a.cfg.FullScreen = !a.cfg.FullScreen
+	a.saveConfig()
+	a.fullScreen(a.cfg.FullScreen)
+}
+
+// remoteResize asks the server for the screen box's size in device
+// pixels, at most every 100 ms, as TigerVNC's DesktopWindow::remoteResize.
+func (a *app) remoteResize(p *ui.Painter, w, h int) {
+	want := image.Pt(w, h)
+	if a.cfg.ViewOnly || w <= 0 || h <= 0 || want == a.sentSize {
+		return
 	}
-	hovered := box.Hovered()
-	box.HandleInput(func(ev ui.InputEvent) bool { return a.pointer(c, ev) })
-	box.Draw(func(p *ui.Painter, r ui.Rect) {
-		if s.Screen == nil {
-			return
-		}
-		w, h := s.Screen.Size()
-		f := viewer.Fit(r.W, r.H, w, h)
-		p.Image(s.Screen, ui.Rect{X: r.X + f.X, Y: r.Y + f.Y, W: f.W, H: f.H}, ui.FillBox)
-		if showCursor && hovered {
-			k := f.W / float32(w)
-			cw, ch := s.CursorImage.Size()
-			p.Image(s.CursorImage, ui.Rect{
-				X: r.X + a.ptrX - float32(s.Hotspot.X)*k, Y: r.Y + a.ptrY - float32(s.Hotspot.Y)*k,
-				W: float32(cw) * k, H: float32(ch) * k,
-			}, ui.FillBox)
-		}
-	})
+	if wait := 100*time.Millisecond - p.Now().Sub(a.lastResize); wait > 0 {
+		p.After(wait)
+		return
+	}
+	a.sentSize, a.lastResize = want, p.Now()
+	a.log.Debug("remote resize", "width", w, "height", h)
+	a.sess.SetDesktopSize(w, h)
 }
 
 // pointerMask maps ui buttons (primary, secondary, middle) to RFB bits.
@@ -256,14 +258,32 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	}
 	b := a.screen.Bounds(c)
 	w, h := s.Screen.Size()
-	x, y := viewer.ToFramebuffer(ev.X, ev.Y, viewer.Fit(b.W, b.H, w, h), w, h)
+	x, y := viewer.ToFramebuffer(ev.X, ev.Y, viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, b.W, b.H, w, h), w, h)
 	a.flushAltGr()
-	s.Pointer(a.buttons, x, y)
+	a.sendPointer(x, y, a.buttons)
 	for _, bit := range wheel {
-		s.Pointer(a.buttons|bit, x, y)
-		s.Pointer(a.buttons, x, y)
+		a.sendPointer(x, y, a.buttons|bit)
+		a.sendPointer(x, y, a.buttons)
 	}
 	return true
+}
+
+// sendPointer passes a pointer event through the middle button emulation
+// to the session; the emulation's timer comes back to the main thread.
+func (a *app) sendPointer(x, y int, mask uint16) {
+	emb := a.emb
+	if err := emb.Filter(x, y, mask); err != nil {
+		a.log.Warn("middle button emulation", "err", err)
+	}
+	if d, ok := emb.NextTimeout(); ok {
+		time.AfterFunc(d+time.Millisecond, func() {
+			a.post(func() {
+				if a.emb == emb {
+					emb.CheckTimeouts()
+				}
+			})
+		})
+	}
 }
 
 // wheel turns a scroll into clicks of buttons 4-7: one a notch of a
@@ -295,18 +315,99 @@ func (a *app) wheel(ev ui.InputEvent) []uint16 {
 	return out
 }
 
+// Keyboard.
+
+// keys passes the keyboard's events through the shortcut keys to the
+// server.
+func (a *app) keys(evs []keymap.Event) {
+	if a.sc == nil {
+		a.sendKeys(evs)
+		return
+	}
+	send, act := a.sc.Filter(evs)
+	a.sendKeys(send)
+	switch act {
+	case keymap.ActionGrab:
+		a.ungrabbed = false
+		a.updateGrab()
+	case keymap.ActionUngrab:
+		a.ungrabbed = true // until the user grabs again, as TigerVNC
+		a.updateGrab()
+	case keymap.ActionFullScreen:
+		a.toggleFullScreen()
+	case keymap.ActionMenu:
+		a.openMenu()
+	}
+}
+
 func (a *app) sendKeys(evs []keymap.Event) {
-	if a.sess == nil {
+	if a.sess == nil || a.cfg.ViewOnly {
 		return
 	}
 	for _, e := range evs {
-		a.sess.Key(e.KeySym, e.Down)
+		a.sess.Key(e.Code, e.KeySym, e.Down)
 	}
 }
 
 func (a *app) flushAltGr() {
 	if a.kb != nil {
-		a.sendKeys(a.kb.FlushAltGr())
+		a.keys(a.kb.FlushAltGr())
+	}
+}
+
+// modal reports whether a dialog takes the keyboard from the session.
+func (a *app) modal() bool {
+	return a.menuOpen || a.authOpen || a.keyOpen || a.warnOpen || a.certOpen
+}
+
+// updateGrab grabs the system keys while a session has the keyboard.
+func (a *app) updateGrab() {
+	if a.grab != nil {
+		a.grab(a.sess != nil && !a.cfg.ViewOnly && a.focused && !a.ungrabbed && !a.modal())
+	}
+}
+
+func (a *app) focus() {
+	a.focused = true
+	a.updateGrab()
+	if a.sess == nil || a.cfg.ViewOnly {
+		return
+	}
+	a.sendClipboard()
+	if a.localLED != nil {
+		a.sendKeys(keymap.LEDSync(a.localLED(), a.srvLED)) // past the shortcuts
+	}
+}
+
+func (a *app) sendClipboard() {
+	if a.sess != nil && !a.cfg.ViewOnly && a.cfg.SendClipboard {
+		a.sess.SendClipboard(a.svc.ReadClipboard())
+	}
+}
+
+func (a *app) blur() {
+	if a.sc != nil {
+		a.sendKeys(a.sc.Reset())
+	}
+	a.focused = false
+	a.updateGrab()
+}
+
+// serverLED follows the server's lock key LEDs, as TigerVNC's
+// Viewport::setLEDState: the first state brings the server in line with
+// the local keys, later ones the local keys with the server.
+func (a *app) serverLED(state uint32) {
+	first := a.srvLED == keymap.LEDUnknown
+	a.srvLED = state
+	if a.cfg.ViewOnly || !a.focused || a.localLED == nil {
+		return
+	}
+	if first {
+		a.sendKeys(keymap.LEDSync(a.localLED(), state))
+		return
+	}
+	if err := a.setLED(state); err != nil {
+		a.log.Debug("setting the LEDs", "err", err)
 	}
 }
 
@@ -318,8 +419,31 @@ func (a *app) fullScreen(on bool) {
 
 func (a *app) setName(name string) {
 	a.name = name
-	if a.win != nil {
-		a.win.SetTitle(name + " - " + appName)
+	if a.sess != nil {
+		c := a.cfg.Computers[a.sessServer]
+		c.Name = name
+		a.cfg.Computers[a.sessServer] = c
+		a.saveConfig()
+	}
+	a.setTitle(a.sess != nil && a.sess.Encrypted())
+}
+
+// setTitle shows the desktop and how it is protected in the title bar,
+// as "macmini - MyVNC (ARD DH, encrypted)".
+func (a *app) setTitle(encrypted bool) {
+	t := appName
+	if a.sess != nil {
+		state := "unencrypted"
+		if encrypted {
+			state = "encrypted"
+		}
+		t = fmt.Sprintf("%s - %s (%s, %s)", a.name, appName, viewer.SecTypeName(a.secType), state)
+	}
+	if t != a.title {
+		a.title = t
+		if a.win != nil {
+			a.win.SetTitle(t)
+		}
 	}
 }
 
@@ -333,30 +457,68 @@ func (a *app) forgetPassword(server string) {
 	}
 }
 
-func (a *app) connect() {
+func (a *app) connect() { a.connectTo(strings.TrimSpace(a.server), false) }
+
+// connectTo connects to server; again tells a reconnect, which asks
+// nothing the user already answered for this session.
+func (a *app) connectTo(server string, again bool) {
 	if a.connecting {
 		return
 	}
-	server := strings.TrimSpace(a.server)
 	addr, err := viewer.Addr(server)
 	if err != nil {
 		a.errText = err.Error()
 		return
 	}
-	a.cfg.AddServer(server)
-	a.cfg.Username = a.user
-	a.saveConfig()
+	if !again {
+		a.cfg.AddServer(server)
+		a.cfg.Username = a.user
+		a.saveConfig()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.connecting, a.cancel, a.errText = true, cancel, ""
+	a.connecting, a.cancel = true, cancel
+	a.step, a.target = "Connecting…", server
+	if !again {
+		a.errText = ""
+	}
+	secTypes := a.secTypes
+	if a.cfg.SecureOnly {
+		secTypes = slices.DeleteFunc(slices.Clone(viewer.SecTypesSecure), func(t uint32) bool {
+			return a.secTypes != nil && !slices.Contains(a.secTypes, t)
+		})
+	}
 	cfg, user, pass := a.cfg, a.user, a.pass
+	if again {
+		pass = a.sessPass
+	}
+	lg := a.log.With("addr", addr)
+	lg.Info("connecting", "server", server, "reconnect", again)
 	go func() {
 		defer cancel()
 		used := ""
+		var secType atomic.Uint32
 		opt := rfb.Options{
-			Username:  user,
-			Shared:    cfg.Shared,
-			Encodings: cfg.EncodingList(),
+			Username:      user,
+			Shared:        cfg.Shared,
+			Encodings:     cfg.EncodingList(),
+			Logger:        lg,
+			MaxClipboard:  cfg.ClipboardKiB << 10,
+			SecurityTypes: secTypes,
+			OnSecurityType: func(t uint32) {
+				secType.Store(t)
+				a.post(func() {
+					if a.connecting {
+						a.step = "Authenticating…"
+					}
+				})
+			},
 			Password: func() (string, string, error) {
+				t := secType.Load()
+				if viewer.PasswordUnprotected(t) && !again && !slices.Contains(cfg.Unencrypted, addr) {
+					if err := a.warnUnencrypted(ctx, addr, t); err != nil {
+						return "", "", err
+					}
+				}
 				if pass == "" && cfg.Remember {
 					if b, err := mygo.Secrets.Get(secretKey(addr)); err == nil {
 						pass = string(b)
@@ -378,6 +540,9 @@ func (a *app) connect() {
 				return user, pass, nil
 			},
 			VerifyHostKey: func(key []byte, fp string) error { return a.verifyHostKey(ctx, addr, key, fp) },
+			VerifyCertificate: func(certs []*x509.Certificate, verr error) error {
+				return a.verifyCert(ctx, addr, certs[0], verr)
+			},
 		}
 		s, err := viewer.Connect(ctx, addr, opt, a.post)
 		if cfg.Remember {
@@ -392,11 +557,16 @@ func (a *app) connect() {
 		if ctx.Err() != nil && err != nil {
 			err = nil // canceled
 		}
-		a.post(func() { a.connected(s, err) })
+		if err != nil {
+			lg.Info("connection failed", "err", err)
+		}
+		a.post(func() { a.connected(s, server, addr, used, err) })
 		if s == nil {
 			return
 		}
+		lg.Info("connected", "security", viewer.SecTypeName(s.SecurityType()), "encrypted", s.Encrypted())
 		err = s.Run()
+		lg.Info("session ended", "err", err)
 		a.post(func() { a.disconnected(s, err) })
 	}()
 }
@@ -418,12 +588,38 @@ func ask[T any](a *app, ctx context.Context, open func(), reply *chan T) (T, err
 	}
 }
 
+// warnUnencrypted asks before a password goes over a connection that
+// does not protect it.
+func (a *app) warnUnencrypted(ctx context.Context, addr string, secType uint32) error {
+	i, err := ask(a, ctx, func() {
+		a.warnOpen = true
+		a.warnMsg = fmt.Sprintf("%s uses %s: the password and everything you type are not protected "+
+			"from anyone on the network between you and the server.", addr, viewer.SecTypeName(secType))
+	}, &a.warnReply)
+	if err != nil {
+		return err
+	}
+	switch i {
+	case 1: // always
+		a.post(func() {
+			if !slices.Contains(a.cfg.Unencrypted, addr) {
+				a.cfg.Unencrypted = append(a.cfg.Unencrypted, addr)
+				a.saveConfig()
+			}
+		})
+	case 2: // continue
+	default:
+		return errors.New("canceled: the connection is not encrypted")
+	}
+	return nil
+}
+
 func (a *app) verifyHostKey(ctx context.Context, addr string, key []byte, fp string) error {
 	err := a.known.Check(addr, key, fp)
 	if !errors.Is(err, viewer.ErrUnknownHost) {
 		return err
 	}
-	ok, err := ask(a, ctx, func() {
+	i, err := ask(a, ctx, func() {
 		a.keyOpen = true
 		a.keyMsg = fmt.Sprintf("This is the first connection to %s. Its key fingerprint is %s. "+
 			"Make sure it is the server's before you accept.", addr, fp)
@@ -431,10 +627,45 @@ func (a *app) verifyHostKey(ctx context.Context, addr string, key []byte, fp str
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if i != 1 {
 		return errors.New("the host key was rejected")
 	}
 	return a.known.Add(addr, key)
+}
+
+// verifyCert asks about a certificate that failed verification, unless
+// the user trusted it before; a changed one is refused.
+func (a *app) verifyCert(ctx context.Context, addr string, cert *x509.Certificate, verr error) error {
+	err := a.known.CheckCert(addr, cert.Raw)
+	if !errors.Is(err, viewer.ErrUnknownHost) {
+		return err
+	}
+	i, err := ask(a, ctx, func() {
+		a.certOpen = true
+		a.certMsg = fmt.Sprintf("The certificate of %s could not be verified: %v\n\nSubject: %s\nIssuer: %s\nSHA-256: %s",
+			addr, verr, cert.Subject, cert.Issuer, viewer.CertFingerprint(cert.Raw))
+	}, &a.certReply)
+	if err != nil {
+		return err
+	}
+	switch i {
+	case 1: // always
+		return a.known.AddCert(addr, cert.Raw)
+	case 2: // once
+		return nil
+	}
+	return errors.New("the server certificate was rejected")
+}
+
+// answer shows an alert for the connection goroutine and sends it the
+// button chosen; closing it chooses the first.
+func answer(c *ui.Context, open *bool, reply *chan int, title, msg string, buttons ...string) {
+	i := ui.AlertDialog(c, open, title, msg, buttons...)
+	if i == -1 || *reply == nil {
+		return
+	}
+	*reply <- max(i, 0)
+	*reply = nil
 }
 
 // prompts shows the questions of the connection goroutine.
@@ -464,39 +695,53 @@ func (a *app) prompts(c *ui.Context) {
 	}).Dismissed() {
 		answerAuth(creds{})
 	}
-	if i := ui.AlertDialog(c, &a.keyOpen, "Unknown host key", a.keyMsg, "Reject", "Accept"); i != -1 && a.keyReply != nil {
-		a.keyReply <- i == 1
-		a.keyReply = nil
-	}
+	answer(c, &a.keyOpen, &a.keyReply, "Unknown host key", a.keyMsg, "Reject", "Accept")
+	answer(c, &a.warnOpen, &a.warnReply, "Unencrypted connection", a.warnMsg, "Don't connect", "Always for this server", "Continue")
+	answer(c, &a.certOpen, &a.certReply, "Unverified certificate", a.certMsg, "Reject", "Always accept", "Accept once")
 }
 
-func (a *app) connected(s *viewer.Session, err error) {
+func (a *app) connected(s *viewer.Session, server, addr, pass string, err error) {
 	a.connecting, a.cancel = false, nil
-	a.authOpen, a.keyOpen = false, false
+	a.authOpen, a.keyOpen, a.warnOpen, a.certOpen = false, false, false, false
 	if err != nil {
 		a.errText = err.Error()
+		var ae *rfb.AuthError
+		if a.rc.active && !errors.As(err, &ae) {
+			a.scheduleReconnect()
+		} else {
+			a.cancelReconnect()
+		}
 		return
 	}
 	if s == nil {
+		a.cancelReconnect()
 		return // canceled
 	}
-	a.sess, a.name, a.buttons, a.pass = s, "", 0, ""
+	a.cancelReconnect()
+	a.sess, a.addr, a.sessServer, a.sessPass, a.secType = s, addr, server, pass, s.SecurityType()
+	a.step = "Waiting for the first frame…"
+	a.cfg.Computers[server] = viewer.Computer{Name: a.cfg.Computers[server].Name, Last: time.Now()}
+	a.saveConfig()
+	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
+	a.stats = statsSample{}
+	a.name, a.buttons, a.pass, a.errText = "", 0, "", ""
+	a.ungrabbed, a.menuOpen, a.srvLED, a.sentSize = false, false, keymap.LEDUnknown, image.Point{}
+	a.setTitle(s.Encrypted())
 	s.OnName = a.setName
 	s.OnClipboard = func(text string) {
-		if !a.cfg.ViewOnly {
+		if !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
 			a.svc.WriteClipboard(text)
 		}
 	}
-	if !a.cfg.ViewOnly {
-		s.SendClipboard(a.svc.ReadClipboard())
-	}
+	s.OnBell = a.beep
+	s.OnLED = a.serverLED
+	a.sendClipboard()
 	a.fullScreen(a.cfg.FullScreen)
-	if a.grab != nil {
-		a.grab(true)
-	}
+	a.updateGrab()
 }
 
 func (a *app) disconnect() {
+	a.cancelReconnect()
 	if a.sess != nil {
 		a.sess.Close()
 		a.endSession()
@@ -504,16 +749,14 @@ func (a *app) disconnect() {
 }
 
 func (a *app) endSession() {
-	a.sess = nil
-	if a.kb != nil {
-		a.kb.Reset()
+	a.saveThumbnail(a.sessServer, a.sess.Shown)
+	a.sess, a.emb = nil, nil
+	if a.sc != nil {
+		a.sc.Reset() // the server is gone: nothing to release
 	}
-	if a.win != nil {
-		a.win.SetTitle(appName)
-	}
-	if a.grab != nil {
-		a.grab(false)
-	}
+	a.menuOpen = false
+	a.setTitle(false)
+	a.updateGrab()
 	a.fullScreen(false)
 }
 
@@ -521,10 +764,135 @@ func (a *app) disconnected(s *viewer.Session, err error) {
 	if a.sess != s {
 		return // closed by the user
 	}
+	server := a.sessServer
 	a.endSession()
-	if err != nil {
-		a.errText = "Disconnected: " + err.Error()
+	if err == nil {
+		return
 	}
+	a.errText = "Disconnected: " + err.Error()
+	if a.cfg.Reconnect {
+		a.rc = reconnect{server: server, gen: a.rc.gen}
+		a.scheduleReconnect()
+	}
+}
+
+// scheduleReconnect waits before the next try, or gives up.
+func (a *app) scheduleReconnect() {
+	d, ok := viewer.ReconnectDelay(a.rc.attempt)
+	if !ok {
+		a.log.Info("giving up reconnecting", "server", a.rc.server)
+		a.cancelReconnect()
+		return
+	}
+	a.rc.active = true
+	a.rc.gen++
+	gen := a.rc.gen
+	a.log.Info("reconnecting", "server", a.rc.server, "attempt", a.rc.attempt+1, "in", d)
+	a.rc.timer = time.AfterFunc(d, func() {
+		a.post(func() {
+			if a.rc.active && a.rc.gen == gen && a.sess == nil {
+				a.rc.attempt++
+				a.connectTo(a.rc.server, true)
+			}
+		})
+	})
+}
+
+func (a *app) cancelReconnect() {
+	if a.rc.timer != nil {
+		a.rc.timer.Stop()
+	}
+	a.rc = reconnect{gen: a.rc.gen + 1}
+}
+
+// tigerParams is TigerVNC's parameter set holding cfg's values.
+func tigerParams(cfg *viewer.Config) *params.Viewer {
+	p := params.NewViewer()
+	p.Shared.Set(cfg.Shared)
+	p.PreferredEncoding.SetString(cfg.Encoding)
+	p.CustomCompressLevel.Set(cfg.Compress != 2)
+	p.CompressLevel.Set(cfg.Compress)
+	p.QualityLevel.Set(cfg.Quality)
+	p.FullScreen.Set(cfg.FullScreen)
+	p.RemoteResize.Set(cfg.RemoteResize)
+	p.ViewOnly.Set(cfg.ViewOnly)
+	p.EmulateMiddleButton.Set(cfg.EmulateMiddleButton)
+	p.AcceptClipboard.Set(cfg.AcceptClipboard)
+	p.SendClipboard.Set(cfg.SendClipboard)
+	return p
+}
+
+// applyParams takes p's values into a.cfg; SecurityTypes and
+// ShortcutModifiers hold for this run.
+func (a *app) applyParams(p *params.Viewer) {
+	c := &a.cfg
+	c.Shared = p.Shared.Value()
+	c.Encoding = p.PreferredEncoding.Value()
+	if p.CustomCompressLevel.Value() {
+		c.Compress = p.CompressLevel.Value()
+	}
+	c.Quality = p.QualityLevel.Value()
+	c.FullScreen = p.FullScreen.Value()
+	c.RemoteResize = p.RemoteResize.Value()
+	c.ViewOnly = p.ViewOnly.Value()
+	c.EmulateMiddleButton = p.EmulateMiddleButton.Value()
+	c.AcceptClipboard = p.AcceptClipboard.Value()
+	c.SendClipboard = p.SendClipboard.Value()
+	if !p.SecurityTypes.IsDefault() {
+		a.secTypes = p.SecTypes()
+	}
+	a.mods = p.Modifiers()
+	if a.sc != nil {
+		a.sc.SetModifiers(a.mods)
+	}
+}
+
+// loadTiger reads a .tigervnc file into p and returns its server.
+func (a *app) loadTiger(p *params.Viewer, path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	server, warnings, err := p.Load(f)
+	for _, w := range warnings {
+		a.log.Warn("loading "+path, "warning", w)
+	}
+	return server, err
+}
+
+// parseArgs reads TigerVNC's command line: parameters, then a server or
+// a .tigervnc file, to connect to at once.
+func (a *app) parseArgs(args []string) (server string, err error) {
+	args = slices.DeleteFunc(slices.Clone(args), func(s string) bool { return s == "-verbose" || s == "--verbose" })
+	p := tigerParams(&a.cfg)
+	rest, err := p.ParseArgs(args)
+	if err != nil {
+		return "", err
+	}
+	if len(rest) > 1 {
+		return "", fmt.Errorf("Extra argument: %s", rest[1])
+	}
+	if len(rest) == 1 {
+		server = rest[0]
+		if strings.ContainsAny(server, `/\`) {
+			if server, err = a.loadTiger(p, server); err != nil {
+				return "", err
+			}
+		}
+	}
+	a.applyParams(p)
+	return server, nil
+}
+
+func usage() string {
+	var b strings.Builder
+	b.WriteString("usage: MyVNC [parameters] [host][:displayNum] | [parameters] file.tigervnc\n\nParameters:\n")
+	for _, p := range tigerParams(&viewer.Config{}).Params() {
+		fmt.Fprintf(&b, "  %s - %s (default=%s)\n", p.Name(), p.Description(), p.DefaultStr())
+	}
+	b.WriteString("  -verbose - debug level in the log\n")
+	return b.String()
 }
 
 func main() {
@@ -533,7 +901,28 @@ func main() {
 		log.Fatal(err)
 	}
 	a := newApp(dir)
+	if lg, f, err := openLog(dir, logLevel(os.Args[1:], os.Getenv("MYVNC_LOG"))); err != nil {
+		log.Print("log: ", err)
+	} else {
+		defer f.Close()
+		a.log = lg
+	}
+	a.log.Info("starting", "app", appName, "version", mygo.App.Version(), "go", runtime.Version())
+	start, argErr := a.parseArgs(os.Args[1:])
+	if errors.Is(argErr, params.ErrHelp) {
+		fmt.Print(usage())
+		return
+	}
+	mygo.Theme.SetSource(mygo.ThemeDark)
 	mygo.App.WhenReady(func() {
+		if argErr != nil {
+			a.log.Error("command line", "err", argErr)
+			go func() {
+				mygo.Dialog.Error(appName, argErr.Error()+"\n\n"+usage())
+				mygo.App.Exit(2)
+			}()
+			return
+		}
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     appName,
 			Width:     1024,
@@ -543,13 +932,81 @@ func main() {
 			StateKey:  "main",
 			Content:   ui.View(a.view),
 		})
-		a.win, a.post, a.setFullScreen = win, win.Update, win.SetFullScreen
+		a.win, a.post = win, win.Update
+		a.beep = mygo.Shell.Beep
+		a.displays = func() []string {
+			var ds []string
+			for _, d := range mygo.Screen.Displays() {
+				ds = append(ds, d.Label)
+			}
+			return ds
+		}
+		a.setFullScreen = func(on bool) {
+			if on && a.cfg.FullScreenDisplay != "" {
+				for _, d := range mygo.Screen.Displays() {
+					if d.Label == a.cfg.FullScreenDisplay {
+						win.SetBounds(d.Bounds)
+					}
+				}
+			}
+			win.SetFullScreen(on)
+		}
+		filters := []mygo.FileFilter{{Name: "TigerVNC", Extensions: []string{"tigervnc"}}}
+		a.importFile = func() {
+			go func() {
+				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Import .tigervnc", Filters: filters})
+				if err != nil || len(paths) == 0 {
+					return
+				}
+				a.post(func() {
+					p := tigerParams(&a.cfg)
+					server, err := a.loadTiger(p, paths[0])
+					if err != nil {
+						a.errText = err.Error()
+						return
+					}
+					a.applyParams(p)
+					if server != "" {
+						a.cfg.AddServer(server)
+						a.server = server
+					}
+					a.saveConfig()
+				})
+			}()
+		}
+		a.exportFile = func() {
+			server := a.server
+			go func() {
+				path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, Title: "Export .tigervnc",
+					DefaultPath: "MyVNC.tigervnc", Filters: filters})
+				if err != nil || path == "" {
+					return
+				}
+				a.post(func() {
+					var b strings.Builder
+					err := tigerParams(&a.cfg).Save(&b, server)
+					if err == nil {
+						err = os.WriteFile(path, []byte(b.String()), 0o600)
+					}
+					if err != nil {
+						a.errText = err.Error()
+					}
+				})
+			}()
+		}
 		wireKeyboard(a, win)
+		if _, err := win32.WatchClipboard(func() { a.post(a.sendClipboard) }); err != nil {
+			a.log.Warn("clipboard listener", "err", err)
+		}
 		win.OnClosed(func() {
 			if a.sess != nil {
 				a.sess.Close()
 			}
 		})
+		if start != "" {
+			a.server = start
+			a.connect()
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
@@ -560,45 +1017,41 @@ func main() {
 // before mygo sees them.
 func wireKeyboard(a *app, win *mygo.Window) {
 	a.kb = keymap.NewKeyboard(&win32.Layout{})
+	a.sc = keymap.NewShortcuts(a.kb, a.mods)
+	a.localLED, a.setLED = win32.LEDState, win32.SetLEDState
 	hwnd := win.NativeHandle()
 	_, err := win32.Install(hwnd, func(k keymap.WinKey) bool {
-		if a.sess == nil || a.cfg.ViewOnly {
+		if a.sess == nil || a.cfg.ViewOnly || a.modal() {
 			return false
 		}
-		a.sendKeys(a.kb.Handle(k))
-		if a.kb.AltGrPending() {
+		a.keys(a.kb.Handle(k))
+		if id, ok := a.kb.AltGrTimer(); ok {
 			time.AfterFunc(100*time.Millisecond, func() {
-				mygo.RunOnMain(func() { a.sendKeys(a.kb.FlushAltGr()) })
+				mygo.RunOnMain(func() { a.keys(a.kb.ExpireAltGr(id)) })
 			})
 		}
 		return true
 	})
 	if err != nil {
-		log.Print("keyboard: ", err)
+		a.log.Warn("keyboard hook", "err", err)
 		return
 	}
 	// Only while connected, so that Alt+Tab works in the connect view.
 	var release func()
+	failed := false
 	a.grab = func(on bool) {
 		switch {
-		case on && release == nil:
+		case on && release == nil && !failed:
 			release, err = win32.Grab(hwnd)
 			if err != nil {
-				log.Print("keyboard grab: ", err)
+				failed = true // no retrying each frame
+				a.log.Warn("keyboard grab", "err", err)
 			}
 		case !on && release != nil:
 			release()
 			release = nil
 		}
 	}
-	win.OnFocus(func() {
-		if a.sess != nil && !a.cfg.ViewOnly {
-			a.grab(true)
-			a.sess.SendClipboard(a.svc.ReadClipboard())
-		}
-	})
-	win.OnBlur(func() {
-		a.sendKeys(a.kb.Reset())
-		a.grab(false)
-	})
+	win.OnFocus(a.focus)
+	win.OnBlur(a.blur)
 }
