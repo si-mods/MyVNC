@@ -75,6 +75,9 @@ func putRGBA(fb *image.RGBA, r image.Rectangle, buf []byte) {
 }
 
 func readU8(r io.Reader) (byte, error) {
+	if br, ok := r.(io.ByteReader); ok { // avoids a heap-allocated buffer per byte
+		return br.ReadByte()
+	}
 	var b [1]byte
 	_, err := io.ReadFull(r, b[:])
 	return b[0], err
