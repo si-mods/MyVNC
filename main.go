@@ -24,6 +24,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/kyya/myvnc/internal/win32"
+	"github.com/kyya/myvnc/locales"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
 	"github.com/kyya/myvnc/viewer/emulatemb"
@@ -58,7 +59,8 @@ type app struct {
 	zoom, clipKiB      float64
 	connecting         bool
 	cancel             context.CancelFunc
-	step, target       string // what connecting does, and to what
+	step               func() string // what connecting does, said in the language shown
+	target             string        // what it connects to
 	errText            string
 	rc                 reconnect
 	thumbs             map[string]*ui.Bitmap // by server, nil for none
@@ -114,6 +116,13 @@ type app struct {
 	displays      func() []string
 	importFile    func()
 	exportFile    func()
+	setLocale     func(tag string) // "" follows the system
+
+	perf *perfTest // -perftest, else nil
+
+	touch                touchState
+	pillBox              ui.Handle
+	screenRect, pillRect ui.Rect // of the last frame, in window DIPs, for touch
 }
 
 // reconnect is the auto-reconnect state after a session dropped.
@@ -130,7 +139,9 @@ func newApp(dir string) *app {
 		dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")},
 		log: slog.New(slog.DiscardHandler), focused: true, srvLED: keymap.LEDUnknown,
 		mods: keymap.DefaultShortcutModifiers, thumbs: map[string]*ui.Bitmap{},
+		step: locales.StepConnecting,
 	}
+	a.initTouch()
 	cfg, err := viewer.LoadConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		log.Print(err)
@@ -256,9 +267,7 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	default:
 		return false
 	}
-	b := a.screen.Bounds(c)
-	w, h := s.Screen.Size()
-	x, y := viewer.ToFramebuffer(ev.X, ev.Y, viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, b.W, b.H, w, h), w, h)
+	x, y := a.toFramebuffer(a.screen.Bounds(c), ev.X, ev.Y)
 	a.flushAltGr()
 	a.sendPointer(x, y, a.buttons)
 	for _, bit := range wheel {
@@ -433,11 +442,11 @@ func (a *app) setName(name string) {
 func (a *app) setTitle(encrypted bool) {
 	t := appName
 	if a.sess != nil {
-		state := "unencrypted"
+		enc := "no"
 		if encrypted {
-			state = "encrypted"
+			enc = "yes"
 		}
-		t = fmt.Sprintf("%s - %s (%s, %s)", a.name, appName, viewer.SecTypeName(a.secType), state)
+		t = locales.TitleSession(a.name, appName, viewer.SecTypeName(a.secType), enc)
 	}
 	if t != a.title {
 		a.title = t
@@ -448,6 +457,33 @@ func (a *app) setTitle(encrypted bool) {
 }
 
 // Connecting.
+
+// The reasons a connection ends that MyVNC gives itself; errorText says
+// them in the language shown.
+var (
+	errAuthCanceled        = errors.New("authentication canceled")
+	errUnencryptedCanceled = errors.New("canceled: the connection is not encrypted")
+	errHostKeyRejected     = errors.New("the host key was rejected")
+	errCertRejected        = errors.New("the server certificate was rejected")
+)
+
+// errorText is err for the user.
+func errorText(err error) string {
+	for _, e := range []struct {
+		err error
+		say func() string
+	}{
+		{errAuthCanceled, locales.ErrAuthCanceled},
+		{errUnencryptedCanceled, locales.ErrUnencryptedCanceled},
+		{errHostKeyRejected, locales.ErrHostKeyRejected},
+		{errCertRejected, locales.ErrCertRejected},
+	} {
+		if errors.Is(err, e.err) {
+			return e.say()
+		}
+	}
+	return err.Error()
+}
 
 func secretKey(addr string) string { return "password " + addr }
 
@@ -477,7 +513,7 @@ func (a *app) connectTo(server string, again bool) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.connecting, a.cancel = true, cancel
-	a.step, a.target = "Connecting…", server
+	a.step, a.target = locales.StepConnecting, server
 	if !again {
 		a.errText = ""
 	}
@@ -508,7 +544,7 @@ func (a *app) connectTo(server string, again bool) {
 				secType.Store(t)
 				a.post(func() {
 					if a.connecting {
-						a.step = "Authenticating…"
+						a.step = locales.StepAuthenticating
 					}
 				})
 			},
@@ -532,7 +568,7 @@ func (a *app) connectTo(server string, again bool) {
 						return "", "", err
 					}
 					if !r.ok {
-						return "", "", errors.New("authentication canceled")
+						return "", "", errAuthCanceled
 					}
 					user, pass = r.user, r.pass
 				}
@@ -593,8 +629,7 @@ func ask[T any](a *app, ctx context.Context, open func(), reply *chan T) (T, err
 func (a *app) warnUnencrypted(ctx context.Context, addr string, secType uint32) error {
 	i, err := ask(a, ctx, func() {
 		a.warnOpen = true
-		a.warnMsg = fmt.Sprintf("%s uses %s: the password and everything you type are not protected "+
-			"from anyone on the network between you and the server.", addr, viewer.SecTypeName(secType))
+		a.warnMsg = locales.UnencryptedMessage(addr, viewer.SecTypeName(secType))
 	}, &a.warnReply)
 	if err != nil {
 		return err
@@ -609,7 +644,7 @@ func (a *app) warnUnencrypted(ctx context.Context, addr string, secType uint32) 
 		})
 	case 2: // continue
 	default:
-		return errors.New("canceled: the connection is not encrypted")
+		return errUnencryptedCanceled
 	}
 	return nil
 }
@@ -621,14 +656,13 @@ func (a *app) verifyHostKey(ctx context.Context, addr string, key []byte, fp str
 	}
 	i, err := ask(a, ctx, func() {
 		a.keyOpen = true
-		a.keyMsg = fmt.Sprintf("This is the first connection to %s. Its key fingerprint is %s. "+
-			"Make sure it is the server's before you accept.", addr, fp)
+		a.keyMsg = locales.HostKeyMessage(addr, fp)
 	}, &a.keyReply)
 	if err != nil {
 		return err
 	}
 	if i != 1 {
-		return errors.New("the host key was rejected")
+		return errHostKeyRejected
 	}
 	return a.known.Add(addr, key)
 }
@@ -642,8 +676,8 @@ func (a *app) verifyCert(ctx context.Context, addr string, cert *x509.Certificat
 	}
 	i, err := ask(a, ctx, func() {
 		a.certOpen = true
-		a.certMsg = fmt.Sprintf("The certificate of %s could not be verified: %v\n\nSubject: %s\nIssuer: %s\nSHA-256: %s",
-			addr, verr, cert.Subject, cert.Issuer, viewer.CertFingerprint(cert.Raw))
+		a.certMsg = locales.CertMessage(addr, fmt.Sprint(verr), cert.Subject.String(), cert.Issuer.String(),
+			viewer.CertFingerprint(cert.Raw))
 	}, &a.certReply)
 	if err != nil {
 		return err
@@ -654,7 +688,7 @@ func (a *app) verifyCert(ctx context.Context, addr string, cert *x509.Certificat
 	case 2: // once
 		return nil
 	}
-	return errors.New("the server certificate was rejected")
+	return errCertRejected
 }
 
 // answer shows an alert for the connection goroutine and sends it the
@@ -678,33 +712,35 @@ func (a *app) prompts(c *ui.Context) {
 		a.authOpen = false
 	}
 	if ui.Modal(c, &a.authOpen, func() {
-		ui.Text(c, "Authentication").Bold()
+		ui.Text(c, locales.AuthTitle()).Bold()
 		submit := false
-		ui.Field(c, "Username", func() { ui.TextInput(c, &a.authUser) })
-		ui.Field(c, "Password", func() {
+		ui.Field(c, locales.Username(), func() { ui.TextInput(c, &a.authUser) })
+		ui.Field(c, locales.Password(), func() {
 			submit = ui.TextInput(c, &a.authPass).Password().AutoFocus().Submitted()
 		})
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if ui.Button(c, "Cancel").Clicked() {
+			if ui.Button(c, locales.Cancel()).Clicked() {
 				answerAuth(creds{})
 			}
-			if ui.PrimaryButton(c, "OK").Clicked() || submit {
+			if ui.PrimaryButton(c, locales.Ok()).Clicked() || submit {
 				answerAuth(creds{a.authUser, a.authPass, true})
 			}
 		})
 	}).Dismissed() {
 		answerAuth(creds{})
 	}
-	answer(c, &a.keyOpen, &a.keyReply, "Unknown host key", a.keyMsg, "Reject", "Accept")
-	answer(c, &a.warnOpen, &a.warnReply, "Unencrypted connection", a.warnMsg, "Don't connect", "Always for this server", "Continue")
-	answer(c, &a.certOpen, &a.certReply, "Unverified certificate", a.certMsg, "Reject", "Always accept", "Accept once")
+	answer(c, &a.keyOpen, &a.keyReply, locales.HostKeyTitle(), a.keyMsg, locales.Reject(), locales.Accept())
+	answer(c, &a.warnOpen, &a.warnReply, locales.UnencryptedTitle(), a.warnMsg,
+		locales.DontConnect(), locales.AlwaysForServer(), locales.Continue())
+	answer(c, &a.certOpen, &a.certReply, locales.CertTitle(), a.certMsg,
+		locales.Reject(), locales.AlwaysAccept(), locales.AcceptOnce())
 }
 
 func (a *app) connected(s *viewer.Session, server, addr, pass string, err error) {
 	a.connecting, a.cancel = false, nil
 	a.authOpen, a.keyOpen, a.warnOpen, a.certOpen = false, false, false, false
 	if err != nil {
-		a.errText = err.Error()
+		a.errText = errorText(err)
 		var ae *rfb.AuthError
 		if a.rc.active && !errors.As(err, &ae) {
 			a.scheduleReconnect()
@@ -719,7 +755,7 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	}
 	a.cancelReconnect()
 	a.sess, a.addr, a.sessServer, a.sessPass, a.secType = s, addr, server, pass, s.SecurityType()
-	a.step = "Waiting for the first frame…"
+	a.step = locales.StepFirstFrame
 	a.cfg.Computers[server] = viewer.Computer{Name: a.cfg.Computers[server].Name, Last: time.Now()}
 	a.saveConfig()
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
@@ -769,7 +805,7 @@ func (a *app) disconnected(s *viewer.Session, err error) {
 	if err == nil {
 		return
 	}
-	a.errText = "Disconnected: " + err.Error()
+	a.errText = locales.Disconnected(errorText(err))
 	if a.cfg.Reconnect {
 		a.rc = reconnect{server: server, gen: a.rc.gen}
 		a.scheduleReconnect()
@@ -896,24 +932,33 @@ func usage() string {
 }
 
 func main() {
+	perf, args, perfErr := perfArgs(os.Args[1:])
+	if perfErr != nil {
+		log.Fatal(perfErr)
+	}
 	dir, err := mygo.App.Path(mygo.PathUserData)
+	if perf != nil {
+		dir, err = os.MkdirTemp("", "myvnc-perftest") // the user's settings stay as they are
+		log.SetOutput(io.MultiWriter(os.Stderr, perf))
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
 	a := newApp(dir)
-	if lg, f, err := openLog(dir, logLevel(os.Args[1:], os.Getenv("MYVNC_LOG"))); err != nil {
+	if lg, f, err := openLog(dir, logLevel(args, os.Getenv("MYVNC_LOG"))); err != nil {
 		log.Print("log: ", err)
 	} else {
 		defer f.Close()
 		a.log = lg
 	}
 	a.log.Info("starting", "app", appName, "version", mygo.App.Version(), "go", runtime.Version())
-	start, argErr := a.parseArgs(os.Args[1:])
+	start, argErr := a.parseArgs(args)
 	if errors.Is(argErr, params.ErrHelp) {
 		fmt.Print(usage())
 		return
 	}
 	mygo.Theme.SetSource(mygo.ThemeDark)
+	mygo.App.SetLocale(a.cfg.Language) // the setting is the config's
 	mygo.App.WhenReady(func() {
 		if argErr != nil {
 			a.log.Error("command line", "err", argErr)
@@ -933,6 +978,11 @@ func main() {
 			Content:   ui.View(a.view),
 		})
 		a.win, a.post = win, win.Update
+		a.setLocale = mygo.App.SetLocale
+		mygo.App.OnLocaleChanged(func(string) {
+			a.title = "" // said again in the new language
+			a.setTitle(a.sess != nil && a.sess.Encrypted())
+		})
 		a.beep = mygo.Shell.Beep
 		a.displays = func() []string {
 			var ds []string
@@ -954,7 +1004,7 @@ func main() {
 		filters := []mygo.FileFilter{{Name: "TigerVNC", Extensions: []string{"tigervnc"}}}
 		a.importFile = func() {
 			go func() {
-				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Import .tigervnc", Filters: filters})
+				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: locales.ImportTigerTitle(), Filters: filters})
 				if err != nil || len(paths) == 0 {
 					return
 				}
@@ -977,7 +1027,7 @@ func main() {
 		a.exportFile = func() {
 			server := a.server
 			go func() {
-				path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, Title: "Export .tigervnc",
+				path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, Title: locales.ExportTigerTitle(),
 					DefaultPath: "MyVNC.tigervnc", Filters: filters})
 				if err != nil || path == "" {
 					return
@@ -995,6 +1045,7 @@ func main() {
 			}()
 		}
 		wireKeyboard(a, win)
+		wireTouch(a, win)
 		if _, err := win32.WatchClipboard(func() { a.post(a.sendClipboard) }); err != nil {
 			a.log.Warn("clipboard listener", "err", err)
 		}
@@ -1006,6 +1057,9 @@ func main() {
 		if start != "" {
 			a.server = start
 			a.connect()
+		}
+		if perf != nil {
+			a.startPerf(perf)
 		}
 	})
 	if err := mygo.App.Run(); err != nil {

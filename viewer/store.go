@@ -192,8 +192,9 @@ type Config struct {
 	PillPos             float64 // where the session handle sits, 0-1 across the window
 	Stats               bool    // show the statistics overlay
 	EmulateMiddleButton bool
-	AcceptClipboard     bool // take the server's clipboard
-	SendClipboard       bool // give the server the local clipboard
+	AcceptClipboard     bool   // take the server's clipboard
+	SendClipboard       bool   // give the server the local clipboard
+	Language            string // of the UI, as "zh-Hans"; "" follows the system
 }
 
 // Computer is what the home view knows of a server.
