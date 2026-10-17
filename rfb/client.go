@@ -26,8 +26,11 @@
 // the framebuffer is stable but Run may resume writing once UpdateDone
 // returns. Resize means the framebuffer was reallocated.
 //
-// The input methods (KeyEvent, PointerEvent, ClipboardText) are safe for
-// concurrent use.
+// The input methods (KeyEvent, KeyEventCode, PointerEvent,
+// ClipboardText, SetDesktopSize) are safe for concurrent use.
+//
+// Besides Handler, a handler may implement LEDHandler, AudioHandler and
+// ARDMediaHandler; the matching pseudo-encodings are then advertised.
 package rfb
 
 import (
@@ -35,10 +38,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"image"
 	"io"
+	"log/slog"
 	"net"
 	"slices"
 	"strconv"
@@ -62,22 +67,46 @@ type Options struct {
 	// PixelFormat requested from the server; zero means pixel.RGBA.
 	PixelFormat pixel.Format
 	// Encodings in preference order, including pseudo-encodings. nil
-	// builds a list from Decoders. For ARD servers the ARD encodings and
-	// pseudo-encodings are added automatically.
+	// builds a list from Decoders. Fence, ContinuousUpdates, XCursor
+	// (when Cursor is listed), LED state (LEDHandler) and QEMU audio
+	// (AudioHandler) are added automatically, and so are the ARD
+	// encodings and pseudo-encodings for ARD servers.
 	Encodings []int32
 	// Decoders by encoding number. Raw cursors (-314) are decoded
 	// internally; everything else in a FramebufferUpdate goes here.
 	Decoders map[int32]pixel.Decoder
-	// SecurityTypes allowed, in preference order. Values >= 256 are
-	// VeNCrypt subtypes. nil means a default that prefers encrypted types.
-	// Anonymous TLS (TLSNone/TLSVnc/TLSPlain) is not supported.
+	// SecurityTypes is the allow-list of security types. Values >= 256
+	// are VeNCrypt subtypes. As in TigerVNC, the type used is the first
+	// one in the server's list that is allowed, so the order here does
+	// not matter; leave out a type to refuse it. nil means
+	// defaultSecTypes. Anonymous TLS (TLSNone/TLSVnc/TLSPlain) is not
+	// supported: Go's crypto/tls has no anonymous DH cipher suites.
 	SecurityTypes []uint32
 	// TLSConfig for the X509* VeNCrypt subtypes; ServerName defaults to
 	// the dialled host.
 	TLSConfig *tls.Config
+	// VerifyCertificate is asked about a server certificate chain that
+	// fails system verification (self-signed, unknown CA, wrong host
+	// name); verifyErr says why. Returning nil accepts the chain, for
+	// example after the user confirmed it or its SHA-256 is remembered.
+	// nil rejects every chain that fails verification.
+	VerifyCertificate func(certs []*x509.Certificate, verifyErr error) error
 	// VerifyHostKey is asked about the server's RSA-AES key. nil accepts
 	// any key.
 	VerifyHostKey func(key []byte, fingerprint string) error
+	// Logger receives the negotiation at Info level (version, security
+	// types, desktop, encodings, extensions, disconnect reason) and
+	// per-message detail at Debug level. Passwords, keys and clipboard
+	// contents are never logged. nil discards.
+	Logger *slog.Logger
+	// OnSecurityType, when set, is told the security type as it is
+	// chosen, and again with the VeNCrypt subtype, before authentication
+	// starts and so before Password is called; on the Dial goroutine.
+	OnSecurityType func(secType uint32)
+	// MaxClipboard is the largest server clipboard text accepted, in
+	// bytes; larger ones are dropped. 0 means 256 KiB, TigerVNC's
+	// default MaxCutText.
+	MaxClipboard int
 }
 
 // Handler receives server events; see the package comment.
@@ -94,10 +123,29 @@ type Handler interface {
 
 // ARDMediaHandler may be implemented by a Handler to receive the ARD
 // media stream rectangles (encodings 1110 and 1010). payload starts with
-// the u16 length, as TigerVNC's parsers expect. When the Handler does not
-// implement it, 1110 is not advertised.
+// the u16 length, as TigerVNC's parsers expect. 1110 is advertised to
+// ARD servers either way; without this interface the payloads are
+// dropped.
 type ARDMediaHandler interface {
 	ARDMedia(encoding int32, payload []byte)
+}
+
+// LEDHandler may be implemented by a Handler to receive the server's
+// keyboard LED state (LEDScrollLock, LEDNumLock, LEDCapsLock bits).
+type LEDHandler interface {
+	LEDState(state uint32)
+}
+
+// AudioHandler may be implemented by a Handler to receive QEMU audio
+// (-259). AudioFormat is asked once, when the server offers audio;
+// format is one of the Audio* sample formats. AudioData gets interleaved
+// samples in the server's byte order (little-endian for QEMU) and may
+// keep the slice.
+type AudioHandler interface {
+	AudioFormat() (format, channels uint8, frequency uint32)
+	AudioBegin()
+	AudioData(samples []byte)
+	AudioEnd()
 }
 
 // AuthError is a failure reported by the server during authentication.
@@ -112,6 +160,9 @@ type Client struct {
 	h          Handler
 	serverName string
 	closed     atomic.Bool
+	log        *slog.Logger
+	secType    uint32 // the VeNCrypt subtype when VeNCrypt was used
+	secure     bool   // TLS or RSA-AES protects the stream
 
 	// Read side; touched only by the handshake and Run.
 	rd           reader
@@ -126,6 +177,11 @@ type Client struct {
 	cursorCache  map[uint32]*image.RGBA
 	haveCreds    bool
 	user, pass   string
+	updates      int  // FramebufferUpdates finished
+	serverCU     bool // server sent EndOfContinuousUpdates
+	fenceSeen    bool
+	serverAudio  bool
+	audioAsked   bool
 
 	mu         sync.Mutex // serialises writes and guards the fields below
 	out        io.Writer
@@ -133,6 +189,11 @@ type Client struct {
 	height     int
 	ardEnabled bool
 	extMouse   bool
+	qemuKeys   bool // server confirmed -258
+	cuEnabled  bool
+	setDesktop bool // server confirmed -308, so SetDesktopSize works
+	screenID   uint32
+	screenFlag uint32
 	clipFlags  uint32
 	clipSize   uint32 // server's UTF-8 auto-send limit
 	localClip  *string
@@ -158,6 +219,10 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 	c := &Client{
 		conn: conn, opt: opt, h: h, serverName: serverName,
 		out: conn, cursorCache: make(map[uint32]*image.RGBA),
+		log: opt.Logger,
+	}
+	if c.log == nil {
+		c.log = slog.New(slog.DiscardHandler)
 	}
 	c.rd.r = bufio.NewReader(conn)
 	c.pf = opt.PixelFormat
@@ -170,6 +235,7 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 		err = ctx.Err()
 	}
 	if err != nil {
+		c.log.Info("rfb: handshake failed", "err", err)
 		conn.Close()
 		return nil, err
 	}
@@ -185,6 +251,19 @@ func (c *Client) Close() error {
 // Framebuffer returns the framebuffer; see the package comment.
 func (c *Client) Framebuffer() *image.RGBA { return c.fb }
 
+// SecurityType is the negotiated security type: the VeNCrypt subtype
+// (>= 256) when VeNCrypt was used, else the RFB type.
+func (c *Client) SecurityType() uint32 { return c.secType }
+
+// Encrypted reports whether the connection is encrypted now: TLS,
+// RSA-AES (RA2, RA256), or ARD session encryption once it is active.
+// ARD DH alone only encrypts the credentials and key events.
+func (c *Client) Encrypted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.secure || c.ardEnabled
+}
+
 // Run reads server messages until the connection fails or is closed.
 // It first reports the desktop name and size.
 func (c *Client) Run() error {
@@ -194,8 +273,10 @@ func (c *Client) Run() error {
 	for {
 		if err := c.readMsg(); err != nil {
 			if c.closed.Load() {
+				c.log.Info("rfb: disconnected", "reason", "closed by client")
 				return nil
 			}
+			c.log.Info("rfb: disconnected", "reason", err)
 			return err
 		}
 	}
@@ -217,6 +298,7 @@ func (c *Client) handshake(ctx context.Context) error {
 	}
 	c.major, c.minor = major, minor
 	c.appleARD = major == 3 && minor == 889
+	c.log.Info("rfb: server version", "version", fmt.Sprintf("%d.%d", major, minor), "ard", c.appleARD)
 	switch {
 	case c.before(3, 3):
 		return fmt.Errorf("rfb: server gave unsupported RFB protocol version %d.%d", major, minor)
@@ -285,6 +367,7 @@ func (c *Client) readServerInit() error {
 	c.name = decodeText(name)
 	c.width, c.height = w, h
 	c.fb = newFramebuffer(w, h)
+	c.log.Info("rfb: desktop", "width", w, "height", h, "name", c.name)
 	return nil
 }
 
@@ -333,9 +416,11 @@ func (c *Client) finishInit() error {
 			msgs = append(msgs, ardSetEncryption(false))
 		}
 	}
+	encs := c.encodingList()
+	c.log.Info("rfb: encodings", "list", encs)
 	msgs = append(msgs,
 		setPixelFormat(&c.pf),
-		setEncodings(c.encodingList()),
+		setEncodings(encs),
 		framebufferUpdateRequest(false, c.width, c.height))
 	for _, m := range msgs {
 		if err := c.write(m); err != nil {
@@ -350,6 +435,20 @@ func (c *Client) encodingList() []int32 {
 	if list == nil {
 		list = defaultEncodings(c.opt.Decoders)
 	}
+	// Pseudo-encodings the client always handles, as TigerVNC sends them.
+	// Their position does not matter.
+	more := []int32{PseudoEncodingContinuousUpdates, PseudoEncodingFence}
+	if slices.Contains(list, PseudoEncodingCursor) {
+		more = append(more, PseudoEncodingXCursor)
+	}
+	if _, ok := c.h.(LEDHandler); ok {
+		more = append(more, PseudoEncodingLEDState, PseudoEncodingVMwareLEDState)
+	}
+	if _, ok := c.h.(AudioHandler); ok {
+		more = append(more, PseudoEncodingQEMUAudio)
+	}
+	more = slices.DeleteFunc(more, func(e int32) bool { return slices.Contains(list, e) })
+	list = append(slices.Clone(list), more...)
 	if !c.appleARD {
 		return list
 	}
@@ -362,19 +461,18 @@ func (c *Client) encodingList() []int32 {
 			extra = append(extra, e)
 		}
 	}
-	extra = append(extra, PseudoEncodingARDCursorPos, PseudoEncodingARDDisplayInfo, PseudoEncodingARDUserInfo)
-	if c.ardKey != nil {
-		extra = append(extra, PseudoEncodingARDSessionEncryption)
-	}
-	extra = append(extra, PseudoEncodingARDCursorAlpha, PseudoEncodingARDDisplayInfo2)
-	if _, ok := c.h.(ARDMediaHandler); ok {
-		extra = append(extra, PseudoEncodingARDMediaStream)
-	}
+	// 1103 and 1110 always, as the C++ does. 1103 without a DH key is
+	// logged and ignored (readARDSessionEncryption); 1110 payloads are
+	// length-prefixed and dropped when the handler is no ARDMediaHandler.
+	extra = append(extra, PseudoEncodingARDCursorPos, PseudoEncodingARDDisplayInfo,
+		PseudoEncodingARDUserInfo, PseudoEncodingARDSessionEncryption,
+		PseudoEncodingARDCursorAlpha, PseudoEncodingARDDisplayInfo2,
+		PseudoEncodingARDMediaStream)
 	extra = slices.DeleteFunc(extra, func(e int32) bool { return slices.Contains(list, e) })
 
 	// After the preferred real encoding, as TigerVNC does.
 	i := slices.IndexFunc(list, func(e int32) bool { return e >= 0 && e <= 255 })
-	return slices.Insert(slices.Clone(list), i+1, extra...)
+	return slices.Insert(list, i+1, extra...)
 }
 
 func defaultEncodings(decoders map[int32]pixel.Decoder) []int32 {
@@ -456,12 +554,11 @@ func (c *Client) negotiateSecurity(ctx context.Context) error {
 		if n == 0 {
 			return c.readReason()
 		}
-		for _, t := range allowed {
-			if t >= 256 {
-				t = SecTypeVeNCrypt
-			}
-			if slices.Contains(offered, byte(t)) {
-				secType = t
+		c.log.Info("rfb: security types offered", "types", offered)
+		// The server's order is the priority, as in TigerVNC.
+		for _, t := range offered {
+			if allowsType(allowed, uint32(t)) {
+				secType = uint32(t)
 				break
 			}
 		}
@@ -471,6 +568,11 @@ func (c *Client) negotiateSecurity(ctx context.Context) error {
 		if err := c.write([]byte{byte(secType)}); err != nil {
 			return err
 		}
+	}
+	c.secType = secType
+	c.log.Info("rfb: security type chosen", "type", secType, "name", secTypeName(secType))
+	if c.opt.OnSecurityType != nil {
+		c.opt.OnSecurityType(secType)
 	}
 
 	if err := c.runSecurity(ctx, secType, allowed); err != nil {
@@ -494,6 +596,30 @@ func (c *Client) negotiateSecurity(ctx context.Context) error {
 		return c.readReason()
 	}
 	return errors.New("rfb: unknown security result from server")
+}
+
+// allowsType reports whether the allow-list permits RFB type t; VeNCrypt
+// is allowed when any subtype is.
+func allowsType(allowed []uint32, t uint32) bool {
+	if t == SecTypeVeNCrypt {
+		return slices.ContainsFunc(allowed, func(a uint32) bool { return a >= 256 || a == SecTypeVeNCrypt })
+	}
+	return t < 256 && slices.Contains(allowed, t)
+}
+
+func secTypeName(t uint32) string {
+	if n, ok := secTypeNames[t]; ok {
+		return n
+	}
+	return "Unknown"
+}
+
+var secTypeNames = map[uint32]string{
+	SecTypeNone: "None", SecTypeVncAuth: "VncAuth", SecTypeRA2: "RA2", SecTypeRA2ne: "RA2ne",
+	SecTypeTLS: "TLS", SecTypeVeNCrypt: "VeNCrypt", SecTypeDH: "DH (ARD)", SecTypeMSLogonII: "MSLogonII",
+	SecTypeRA256: "RA256", SecTypeRAne256: "RAne256", SecTypePlain: "Plain",
+	SecTypeTLSNone: "TLSNone", SecTypeTLSVnc: "TLSVnc", SecTypeTLSPlain: "TLSPlain",
+	SecTypeX509None: "X509None", SecTypeX509Vnc: "X509Vnc", SecTypeX509Plain: "X509Plain",
 }
 
 func (c *Client) readReason() error {
@@ -528,6 +654,7 @@ func (c *Client) runSecurity(ctx context.Context, t uint32, allowed []uint32) er
 		if t == SecTypeRA2 || t == SecTypeRA256 {
 			c.rd.r = bufio.NewReader(r)
 			c.out = w
+			c.secure = true
 		}
 		return nil
 	case SecTypeDH:
@@ -582,9 +709,11 @@ func (c *Client) veNCrypt(ctx context.Context, allowed []uint32) error {
 		return c.rd.err
 	}
 
+	c.log.Info("rfb: VeNCrypt subtypes offered", "types", offered)
+	// Server order again; anonymous TLS is passed over as unsupported.
 	chosen, anon := SecTypeInvalid, false
-	for _, t := range allowed {
-		if t == SecTypeVeNCrypt || !slices.Contains(offered, t) {
+	for _, t := range offered {
+		if t == SecTypeVeNCrypt || !slices.Contains(allowed, t) {
 			continue
 		}
 		if isAnonTLS(t) {
@@ -602,6 +731,11 @@ func (c *Client) veNCrypt(ctx context.Context, allowed []uint32) error {
 	}
 	if err := c.write(be32(chosen)); err != nil {
 		return err
+	}
+	c.secType = chosen
+	c.log.Info("rfb: VeNCrypt subtype chosen", "type", chosen, "name", secTypeName(chosen))
+	if c.opt.OnSecurityType != nil {
+		c.opt.OnSecurityType(chosen)
 	}
 	return c.runSecurity(ctx, chosen, allowed)
 }
@@ -628,13 +762,51 @@ func (c *Client) startTLS(ctx context.Context) error {
 	if cfg.ServerName == "" {
 		cfg.ServerName = c.serverName
 	}
+	if c.opt.VerifyCertificate != nil && !cfg.InsecureSkipVerify {
+		verifyChain(cfg, c.opt.VerifyCertificate)
+	}
 	tc := tls.Client(&bufConn{c.conn, c.rd.r}, cfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return fmt.Errorf("rfb: TLS handshake: %w", err)
 	}
+	st := tc.ConnectionState()
+	c.log.Info("rfb: TLS established", "version", tls.VersionName(st.Version),
+		"cipher", tls.CipherSuiteName(st.CipherSuite))
 	c.rd.r = bufio.NewReader(tc)
 	c.out = tc
+	c.secure = true
 	return nil
+}
+
+// verifyChain replaces crypto/tls's verification with the same check
+// done by hand, so that a failure goes to hook instead of ending the
+// handshake. hook sees every failure; nothing is skipped silently.
+func verifyChain(cfg *tls.Config, hook func([]*x509.Certificate, error) error) {
+	next := cfg.VerifyConnection
+	cfg.InsecureSkipVerify = true
+	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		certs := cs.PeerCertificates
+		if len(certs) == 0 {
+			return errors.New("rfb: server sent no certificate")
+		}
+		opts := x509.VerifyOptions{
+			Roots:         cfg.RootCAs,
+			DNSName:       cfg.ServerName,
+			Intermediates: x509.NewCertPool(),
+		}
+		for _, ic := range certs[1:] {
+			opts.Intermediates.AddCert(ic)
+		}
+		if _, err := certs[0].Verify(opts); err != nil {
+			if err := hook(certs, err); err != nil {
+				return err
+			}
+		}
+		if next != nil {
+			return next(cs)
+		}
+		return nil
+	}
 }
 
 // Helpers

@@ -97,6 +97,7 @@ type event struct {
 	rect image.Rectangle
 	text string
 	img  *image.RGBA
+	n    uint32
 }
 
 type testHandler struct{ ev chan event }
@@ -273,7 +274,7 @@ func TestARDSession(t *testing.T) {
 		s = fs
 		s.send("RFB 003.889\n")
 		s.expect([]byte("RFB 003.889\n"))
-		s.send([]byte{2, byte(SecTypeVncAuth), byte(SecTypeDH)})
+		s.send([]byte{2, byte(SecTypeDH), byte(SecTypeVncAuth)}) // macOS order: DH first
 		s.expect([]byte{byte(SecTypeDH)})
 
 		p, _ := new(big.Int).SetString(oakley2, 16)
@@ -310,7 +311,7 @@ func TestARDSession(t *testing.T) {
 		s.expect(ardAutoPasteboard(true))
 		s.expect(ardSetEncryption(false))
 		encs := s.recvInit()
-		for _, e := range []int32{PseudoEncodingARDSessionEncryption, PseudoEncodingARDCursorAlpha} {
+		for _, e := range []int32{PseudoEncodingARDSessionEncryption, PseudoEncodingARDCursorAlpha, PseudoEncodingARDMediaStream} {
 			found := false
 			for _, x := range encs {
 				found = found || x == e

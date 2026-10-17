@@ -23,6 +23,9 @@ type conv struct {
 	mode convMode
 	size int // bytes per wire pixel
 	fast bool
+	// alphaShift is the bit shift of the byte outside R/G/B for Depth-32
+	// formats (CursorWithAlpha), else -1: pixels are opaque.
+	alphaShift int
 }
 
 func newConv(pf *pixel.Format) (*conv, error) {
@@ -35,18 +38,21 @@ func newConv(pf *pixel.Format) (*conv, error) {
 	if pf.RedMax == 0 || pf.GreenMax == 0 || pf.BlueMax == 0 {
 		return nil, errors.New("decode: bad colour maximum")
 	}
-	return &conv{pf: pf, size: int(pf.BPP) / 8, fast: *pf == pixel.RGBA}, nil
-}
-
-func is888(pf *pixel.Format) bool {
-	return pf.TrueColor && pf.BPP == 32 && pf.Depth == 24 &&
-		pf.RedMax == 255 && pf.GreenMax == 255 && pf.BlueMax == 255
+	c := &conv{pf: pf, size: int(pf.BPP) / 8, fast: *pf == pixel.RGBA, alphaShift: -1}
+	if pf.BPP == 32 && pf.Depth == 32 {
+		for _, s := range [4]uint8{0, 8, 16, 24} {
+			if s != pf.RedShift && s != pf.GreenShift && s != pf.BlueShift {
+				c.alphaShift = int(s)
+			}
+		}
+	}
+	return c, nil
 }
 
 // newTightConv returns the converter for Tight pixels (TPIXEL).
 func newTightConv(pf *pixel.Format) (*conv, error) {
 	c, err := newConv(pf)
-	if err == nil && is888(pf) {
+	if err == nil && pf.Is888() { // TigerVNC: TPIXEL only when is888(), byte-aligned shifts
 		c.mode, c.size = modeRGB, 3
 	}
 	return c, err
@@ -70,10 +76,6 @@ func newZRLEConv(pf *pixel.Format) (*conv, error) {
 	return c, nil
 }
 
-func up(v uint32, shift uint8, max uint16) byte {
-	return byte((v >> shift & uint32(max)) * 255 / uint32(max))
-}
-
 // put converts one wire pixel src into 4 RGBA bytes in dst.
 func (c *conv) put(dst, src []byte) {
 	dst[3] = 0xff
@@ -91,26 +93,11 @@ func (c *conv) put(dst, src []byte) {
 		return
 	}
 	pf := c.pf
-	var v uint32
-	switch pf.BPP {
-	case 8:
-		v = uint32(src[0])
-	case 16:
-		if pf.BigEndian {
-			v = uint32(src[0])<<8 | uint32(src[1])
-		} else {
-			v = uint32(src[1])<<8 | uint32(src[0])
-		}
-	default:
-		if pf.BigEndian {
-			v = uint32(src[0])<<24 | uint32(src[1])<<16 | uint32(src[2])<<8 | uint32(src[3])
-		} else {
-			v = uint32(src[3])<<24 | uint32(src[2])<<16 | uint32(src[1])<<8 | uint32(src[0])
-		}
+	v := pf.PixelFromBuffer(src)
+	dst[0], dst[1], dst[2] = pf.RGBFromPixel(v)
+	if c.alphaShift >= 0 {
+		dst[3] = byte(v >> c.alphaShift)
 	}
-	dst[0] = up(v, pf.RedShift, pf.RedMax)
-	dst[1] = up(v, pf.GreenShift, pf.GreenMax)
-	dst[2] = up(v, pf.BlueShift, pf.BlueMax)
 }
 
 // read reads one pixel from r.
