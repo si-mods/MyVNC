@@ -76,11 +76,17 @@ func (c *Client) readFramebufferUpdate() error {
 	// server sends them unasked (continuous updates).
 	c.mu.Lock()
 	var err error
-	if c.appleARD && c.width > 0 && c.height > 0 {
-		err = c.writeLocked(ardAutoFBUpdate(true, c.width, c.height))
+	w, h, ask := c.width, c.height, !c.cuEnabled
+	if c.hpHolding() {
+		// The picture is the media stream's; RFB only brings cursors and
+		// layouts, which the armed one pixel still does.
+		w, h, ask = 1, 1, ask && !c.hp.live
 	}
-	if err == nil && !c.cuEnabled {
-		err = c.writeLocked(framebufferUpdateRequest(true, c.width, c.height))
+	if c.appleARD && w > 0 && h > 0 {
+		err = c.writeLocked(ardAutoFBUpdate(true, w, h))
+	}
+	if err == nil && ask {
+		err = c.writeLocked(framebufferUpdateRequest(true, w, h))
 	}
 	c.mu.Unlock()
 	if err != nil {
@@ -126,7 +132,7 @@ func (c *Client) updateEnd() error {
 		}
 	}
 	c.h.UpdateDone()
-	return nil
+	return c.hpStep()
 }
 
 func (c *Client) updateEndLocked() error {
@@ -287,6 +293,7 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		case PseudoEncodingARDCursorPos:
 			return false, nil
 		case PseudoEncodingARDDisplayInfo:
+			c.ardLayout = true
 			w, h := c.rd.u16(), c.rd.u16()
 			count := c.rd.u16()
 			c.rd.skip(4 + int64(count)*28)
@@ -306,6 +313,7 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		case PseudoEncodingARDCursorAlpha:
 			return false, c.readARDCursorAlpha(r)
 		case PseudoEncodingARDDisplayInfo2:
+			c.ardLayout = true
 			c.rd.skip(int64(c.rd.u16()))
 			return false, c.rd.err
 		case PseudoEncodingARDSessionEncryption:
@@ -318,6 +326,9 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 			}
 			if mh, ok := c.h.(ARDMediaHandler); ok {
 				mh.ARDMedia(enc, payload)
+			}
+			if enc == EncodingARDProMode {
+				return false, c.hpReply(payload)
 			}
 			return false, nil
 		}

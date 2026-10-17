@@ -107,6 +107,10 @@ type Options struct {
 	// bytes; larger ones are dropped. 0 means 256 KiB, TigerVNC's
 	// default MaxCutText.
 	MaxClipboard int
+	// HighPerformance, when set, negotiates ARD High Performance with an
+	// ARD server: the picture comes as HEVC/H.264 over SRTP; see
+	// HighPerformance. nil is Standard mode.
+	HighPerformance *HighPerformance
 }
 
 // Handler receives server events; see the package comment.
@@ -171,6 +175,9 @@ type Client struct {
 	ardFlags     uint32
 	ardKey       *[16]byte
 	ardPending   *[2][16]byte
+	ardCommands  [16]byte // client messages the server accepts, MSB first
+	ardLayout    bool     // a display layout (1101/1105) has arrived
+	hp           *hpState
 	name         string
 	pf           pixel.Format
 	fb           *image.RGBA
@@ -245,7 +252,11 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 // Close closes the connection; Run then returns nil.
 func (c *Client) Close() error {
 	c.closed.Store(true)
-	return c.conn.Close()
+	// Close the connection first: a writer blocked on a stalled network
+	// holds c.mu, which hpStop needs.
+	err := c.conn.Close()
+	c.hpStop()
+	return err
 }
 
 // Framebuffer returns the framebuffer; see the package comment.
@@ -357,6 +368,7 @@ func (c *Client) readServerInit() error {
 	}
 	if c.appleARD && len(name) >= 22 && name[0] == 0 {
 		c.ardFlags = uint32(name[2])<<24 | uint32(name[3])<<16 | uint32(name[4])<<8 | uint32(name[5])
+		copy(c.ardCommands[:], name[6:22])
 		for i := len(name); i > 0; i-- {
 			if name[i-1] == 0 {
 				name = name[i:]
@@ -416,7 +428,12 @@ func (c *Client) finishInit() error {
 			msgs = append(msgs, ardSetEncryption(false))
 		}
 	}
+	msgs = append(msgs, c.hpInit()...)
 	encs := c.encodingList()
+	if c.hp != nil {
+		// 1010 is named once the layout has arrived, first; see hp.go.
+		encs = slices.DeleteFunc(encs, func(e int32) bool { return e == EncodingARDProMode })
+	}
 	c.log.Info("rfb: encodings", "list", encs)
 	msgs = append(msgs,
 		setPixelFormat(&c.pf),
