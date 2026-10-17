@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -86,4 +87,16 @@ func WatchClipboard(cb func()) (stop func(), err error) {
 		procDestroyWindow.Call(hwnd)
 		clipCB = nil
 	}), nil
+}
+
+// ProcessCPU is the CPU time the process used so far, user and kernel.
+func ProcessCPU() time.Duration {
+	var c, e, k, u syscall.Filetime
+	if err := syscall.GetProcessTimes(syscall.Handle(^uintptr(0)), &c, &e, &k, &u); err != nil {
+		return 0
+	}
+	d := func(f syscall.Filetime) time.Duration {
+		return time.Duration(int64(f.HighDateTime)<<32|int64(f.LowDateTime)) * 100
+	}
+	return d(k) + d(u)
 }
