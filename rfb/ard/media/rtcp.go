@@ -1,0 +1,146 @@
+// The RTCP this side sends: receiver reports, picture acknowledgements,
+// keyframe and refresh requests, and the RCTL rate report.
+//
+// Portions derived from remotex, Copyright 2026 Andrew Chen, Alessandro
+// Barbosa, MIT License (src/vnc_apple_media.rs).
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+package media
+
+import (
+	"encoding/binary"
+	"time"
+)
+
+// ReceiverReport is an RTCP RR with no report blocks, from ssrc. The Mac
+// stops a stream that hears nothing from its viewer for a few seconds.
+func ReceiverReport(ssrc uint32) []byte {
+	return binary.BigEndian.AppendUint32([]byte{0x80, 201, 0, 1}, ssrc)
+}
+
+// PictureAck is AVConference's acknowledgement of a whole picture: APP
+// packet subtype 0, name the number 5, data the picture's RTP timestamp.
+// The Mac keeps the newest acknowledged picture as a long-term reference.
+func PictureAck(ssrc, timestamp uint32) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{0x80, 204, 0, 3}, ssrc)
+	b = binary.BigEndian.AppendUint32(b, 5)
+	return binary.BigEndian.AppendUint32(b, timestamp)
+}
+
+// Refresh asks for a picture predicted from the last acknowledged one:
+// payload-specific feedback format 2 carrying the stream's size.
+func Refresh(ssrc, mediaSSRC uint32, w, h uint16) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{0x82, 206, 0, 3}, ssrc)
+	b = binary.BigEndian.AppendUint32(b, mediaSSRC)
+	b = binary.BigEndian.AppendUint16(b, w)
+	return binary.BigEndian.AppendUint16(b, h)
+}
+
+// PLI is a Picture Loss Indication (RFC 4585 §6.3.1); the Mac answers it
+// with an IDR, unless its last keyframe is under a second old.
+func PLI(ssrc, mediaSSRC uint32) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{0x81, 206, 0, 2}, ssrc)
+	return binary.BigEndian.AppendUint32(b, mediaSSRC)
+}
+
+const (
+	videoClock = 24000.0 // the picture leg's RTP clock, Hz
+	// reportedBandwidth is the RCTL bandwidth estimate, kbit/s: the Mac's
+	// 60 Mbit/s ceiling. Its controller moves on the one-way delay alone.
+	reportedBandwidth = 60000
+)
+
+// RateFeedback builds the RCTL report Apple's viewer sends every 50 ms on
+// the picture's leg, from the picture packets that arrived.
+type RateFeedback struct {
+	epoch    time.Time
+	ssrc     uint32
+	have     bool
+	lastTS   uint32
+	lastAt   time.Time
+	received uint32
+	delay    oneWayDelay
+}
+
+// NewRateFeedback starts the report's 1/1024 s clock at epoch.
+func NewRateFeedback(epoch time.Time) *RateFeedback { return &RateFeedback{epoch: epoch} }
+
+// Received notes an authentic picture packet; a new SSRC starts over.
+func (f *RateFeedback) Received(ssrc, timestamp uint32, at time.Time) {
+	if ssrc != f.ssrc {
+		*f = RateFeedback{epoch: f.epoch, ssrc: ssrc}
+	}
+	f.have, f.lastTS, f.lastAt = true, timestamp, at
+	f.received++
+	f.delay.sample(timestamp, at)
+}
+
+// Delay is the one-way delay the next report carries, in seconds.
+func (f *RateFeedback) Delay() float64 { return f.delay.owrd }
+
+// Report is the RCTL APP packet from ssrc at now, or nil before any
+// picture packet arrived. The Mac takes it only alone in its datagram.
+//
+//	+0  80 cc 00 07, ssrc, "RCTL"
+//	+12 85 00 00 04
+//	+16 u16 last picture packet's RTP timestamp >> 8 (the echo)
+//	+18 u32 zero
+//	+22 u16 ms since that packet arrived
+//	+24 u16 the viewer's clock, 1/1024 s
+//	+26 u16 one-way delay * 8192
+//	+28 u16 loss (top 4 bits, 0) | packets received mod 4096
+//	+30 u16 bandwidth estimate, kbit/s
+func (f *RateFeedback) Report(ssrc uint32, now time.Time) []byte {
+	if !f.have {
+		return nil
+	}
+	b := make([]byte, 32)
+	copy(b, []byte{0x80, 204, 0, 7})
+	binary.BigEndian.PutUint32(b[4:], ssrc)
+	copy(b[8:], "RCTL")
+	copy(b[12:], []byte{0x85, 0, 0, 4})
+	binary.BigEndian.PutUint16(b[16:], uint16(f.lastTS>>8))
+	binary.BigEndian.PutUint16(b[22:], uint16(min(now.Sub(f.lastAt).Milliseconds(), 0xffff)))
+	binary.BigEndian.PutUint16(b[24:], uint16(int64(now.Sub(f.epoch).Seconds()*1024)))
+	binary.BigEndian.PutUint16(b[26:], uint16(min(f.delay.owrd*8192, 0xffff)))
+	binary.BigEndian.PutUint16(b[28:], uint16(f.received&0xfff))
+	binary.BigEndian.PutUint16(b[30:], reportedBandwidth)
+	return b
+}
+
+// oneWayDelay is Apple's receiver's relative delay estimate: per picture,
+// lag = arrival - RTP time, both from the first picture; a short average
+// (0.9) less a long one (0.9999), floored at 0.
+type oneWayDelay struct {
+	started           bool
+	since             time.Time
+	previous          uint32
+	ticks             uint64
+	short, long, owrd float64
+}
+
+const spuriousLag = 30.0 // seconds from either average: start again
+
+func (d *oneWayDelay) sample(ts uint32, at time.Time) {
+	if !d.started {
+		*d = oneWayDelay{started: true, since: at, previous: ts}
+		return
+	}
+	step := int32(ts - d.previous)
+	if step <= 0 {
+		return // a later packet of the same picture, or out of order
+	}
+	d.previous = ts
+	d.ticks += uint64(step)
+	lag := at.Sub(d.since).Seconds() - float64(d.ticks)/videoClock
+	if lag-d.short > spuriousLag || d.long-lag > spuriousLag {
+		*d = oneWayDelay{started: true, since: at, previous: ts}
+		return
+	}
+	d.long = 0.9999*d.long + 0.0001*lag
+	d.short = 0.9*d.short + 0.1*lag
+	d.owrd = d.short - d.long
+	if d.owrd < 0 {
+		d.long, d.owrd = d.short, 0
+	}
+}
