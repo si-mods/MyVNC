@@ -16,6 +16,7 @@ type fakeDecoder struct {
 	block  chan struct{} // Decode waits on it when set
 	fail   bool
 	closed *int
+	hidden *int
 	mu     *sync.Mutex
 }
 
@@ -28,15 +29,23 @@ func (d *fakeDecoder) Decode(b []byte, t int64) ([]mf.Frame, error) {
 	}
 	return []mf.Frame{{RGBA: image.NewRGBA(image.Rect(0, 0, 16, 8))}}, nil
 }
+func (d *fakeDecoder) DecodeHidden(b []byte, t int64) (int, error) {
+	f, err := d.Decode(b, t)
+	d.mu.Lock()
+	*d.hidden++
+	d.mu.Unlock()
+	return len(f), err
+}
 func (d *fakeDecoder) Info() mf.Info { return mf.Info{Output: "AYUV"} }
 func (d *fakeDecoder) Close()        { d.mu.Lock(); *d.closed++; d.mu.Unlock() }
 
 // The pipeline: a full queue drops the unit and asks for a keyframe, as
-// does a decoding error; a new codec gets a new decoder; no decoder for it
-// gives High Performance up; pictures go on with how they came.
+// does a decoding error; a picture with newer ones queued is not shown; a
+// new codec gets a new decoder; no decoder for it gives High Performance
+// up; pictures go on with how they came.
 func TestVideoPipe(t *testing.T) {
 	var mu sync.Mutex
-	closed, opened := 0, []media.Codec{}
+	closed, hidden, opened := 0, 0, []media.Codec{}
 	block := make(chan struct{})
 	var failing bool
 	old := newVideoDecoder
@@ -48,7 +57,7 @@ func TestVideoPipe(t *testing.T) {
 			return nil, mf.ErrNoDecoder
 		}
 		opened = append(opened, c)
-		d := &fakeDecoder{codec: c, closed: &closed, mu: &mu, fail: failing}
+		d := &fakeDecoder{codec: c, closed: &closed, hidden: &hidden, mu: &mu, fail: failing}
 		if len(opened) == 1 {
 			d.block = block
 		}
@@ -64,13 +73,13 @@ func TestVideoPipe(t *testing.T) {
 	defer p.close()
 
 	unit := func(c media.Codec) *media.Unit { return &media.Unit{Codec: c, NALs: [][]byte{{0x26, 1}}} }
-	// The first Decode blocks: one unit in the decoder, eight queued, the
-	// tenth dropped with a keyframe request, without blocking.
+	// The first Decode blocks: one unit in the decoder, a queue full, the
+	// next dropped with a keyframe request, without blocking.
 	p.push(unit(media.HEVC))
 	for len(p.units) > 0 { // until the decoder took the first
 		time.Sleep(time.Millisecond)
 	}
-	for range 8 {
+	for range videoQueue {
 		p.push(unit(media.HEVC))
 	}
 	if len(keys) != 0 {
@@ -82,11 +91,17 @@ func TestVideoPipe(t *testing.T) {
 	}
 	<-keys
 	close(block)
-	for range 9 {
+	// The blocked picture and the newest are shown; those between are not.
+	for range 2 {
 		if m := <-shown; m != "HEVC 4:4:4 16×8" {
 			t.Errorf("mode %q", m)
 		}
 	}
+	mu.Lock()
+	if hidden != videoQueue-1 {
+		t.Errorf("%d pictures decoded unseen, want %d", hidden, videoQueue-1)
+	}
+	mu.Unlock()
 
 	// A new codec: the old decoder closes, a new one opens, and fails.
 	mu.Lock()

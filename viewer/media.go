@@ -15,6 +15,7 @@ import (
 // videoDecoder is what the pipeline needs of an mf.Decoder.
 type videoDecoder interface {
 	Decode(annexB []byte, t int64) ([]mf.Frame, error)
+	DecodeHidden(annexB []byte, t int64) (int, error)
 	Info() mf.Info
 	Close()
 }
@@ -42,10 +43,16 @@ type NoDecoderError struct {
 func (e *NoDecoderError) Error() string { return fmt.Sprintf("no %v decoder: %v", e.Codec, e.Err) }
 func (e *NoDecoderError) Unwrap() error { return e.Err }
 
+// videoQueue is how many access units may wait for the decoder, about
+// half a second at 60 Hz: a 1920x1080 4:4:4 keyframe takes the software
+// HEVC decoder some 60 ms, and the pictures behind it wait.
+const videoQueue = 32
+
 // videoPipe decodes access units on a goroutine of its own: the media
 // receiver must not block, so a full queue drops the unit and asks for a
 // keyframe, as every later picture predicts from it; so does a decoding
-// error.
+// error. A picture with newer ones queued behind it is decoded but not
+// converted or shown, which lets a decoder that is a little slow catch up.
 type videoPipe struct {
 	units    chan *media.Unit
 	done     chan struct{}
@@ -55,7 +62,7 @@ type videoPipe struct {
 }
 
 func newVideoPipe(keyframe func(), show func(*image.RGBA, string), noCodec func(error)) *videoPipe {
-	p := &videoPipe{units: make(chan *media.Unit, 8), done: make(chan struct{}),
+	p := &videoPipe{units: make(chan *media.Unit, videoQueue), done: make(chan struct{}),
 		keyframe: keyframe, show: show, noCodec: noCodec}
 	go p.run()
 	return p
@@ -106,7 +113,13 @@ func (p *videoPipe) run() {
 			}
 			dec, codec = d, u.Codec
 		}
-		frames, err := dec.Decode(u.AnnexB(), t)
+		var frames []mf.Frame
+		var err error
+		if len(p.units) > 0 {
+			_, err = dec.DecodeHidden(u.AnnexB(), t)
+		} else {
+			frames, err = dec.Decode(u.AnnexB(), t)
+		}
 		t += 166666 // 100 ns units at 60 Hz
 		if err != nil {
 			p.keyframe()
