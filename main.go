@@ -23,6 +23,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/internal/win32"
 	"github.com/kyya/myvnc/locales"
 	"github.com/kyya/myvnc/rfb"
@@ -288,9 +289,20 @@ func mediaText(err error) string {
 // mediaMode is the session's mode, for the panel and the HUD.
 func (a *app) mediaMode() string {
 	if a.sess.Media != "" {
-		return locales.ModeHighPerformance(a.sess.Media)
+		return locales.ModeHighPerformance(a.sess.Media + " · " + decoderName(a.sess.MediaDecoder))
 	}
 	return locales.ModeStandard()
+}
+
+// decoderName says where a video decoder decodes.
+func decoderName(i mf.Info) string {
+	switch {
+	case i.GPU != "":
+		return locales.DecoderHardware(i.GPU)
+	case i.Fallback != "":
+		return locales.DecoderFallback()
+	}
+	return locales.DecoderSoftware()
 }
 
 // retryMedia asks for High Performance again.
@@ -685,7 +697,7 @@ func (a *app) connectTo(server string, again bool) {
 		if cfg.HighPerformance {
 			opt.HighPerformance = &rfb.HighPerformance{} // only an ARD server takes it
 		}
-		s, err := viewer.Connect(ctx, addr, opt, a.post)
+		s, err := viewer.Connect(ctx, addr, opt, cfg.DecoderMode(), a.post)
 		if cfg.Remember {
 			var ae *rfb.AuthError
 			switch {
@@ -973,6 +985,7 @@ func tigerParams(cfg *viewer.Config) *params.Viewer {
 	p.EmulateMiddleButton.Set(cfg.EmulateMiddleButton)
 	p.AcceptClipboard.Set(cfg.AcceptClipboard)
 	p.SendClipboard.Set(cfg.SendClipboard)
+	p.VideoDecoding.SetString(cfg.VideoDecoding)
 	return p
 }
 
@@ -995,6 +1008,7 @@ func (a *app) applyParams(p *params.Viewer) {
 	c.EmulateMiddleButton = p.EmulateMiddleButton.Value()
 	c.AcceptClipboard = p.AcceptClipboard.Value()
 	c.SendClipboard = p.SendClipboard.Value()
+	c.VideoDecoding = p.VideoDecoding.Value()
 	if !p.SecurityTypes.IsDefault() {
 		a.secTypes = p.SecTypes()
 	}
@@ -1071,6 +1085,7 @@ func main() {
 	} else {
 		defer f.Close()
 		a.log = lg
+		mf.SetLogger(lg)
 	}
 	a.log.Info("starting", "app", appName, "version", mygo.App.Version(), "go", runtime.Version())
 	start, argErr := a.parseArgs(args)

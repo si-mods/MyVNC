@@ -21,12 +21,12 @@ type videoDecoder interface {
 }
 
 // newVideoDecoder opens a decoder for a codec; tests replace it.
-var newVideoDecoder = func(c media.Codec) (videoDecoder, error) {
+var newVideoDecoder = func(c media.Codec, m mf.Mode) (videoDecoder, error) {
 	mc := mf.HEVC
 	if c == media.H264 {
 		mc = mf.H264
 	}
-	d, err := mf.NewDecoder(mc)
+	d, err := mf.NewDecoder(mc, m)
 	if err != nil {
 		return nil, err
 	}
@@ -61,13 +61,15 @@ const unseenBehind = 2
 type videoPipe struct {
 	units    chan *media.Unit
 	done     chan struct{}
-	keyframe func()                             // asks the Mac for a keyframe
-	show     func(img *image.RGBA, mode string) // a decoded picture, and how it came
-	noCodec  func(error)                        // nothing decodes the codec: give up
+	mode     mf.Mode
+	keyframe func() // asks the Mac for a keyframe
+	// show has a decoded picture, how it came and the decoder
+	show    func(img *image.RGBA, how string, dec mf.Info)
+	noCodec func(error) // nothing decodes the codec: give up
 }
 
-func newVideoPipe(keyframe func(), show func(*image.RGBA, string), noCodec func(error)) *videoPipe {
-	p := &videoPipe{units: make(chan *media.Unit, videoQueue), done: make(chan struct{}),
+func newVideoPipe(m mf.Mode, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error)) *videoPipe {
+	p := &videoPipe{units: make(chan *media.Unit, videoQueue), done: make(chan struct{}), mode: m,
 		keyframe: keyframe, show: show, noCodec: noCodec}
 	go p.run()
 	return p
@@ -106,7 +108,7 @@ func (p *videoPipe) run() {
 				dec.Close()
 				dec = nil
 			}
-			d, err := newVideoDecoder(u.Codec)
+			d, err := newVideoDecoder(u.Codec, p.mode)
 			if err != nil {
 				if errors.Is(err, mf.ErrNoDecoder) {
 					// Again after a retry, which then falls back again.
@@ -131,7 +133,8 @@ func (p *videoPipe) run() {
 		}
 		if len(frames) > 0 {
 			f := frames[len(frames)-1]
-			p.show(f.RGBA, mediaMode(codec, dec.Info().Output, f.Rect))
+			info := dec.Info()
+			p.show(f.RGBA, mediaMode(codec, info.Output, f.Rect), info)
 		}
 	}
 }

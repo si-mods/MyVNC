@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
 	"github.com/kyya/myvnc/viewer/emulatemb"
@@ -436,14 +437,17 @@ func TestStatsOverlay(t *testing.T) {
 func TestParseArgs(t *testing.T) {
 	a := newTestApp(t)
 	file := filepath.Join(t.TempDir(), "mac.tigervnc")
-	os.WriteFile(file, []byte("TigerVNC Configuration file Version 1.0\nServerName=desktop:1\nViewOnly=1\n"), 0o600)
+	os.WriteFile(file, []byte("TigerVNC Configuration file Version 1.0\nServerName=desktop:1\nViewOnly=1\nVideoDecoding=software\n"), 0o600)
 	if s, err := a.parseArgs([]string{"-verbose", "-Shared", file}); err != nil || s != "desktop:1" ||
-		!a.cfg.ViewOnly || !a.cfg.Shared {
+		!a.cfg.ViewOnly || !a.cfg.Shared || a.cfg.DecoderMode() != mf.Software {
 		t.Errorf("file: %q %v, config %+v", s, err, a.cfg)
 	}
 	if s, err := a.parseArgs([]string{"-SecurityTypes", "VncAuth", "-ShortcutModifiers", "Ctrl,Shift", "host:2"}); err != nil ||
 		s != "host:2" || !slices.Equal(a.secTypes, []uint32{rfb.SecTypeVncAuth}) || a.mods != keymap.ModControl|keymap.ModShift {
 		t.Errorf("args: %q %v, %v %v", s, err, a.secTypes, a.mods)
+	}
+	if _, err := a.parseArgs([]string{"-VideoDecoding=Hardware"}); err != nil || a.cfg.VideoDecoding != "Hardware" {
+		t.Errorf("-VideoDecoding: %v, %q", err, a.cfg.VideoDecoding)
 	}
 	if _, err := a.parseArgs([]string{"a", "b"}); err == nil || !strings.Contains(err.Error(), "Extra argument") {
 		t.Errorf("two servers: %v", err)

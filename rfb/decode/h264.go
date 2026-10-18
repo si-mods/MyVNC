@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb/pixel"
@@ -24,7 +25,7 @@ const (
 // H264Available reports whether Media Foundation decodes H.264 here
 // (Windows only); New lists H264 only then.
 var H264Available = sync.OnceValue(func() bool {
-	d, err := mf.NewDecoder(mf.H264)
+	d, err := mf.NewDecoder(mf.H264, mf.Software)
 	if err != nil {
 		return false
 	}
@@ -37,8 +38,19 @@ var H264Available = sync.OnceValue(func() bool {
 // is a stream of its own, with its own decoder, up to 64; flag 1 resets
 // the rectangle's stream, flag 2 all of them. Close releases them.
 type H264 struct {
+	Mode     mf.Mode        // where to decode
 	contexts []*h264Context // oldest first
 	t        int64
+	info     atomic.Pointer[mf.Info]
+}
+
+// Info describes the decoder of the last rectangle decoded; zero before.
+// Any goroutine.
+func (h *H264) Info() mf.Info {
+	if i := h.info.Load(); i != nil {
+		return *i
+	}
+	return mf.Info{}
 }
 
 type h264Context struct {
@@ -94,7 +106,7 @@ func (h *H264) Decode(r io.Reader, rect image.Rectangle, _ *pixel.Format, fb *im
 			h.contexts[0].dec.Close()
 			h.contexts = slices.Delete(h.contexts, 0, 1)
 		}
-		dec, err := mf.NewDecoder(mf.H264)
+		dec, err := mf.NewDecoder(mf.H264, h.Mode)
 		if err != nil {
 			return errors.Join(errors.New("decode: failed to create H.264 context"), err)
 		}
@@ -107,6 +119,8 @@ func (h *H264) Decode(r io.Reader, rect image.Rectangle, _ *pixel.Format, fb *im
 
 	h.t++
 	frames, err := ctx.dec.Decode(data, h.t)
+	info := ctx.dec.Info()
+	h.info.Store(&info)
 	if err != nil {
 		return err
 	}
