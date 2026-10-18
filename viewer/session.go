@@ -300,6 +300,32 @@ func (s *Session) SendClipboard(text string) {
 	s.send(input{f: func(c *rfb.Client) error { return c.ClipboardText(text) }})
 }
 
+// FileCopyAvailable reports whether the session can carry files: an ARD
+// server with encryption up.
+func (s *Session) FileCopyAvailable() bool {
+	return s.c != nil && s.c.FileCopyAvailable()
+}
+
+// SendFiles uploads local files to remoteDir on the server and offers them
+// on its clipboard, so the server's user can paste them (Finder on macOS).
+// It runs off the UI thread; done, when set, hears the remote paths and the
+// error on the UI thread.
+func (s *Session) SendFiles(paths []string, remoteDir string, done func([]string, error)) {
+	go func() {
+		c := s.c
+		var remote []string
+		var err error
+		if c == nil {
+			err = errors.New("myvnc: no session")
+		} else {
+			remote, err = c.UploadFiles(paths, remoteDir)
+		}
+		if done != nil {
+			s.post(func() { done(remote, err) })
+		}
+	}()
+}
+
 // RequestClipboard fetches the server's clipboard text, which then comes
 // through OnClipboard, if the server announced text that has not come
 // yet; else it does nothing.

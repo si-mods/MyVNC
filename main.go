@@ -94,6 +94,7 @@ type app struct {
 	dynHint    bool   // the session panel says so, until dismissed
 	hpNote     string // why High Performance fell back, shown until dismissed
 	hpFailed   bool   // it fell back: the panel offers a retry
+	clipFiles  string // last uploaded file list, so focus does not resend it
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -492,9 +493,38 @@ func (a *app) focus() {
 }
 
 func (a *app) sendClipboard() {
-	if a.sess != nil && !a.cfg.ViewOnly && a.cfg.SendClipboard {
-		a.sess.SendClipboard(a.svc.ReadClipboard())
+	if a.sess == nil || a.cfg.ViewOnly || !a.cfg.SendClipboard {
+		return
 	}
+	// Copied files take the clipboard: upload them to the Mac and leave
+	// their URLs on its pasteboard, so Finder's Cmd+V copies them.
+	if files, err := win32.ReadClipboardFiles(); err == nil && len(files) > 0 {
+		a.sendFiles(files)
+		return
+	}
+	a.sess.SendClipboard(a.svc.ReadClipboard())
+}
+
+// sendFiles uploads the clipboard's files once per copied set. The ARD
+// session puts them on the Mac pasteboard after the upload.
+func (a *app) sendFiles(files []string) {
+	key := strings.Join(files, "\x00")
+	if key == a.clipFiles {
+		return
+	}
+	if a.user == "" || !a.sess.FileCopyAvailable() {
+		return
+	}
+	a.clipFiles = key
+	dir := "/Users/" + a.user + "/Downloads"
+	a.sess.SendFiles(files, dir, func(remote []string, err error) {
+		if err != nil {
+			a.clipFiles = "" // let the next focus try again
+			a.log.Warn("file clipboard", "err", err)
+			return
+		}
+		a.log.Info("file clipboard: uploaded", "files", len(remote), "dir", dir)
+	})
 }
 
 func (a *app) blur() {
@@ -885,6 +915,7 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.stats = statsSample{}
 	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
 	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
+	a.clipFiles = ""
 	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
 	a.hpNote, a.hpFailed = "", false
 	a.setTitle(s.Encrypted())
@@ -892,6 +923,9 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	s.OnEncrypted = func(encrypted bool) {
 		if a.sess == s {
 			a.setTitle(encrypted)
+			if encrypted {
+				a.sendClipboard() // files copied before the session came up
+			}
 		}
 	}
 	s.OnClipboard = func(text string) {
@@ -919,6 +953,7 @@ func (a *app) disconnect() {
 func (a *app) endSession() {
 	a.saveThumbnail(a.sessServer, a.sess.Shown)
 	a.sess, a.emb = nil, nil
+	a.clipFiles = ""
 	if a.sc != nil {
 		a.sc.Reset() // the server is gone: nothing to release
 	}

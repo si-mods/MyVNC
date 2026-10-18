@@ -7,6 +7,7 @@ package rfb
 
 import (
 	"bytes"
+	"compress/zlib"
 	"errors"
 	"io"
 	"testing"
@@ -157,6 +158,13 @@ func TestFileCopyUploadSequence(t *testing.T) {
 		t.Fatalf("commands = %v, want %v", cmds, want)
 	}
 	for i := range want {
+		if i == 3 || i == 4 {
+			// The repetitive test data compresses, so these are 0x67.
+			if cmds[i] != fileCopyCmdFileData && cmds[i] != fileCopyCmdCompressed {
+				t.Fatalf("data command = %#x", cmds[i])
+			}
+			continue
+		}
 		if cmds[i] != want[i] {
 			t.Fatalf("commands = %v, want %v", cmds, want)
 		}
@@ -170,13 +178,31 @@ func TestFileCopyUploadSequence(t *testing.T) {
 	if name := recs[2][0x76:]; !bytes.HasPrefix(name, []byte("dest.bin\x00")) {
 		t.Errorf("new item name = %q", name)
 	}
-	var got []byte
+	// The compressed chunks are one zlib stream, as on the Mac: join
+	// them and inflate once. The test data is always compressible.
+	var zstream []byte
+	var rawTotal int
 	for _, r := range recs[3:5] {
-		n := be.Uint32(r[0x0e:])
-		if int(n) != len(r)-0x12 {
-			t.Errorf("chunk length field = %d, payload %d", n, len(r)-0x12)
+		if cmd := be.Uint16(r[8:]); cmd != fileCopyCmdCompressed {
+			t.Fatalf("data command = %#x, want compressed", cmd)
 		}
-		got = append(got, r[0x12:]...)
+		if v := be.Uint16(r[0x0e:]); v != 1 {
+			t.Errorf("compression flag = %d, want 1", v)
+		}
+		rawTotal += int(be.Uint32(r[0x10:]))
+		compLen := be.Uint32(r[0x14:])
+		if int(compLen) != len(r)-0x18 {
+			t.Errorf("compressed length = %d, payload %d", compLen, len(r)-0x18)
+		}
+		zstream = append(zstream, r[0x18:]...)
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(zstream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, rawTotal)
+	if _, err := io.ReadFull(zr, got); err != nil {
+		t.Fatal(err)
 	}
 	if !bytes.Equal(got, data) {
 		t.Error("reassembled data differs")
@@ -215,5 +241,80 @@ func TestFileCopyUploadErrors(t *testing.T) {
 	}
 	if err := c.FileCopyUpload("/", bytes.NewReader(nil), 0); err == nil {
 		t.Error("destination without a file name did not fail")
+	}
+}
+
+func TestARDFileCopyCompressedData(t *testing.T) {
+	raw := bytes.Repeat([]byte("compress me "), 100)
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	zw.Write(raw)
+	zw.Close()
+	got := ardFileCopyCompressedData(3, z.Bytes(), len(raw))
+	if v := be.Uint16(got[8:]); v != fileCopyCmdCompressed {
+		t.Fatalf("cmd = %#x, want %#x", v, fileCopyCmdCompressed)
+	}
+	if v := be.Uint16(got[0x0e:]); v != 1 {
+		t.Errorf("compression flag = %d, want 1", v)
+	}
+	if v := be.Uint32(got[0x10:]); v != uint32(len(raw)) {
+		t.Errorf("uncompressed length = %d, want %d", v, len(raw))
+	}
+	if v := be.Uint32(got[0x14:]); v != uint32(z.Len()) {
+		t.Errorf("compressed length = %d, want %d", v, z.Len())
+	}
+	if v := be.Uint32(got[2:]); v != uint32(0x12+z.Len()) {
+		t.Errorf("bodyLen = %#x, want %#x", v, 0x12+z.Len())
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(got[0x18:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([]byte, len(raw))
+	if _, err := io.ReadFull(zr, out); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out, raw) {
+		t.Error("round trip differs")
+	}
+}
+
+func TestARDPasteboardFiles(t *testing.T) {
+	const u = "file:///Users/a/b%20c.txt"
+	msg := ardPasteboardFiles(u)
+	if msg[0] != 0x1f || msg[1] != 0 || msg[2] != 1 || msg[3] != 0 {
+		t.Fatalf("header = %x", msg[:8])
+	}
+	size, zsize := be.Uint32(msg[8:]), be.Uint32(msg[12:])
+	if int(zsize) != len(msg)-16 {
+		t.Errorf("compressed size = %d, payload %d", zsize, len(msg)-16)
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(msg[16:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]byte, size)
+	if _, err := io.ReadFull(zr, raw); err != nil {
+		t.Fatal(err)
+	}
+	if n := be.Uint32(raw); n != 1 {
+		t.Fatalf("flavor count = %d, want 1", n)
+	}
+	off := 4
+	n := int(be.Uint32(raw[off:]))
+	off += 4
+	if name := string(raw[off : off+n]); name != ardFileURLFlavor {
+		t.Errorf("flavor = %q, want %q", name, ardFileURLFlavor)
+	}
+	off += n
+	off += 8 // reserved, no tags
+	n = int(be.Uint32(raw[off:]))
+	off += 4
+	if got := string(raw[off : off+n]); got != u {
+		t.Errorf("url = %q, want %q", got, u)
+	}
+	off += n
+	if off != len(raw) {
+		t.Errorf("trailing bytes: off %d, raw %d", off, len(raw))
 	}
 }
