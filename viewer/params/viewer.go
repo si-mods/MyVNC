@@ -35,6 +35,7 @@ type Viewer struct {
 
 	SecurityTypes       *EnumList
 	Shared              *Bool
+	AutoSelect          *Bool
 	PreferredEncoding   *Enum
 	CustomCompressLevel *Bool
 	CompressLevel       *Int
@@ -56,10 +57,11 @@ func NewViewer() *Viewer {
 	v := &Viewer{
 		SecurityTypes: NewEnumList("SecurityTypes", "Specify which security scheme to use",
 			SecurityTypeNames, SecurityTypeNames),
-		Shared: NewBool("Shared", "Don't disconnect other viewers upon connection", false),
-		// TigerVNC also has JPEG and H.264; MyVNC decodes these four.
-		PreferredEncoding: NewEnum("PreferredEncoding", "Preferred encoding to use (Tight, ZRLE, Hextile, Raw)",
-			[]string{"Tight", "ZRLE", "Hextile", "Raw"}, "Tight"),
+		Shared:     NewBool("Shared", "Don't disconnect other viewers upon connection", false),
+		AutoSelect: NewBool("AutoSelect", "Auto select pixel format and encoding", true),
+		// TigerVNC also has JPEG; MyVNC decodes these. H.264 is Windows only.
+		PreferredEncoding: NewEnum("PreferredEncoding", "Preferred encoding to use (Tight, ZRLE, Hextile, H.264, Raw)",
+			[]string{"Tight", "ZRLE", "Hextile", "H.264", "Raw"}, "Tight"),
 		CustomCompressLevel: NewBool("CustomCompressLevel",
 			"Use custom compression level as specified by CompressLevel", false),
 		CompressLevel: NewIntRange("CompressLevel", "Use specified compression level, 0 = Low, 9 = High", 2, 0, 9),
@@ -80,7 +82,7 @@ func NewViewer() *Viewer {
 	}
 	// TigerVNC's parameterArray order; RemoteResize is command line only.
 	v.saved = []Param{
-		v.SecurityTypes, v.Shared, v.PreferredEncoding, v.CustomCompressLevel,
+		v.SecurityTypes, v.Shared, v.AutoSelect, v.PreferredEncoding, v.CustomCompressLevel,
 		v.CompressLevel, v.NoJPEG, v.QualityLevel, v.FullScreen, v.ViewOnly,
 		v.EmulateMiddleButton, v.AcceptClipboard, v.SendClipboard, v.ShortcutModifiers,
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/kyya/myvnc/locales"
+	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
 )
 
@@ -228,7 +229,7 @@ func (a *app) settingsView(c *ui.Context) {
 						}
 					}
 				})
-				ui.Field(c, locales.PreferredEncoding(), func() { ui.Select(c, &a.cfg.Encoding, viewer.Encodings) })
+				ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
 				ui.Field(c, locales.JpegQuality(), func() { ui.NumberInput(c, &a.quality, 0, 9, 1) })
 				ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
 				ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
@@ -425,6 +426,7 @@ func (a *app) statsView(c *ui.Context) {
 	now := c.Now()
 	if d := now.Sub(a.stats.at); d >= time.Second {
 		s := a.sess.Stats()
+		a.stats.link = a.sess.Link()
 		if !a.stats.at.IsZero() {
 			p, sec := a.stats.last, d.Seconds()
 			n := s.Updates - p.Updates
@@ -443,12 +445,28 @@ func (a *app) statsView(c *ui.Context) {
 		enc = "yes"
 	}
 	n := func(f float64, prec int) string { return strconv.FormatFloat(f, 'f', prec, 64) }
+	l := a.stats.link
+	rtt, q, auto, colour := "—", "—", "no", "low"
+	if l.RTT > 0 {
+		rtt = n(float64(l.RTT.Microseconds())/1000, 1)
+	}
+	if l.Quality >= 0 {
+		q = strconv.Itoa(l.Quality)
+	}
+	if l.Auto {
+		auto = "yes"
+	}
+	if l.FullColour {
+		colour = "full"
+	}
 	ui.Column(c).Absolute().Top(8).Left(8).Padding(6, 8).Radius(6).Background(ui.RGBA(0, 0, 0, 0.6)).Children(func() {
 		for _, l := range []string{
 			locales.StatsFps(n(a.stats.fps, 0)),
 			locales.StatsDecode(n(a.stats.decodeMs, 1)),
 			locales.StatsBitrate(n(a.stats.mbps, 1)),
 			locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
+			locales.StatsRequested(auto, colour, viewer.EncodingName(l.Encoding), q),
+			locales.StatsLink(strconv.FormatInt(l.Kbps, 10), rtt),
 			locales.StatsEncrypted(enc),
 		} {
 			ui.Text(c, l).FontSize(11).TextColor(ui.RGBA(255, 255, 255, 1))
@@ -459,6 +477,7 @@ func (a *app) statsView(c *ui.Context) {
 type statsSample struct {
 	at                  time.Time
 	last                viewer.Stats
+	link                rfb.LinkStats
 	fps, decodeMs, mbps float64
 }
 
@@ -541,6 +560,13 @@ func selectLabeled(c *ui.Context, v *string, values []string, label func(string)
 		*v = values[i]
 	}
 	return e
+}
+
+func encodingLabel(s string) string {
+	if s == "Auto" {
+		return locales.EncodingAuto()
+	}
+	return s
 }
 
 func scalingName(s string) string {
