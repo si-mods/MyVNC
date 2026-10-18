@@ -1,12 +1,14 @@
 package rfb
 
 import (
+	"bufio"
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
 	"image"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +139,44 @@ func TestARDPasteboard(t *testing.T) {
 	case e := <-h.ev:
 		t.Errorf("empty pasteboard gave %+v", e)
 	default:
+	}
+}
+
+// TestARDDragFileCopySkip feeds a server drag (0x20) and a server
+// file-copy status (0x23) and checks the session steps over both and
+// survives, and that the debug dump logs each type with its buffered
+// head. These are the drag/file-transfer server messages of issue #43;
+// before 0x23 was routed it fell through to the generic dispatch and
+// killed the session.
+func TestARDDragFileCopySkip(t *testing.T) {
+	h := &testHandler{ev: make(chan event, 4)}
+	var logbuf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logbuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c := &Client{h: h, appleARD: true, log: log}
+	read := func(msg []byte) {
+		t.Helper()
+		// A bufio.Reader so the debug peek has something to dump, as the
+		// live session's reader is after the 1103 switch.
+		br := bufio.NewReader(bytes.NewReader(msg))
+		c.rd.r = br
+		if err := c.readMsg(); err != nil {
+			t.Fatal(err)
+		}
+		if br.Buffered() != 0 {
+			t.Fatalf("%d bytes left", br.Buffered())
+		}
+	}
+
+	// 0x20 ServerDragEvent: u32 header, u32 extraSize, then the payload.
+	read([]byte{0x20, 0, 0, 0, 1, 0, 0, 0, 3, 0xde, 0xad, 0xbe})
+	// 0x23 server file-copy status: u16 length, then the body.
+	read([]byte{0x23, 0, 4, 0x01, 0x02, 0x03, 0x04})
+
+	s := logbuf.String()
+	if !strings.Contains(s, "type=32") || !strings.Contains(s, "head=00000001000000") {
+		t.Errorf("0x20 not dumped: %s", s)
+	}
+	if !strings.Contains(s, "type=35") || !strings.Contains(s, "head=000401020304") {
+		t.Errorf("0x23 not dumped: %s", s)
 	}
 }
