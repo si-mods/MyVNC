@@ -371,6 +371,10 @@ func (a *app) panel(c *ui.Context) {
 		if ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard()).Changed() {
 			a.saveConfig()
 		}
+		if a.cfg.AcceptClipboard && !a.cfg.ViewOnly && ui.Button(c, locales.FetchClipboard()).Clicked() {
+			a.requestClipboard()
+			a.menuOpen = false
+		}
 		ui.Divider(c)
 		if ui.Button(c, locales.SendCtrlAltDel()).Clicked() {
 			a.ctrlAltDel()

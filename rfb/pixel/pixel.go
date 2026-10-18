@@ -32,3 +32,42 @@ var RGBA = Format{
 type Decoder interface {
 	Decode(r io.Reader, rect image.Rectangle, pf *Format, fb *image.RGBA) error
 }
+
+// DecoderFlags say which rectangles of a ParallelDecoder must be decoded
+// in the order they arrived, as TigerVNC's DecoderFlags.
+type DecoderFlags int
+
+const (
+	// DecoderPlain rectangles only wait for earlier ones they overlap.
+	DecoderPlain DecoderFlags = 0
+	// DecoderOrdered rectangles are decoded one at a time, in order
+	// (one zlib stream, as ZRLE).
+	DecoderOrdered DecoderFlags = 1 << 0
+	// DecoderPartiallyOrdered rectangles also wait for earlier ones of
+	// the same decoder for which RectsConflict is true (Tight's four
+	// zlib streams).
+	DecoderPartiallyOrdered DecoderFlags = 1 << 1
+)
+
+// ParallelDecoder is a Decoder whose rectangles can be decoded on worker
+// goroutines, TigerVNC's Decoder split: ReadRect takes a rectangle's
+// bytes off the wire on the read goroutine, one rectangle after the
+// other, and DecodeRect decodes them later on any goroutine. A
+// rectangle is decoded only once every earlier rectangle that overlaps
+// its AffectedRegion, or that it must follow by Flags, is done, so
+// DecodeRect may touch the decoder's state for its own stream without
+// locking.
+type ParallelDecoder interface {
+	Decoder
+	Flags() DecoderFlags
+	// ReadRect appends the rectangle's wire data from r to buf.
+	ReadRect(r io.Reader, rect image.Rectangle, pf *Format, buf []byte) ([]byte, error)
+	// AffectedRegion is the part of the framebuffer that decoding data
+	// reads or writes: rect, and the source for CopyRect.
+	AffectedRegion(rect image.Rectangle, data []byte) []image.Rectangle
+	// RectsConflict reports whether rectangle b, which arrived after a,
+	// must be decoded after it; asked only with DecoderPartiallyOrdered.
+	RectsConflict(a image.Rectangle, dataA []byte, b image.Rectangle, dataB []byte) bool
+	// DecodeRect decodes data from ReadRect into fb.
+	DecodeRect(data []byte, rect image.Rectangle, pf *Format, fb *image.RGBA) error
+}
