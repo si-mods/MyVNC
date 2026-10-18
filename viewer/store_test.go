@@ -37,7 +37,7 @@ func TestKnownHosts(t *testing.T) {
 func TestConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	c, err := LoadConfig(path)
-	if err != nil || c.Encoding != "Tight" || c.Quality != 8 || c.Compress != 2 {
+	if err != nil || c.Encoding != "Auto" || !c.AutoSelect() || c.Quality != 8 || c.Compress != 2 {
 		t.Fatalf("defaults %+v, %v", c, err)
 	}
 	for _, s := range []string{"a", "b", "a"} {
@@ -52,7 +52,7 @@ func TestConfig(t *testing.T) {
 		t.Errorf("loaded %+v, %v", c, err)
 	}
 	l := c.EncodingList()
-	if l[0] != rfb.EncodingZRLE || l[2] != rfb.EncodingTight || slices.Index(l[1:], rfb.EncodingZRLE) >= 0 ||
+	if l[0] != rfb.EncodingZRLE || l[2] != rfb.EncodingH264 || l[3] != rfb.EncodingTight || slices.Index(l[1:], rfb.EncodingZRLE) >= 0 ||
 		l[len(l)-1] != rfb.PseudoEncodingQualityLevel0+8 {
 		t.Errorf("encodings %v", l)
 	}

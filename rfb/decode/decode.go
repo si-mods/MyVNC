@@ -26,9 +26,10 @@ const (
 	EncMVS          = 1011
 )
 
-// New returns fresh decoder instances keyed by encoding number.
+// New returns fresh decoder instances keyed by encoding number, H.264
+// only where it decodes (H264Available).
 func New() map[int32]pixel.Decoder {
-	return map[int32]pixel.Decoder{
+	m := map[int32]pixel.Decoder{
 		EncRaw:          Raw{},
 		EncCopyRect:     CopyRect{},
 		EncRRE:          RRE{},
@@ -40,6 +41,10 @@ func New() map[int32]pixel.Decoder {
 		EncARDThousands: ARDZlib{Format: Thousands},
 		EncMVS:          NewMVS(),
 	}
+	if H264Available() {
+		m[EncH264] = &H264{}
+	}
+	return m
 }
 
 var errRect = errors.New("decode: rectangle outside framebuffer")
