@@ -96,6 +96,12 @@ func Listen(cfg StreamConfig) (*Stream, error) {
 		return nil, err
 	}
 	s.log.Info("media: listening", "audio", s.audio.LocalAddr(), "video", s.video.LocalAddr(), "peer", cfg.Peer)
+	// An empty datagram on each leg before the offer: a NAT between us
+	// and the Mac maps our ports now, before the Mac's first packets
+	// arrive and take the mapping (seen through a WireGuard NAT, where our
+	// later RTCP then left from another port and no media got through).
+	s.audio.Write(nil)
+	s.video.Write(nil)
 	audioIn, videoIn := make(chan []byte, 256), make(chan []byte, 4096)
 	s.wg.Add(3)
 	go s.read(s.audio, audioIn, &s.stats.Audio)
