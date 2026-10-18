@@ -115,9 +115,9 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 			if st := s.c.MediaStream(); st != nil {
 				st.RequestKeyframe()
 			}
-		}, s.showMedia, func(err error) {
+		}, s.ShowMedia, func(err error) {
 			s.send(input{f: func(c *rfb.Client) error { return c.StopHighPerformance(err) }})
-		})
+		}, &s.n)
 		hp.OnUnit = s.video.push
 		hp.OnFallback = s.mediaFallback
 		opt.HighPerformance = &hp
@@ -327,9 +327,9 @@ func (s *Session) RetryHighPerformance() {
 // pointer positions are; UI thread.
 func (s *Session) Size() (w, h int) { return s.w, s.h }
 
-// showMedia hands a decoded picture to the UI through the free token,
+// ShowMedia hands a decoded picture to the UI through the free token,
 // dropping it while the UI has not shown the last; the decoder's goroutine.
-func (s *Session) showMedia(img *image.RGBA, mode string, dec mf.Info) {
+func (s *Session) ShowMedia(img *image.RGBA, mode string, dec mf.Info) {
 	if s.mediaOff.Load() {
 		return
 	}
@@ -339,6 +339,7 @@ func (s *Session) showMedia(img *image.RGBA, mode string, dec mf.Info) {
 		return
 	}
 	s.mediaShown.Store(true)
+	s.n.mediaShown.Add(1)
 	fb := s.fbSize.Load()
 	s.post(func() {
 		if s.Screen == nil {

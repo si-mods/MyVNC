@@ -18,16 +18,25 @@ type Stats struct {
 	DecodeNs int64 // spent in decoders, summed over the decoding goroutines
 	Bytes    int64 // read from the network
 	Encoding int32 // of the last rectangle decoded
+
+	// High Performance's media stream, which the counters above do not see.
+	MediaDecoded  int64 // pictures decoded, shown or not
+	MediaDecodeNs int64 // spent decoding them
+	MediaShown    int64 // pictures handed to the UI
+	MediaBytes    int64 // video access units received
 }
 
 type counters struct {
 	updates, decodeNs, bytes atomic.Int64
 	encoding                 atomic.Int32
+
+	mediaDecoded, mediaDecodeNs, mediaShown, mediaBytes atomic.Int64
 }
 
 // Stats returns the totals so far; any goroutine.
 func (s *Session) Stats() Stats {
-	return Stats{s.n.updates.Load(), s.n.decodeNs.Load(), s.n.bytes.Load(), s.n.encoding.Load()}
+	return Stats{s.n.updates.Load(), s.n.decodeNs.Load(), s.n.bytes.Load(), s.n.encoding.Load(),
+		s.n.mediaDecoded.Load(), s.n.mediaDecodeNs.Load(), s.n.mediaShown.Load(), s.n.mediaBytes.Load()}
 }
 
 // Link is what rfb measured of the line and asks the server for; any

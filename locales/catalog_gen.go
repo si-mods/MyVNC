@@ -685,6 +685,20 @@ func (msgs Messages) StatsEncoding(name string) string {
 	return Catalog.Format(msgs.locale, "statsEncoding", map[string]any{"name": name})
 }
 
+// StatsDropped says "Dropped {n}/s"
+// in the language the app shows.
+//
+// Stats HUD, High Performance: pictures decoded but not shown.
+func StatsDropped(n string) string { return In(i18n.Locale()).StatsDropped(n) }
+
+// StatsDropped says "Dropped {n}/s"
+// in the language of msgs.
+//
+// Stats HUD, High Performance: pictures decoded but not shown.
+func (msgs Messages) StatsDropped(n string) string {
+	return Catalog.Format(msgs.locale, "statsDropped", map[string]any{"n": n})
+}
+
 // StatsResolution says "Resolution {size}"
 // in the language the app shows.
 func StatsResolution(size string) string { return In(i18n.Locale()).StatsResolution(size) }
