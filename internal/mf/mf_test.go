@@ -166,3 +166,34 @@ func TestDecodeLive(t *testing.T) {
 		d.Close()
 	}
 }
+
+// TestDecodeHidden decodes pictures without converting them, and the
+// next picture still comes out whole.
+func TestDecodeHidden(t *testing.T) {
+	data, err := os.ReadFile("testdata/red420.h265")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDecoder(HEVC)
+	if errors.Is(err, ErrNoDecoder) {
+		t.Skip("no HEVC decoder here")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	units := split(HEVC, data)
+	for i, u := range units[:len(units)-1] {
+		if n, err := d.DecodeHidden(u, int64(i)*166666); n != 1 || err != nil {
+			t.Fatalf("hidden unit %d: %d pictures, %v", i, n, err)
+		}
+	}
+	frames, err := d.Decode(units[len(units)-1], 2*166666)
+	if err != nil || len(frames) != 1 {
+		t.Fatalf("last unit: %d pictures, %v", len(frames), err)
+	}
+	p := frames[0].RGBAAt(64, 36)
+	if !near(p.R, 255) || !near(p.G, 0) || !near(p.B, 0) {
+		t.Errorf("center pixel %v, want red", p)
+	}
+}
