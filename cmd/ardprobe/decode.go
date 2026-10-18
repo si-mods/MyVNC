@@ -21,18 +21,25 @@ type decoder struct {
 	units  chan *media.Unit
 	dir    string // first frame as frame.png and the last as last.png, when set
 	stream func() *media.Stream
+	mode   mf.Mode
 
 	mu                       sync.Mutex
 	decoded, failed, dropped uint64
 	hidden                   uint64 // decoded, not converted: newer ones waited
 	spent                    time.Duration
 	desc, lastErr            string
+	decoding                 string // mf.Info.Decoding, and why software
 	saved                    bool
 	last                     *image.RGBA
+	// at the last status line
+	prevDecoded uint64
+	prevSpent   time.Duration
+	prevCPU     time.Duration
+	prevAt      time.Time
 }
 
-func startDecoder(dir string, stream func() *media.Stream) *decoder {
-	d := &decoder{units: make(chan *media.Unit, 32), dir: dir, stream: stream}
+func startDecoder(dir string, mode mf.Mode, stream func() *media.Stream) *decoder {
+	d := &decoder{units: make(chan *media.Unit, 32), dir: dir, stream: stream, mode: mode, prevAt: time.Now(), prevCPU: cpuTime()}
 	go d.run()
 	return d
 }
@@ -67,7 +74,7 @@ func (d *decoder) run() {
 				c = mf.H264
 			}
 			var err error
-			if dec, err = mf.NewDecoder(c); err != nil {
+			if dec, err = mf.NewDecoder(c, d.mode); err != nil {
 				d.fail(err)
 				dec = nil
 				continue
@@ -88,8 +95,12 @@ func (d *decoder) run() {
 		d.spent += time.Since(start)
 		d.decoded += uint64(len(frames) + hidden)
 		d.hidden += uint64(hidden)
+		i := dec.Info()
+		d.decoding = i.Decoding()
+		if i.Fallback != "" {
+			d.decoding += " (" + i.Fallback + ")"
+		}
 		if len(frames) > 0 {
-			i := dec.Info()
 			f := frames[len(frames)-1]
 			d.desc = fmt.Sprintf("%dx%d %s via %q", f.Rect.Dx(), f.Rect.Dy(), i.Output, i.Name)
 			d.last = f.RGBA
@@ -136,8 +147,20 @@ func (d *decoder) status() string {
 	defer d.mu.Unlock()
 	s := fmt.Sprintf("decoded %d", d.decoded)
 	if d.decoded > 0 {
-		s += fmt.Sprintf(" (%s, %.1f ms/unit)", d.desc, float64(d.spent.Microseconds())/1000/float64(d.decoded))
+		s += fmt.Sprintf(" (%s, %.1f ms/unit) on %s", d.desc, float64(d.spent.Microseconds())/1000/float64(d.decoded), d.decoding)
 	}
+	// The last interval: pictures decoded a second, the time each took,
+	// and the process's CPU use (100% is one core).
+	now, cpu := time.Now(), cpuTime()
+	if sec := now.Sub(d.prevAt).Seconds(); sec > 0 {
+		n := d.decoded - d.prevDecoded
+		ms := 0.0
+		if n > 0 {
+			ms = float64((d.spent - d.prevSpent).Microseconds()) / 1000 / float64(n)
+		}
+		s += fmt.Sprintf(" | now %.1f fps, %.1f ms/unit, CPU %.0f%%", float64(n)/sec, ms, (cpu-d.prevCPU).Seconds()/sec*100)
+	}
+	d.prevDecoded, d.prevSpent, d.prevCPU, d.prevAt = d.decoded, d.spent, cpu, now
 	if d.hidden > 0 {
 		s += fmt.Sprintf(" unshown %d", d.hidden)
 	}

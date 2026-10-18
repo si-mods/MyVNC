@@ -9,6 +9,7 @@ import (
 	"image"
 	"io"
 
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb/pixel"
 )
 
@@ -26,9 +27,12 @@ const (
 	EncMVS          = 1011
 )
 
-// New returns fresh decoder instances keyed by encoding number, H.264
-// only where it decodes (H264Available).
-func New() map[int32]pixel.Decoder {
+// New is NewMode(mf.Auto).
+func New() map[int32]pixel.Decoder { return NewMode(mf.Auto) }
+
+// NewMode returns fresh decoder instances keyed by encoding number, H.264
+// only where it decodes (H264Available), on the GPU or the CPU as m says.
+func NewMode(mode mf.Mode) map[int32]pixel.Decoder {
 	m := map[int32]pixel.Decoder{
 		EncRaw:          Raw{},
 		EncCopyRect:     CopyRect{},
@@ -42,7 +46,7 @@ func New() map[int32]pixel.Decoder {
 		EncMVS:          NewMVS(),
 	}
 	if H264Available() {
-		m[EncH264] = &H264{}
+		m[EncH264] = &H264{Mode: mode}
 	}
 	return m
 }

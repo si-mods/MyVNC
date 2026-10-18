@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"image"
 	"runtime"
+	"slices"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -115,6 +116,7 @@ const (
 	mftProcessOutput       = 25
 
 	msgCommandDrain     = 1
+	msgSetD3DManager    = 2
 	outProvidesSamples  = 0x100
 	outCanProvideSample = 0x200
 )
@@ -151,15 +153,11 @@ func hrError(what string, hr uintptr) error {
 	return fmt.Errorf("mf: %s failed (HRESULT %#08x)", what, uint32(hr))
 }
 
-// Decoder is one MFT decoding one stream. Its methods run the MFT on a
-// thread of its own and may be called from any goroutine, one at a time.
-type Decoder struct {
-	calls     chan func()
-	quit      chan struct{}
-	closeOnce sync.Once
-	codec     Codec
-
-	// on the decoder's thread
+// mft is one MFT decoding one stream on a Decoder's thread, with DXVA on
+// dev's GPU when dev is set.
+type mft struct {
+	codec      Codec
+	dev        *device
 	mft        uintptr
 	info       Info
 	provides   bool
@@ -172,44 +170,9 @@ type Decoder struct {
 	fullRange  bool
 	bt709      bool
 	haveOutput bool
-	hidden     bool    // DecodeHidden: no conversion
+	hidden     bool    // no conversion
 	out        uintptr // the output buffer, see outputSample
 	outFor     uint32  // the output size out was made for
-}
-
-// NewDecoder opens the first synchronous MFT that decodes codec.
-func NewDecoder(codec Codec) (*Decoder, error) {
-	d := &Decoder{calls: make(chan func()), quit: make(chan struct{}), codec: codec}
-	errc := make(chan error, 1)
-	go d.thread(errc)
-	if err := <-errc; err != nil {
-		return nil, err
-	}
-	return d, nil
-}
-
-func (d *Decoder) thread(errc chan<- error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	err := initThread()
-	if err == nil {
-		err = d.open()
-	}
-	errc <- err
-	if err != nil {
-		return
-	}
-	for {
-		select {
-		case f := <-d.calls:
-			f()
-		case <-d.quit:
-			release(d.out)
-			release(d.mft)
-			d.mft, d.out = 0, 0
-			return
-		}
-	}
 }
 
 // initThread joins the MTA and starts Media Foundation once.
@@ -223,27 +186,43 @@ func initThread() error {
 	return startupErr
 }
 
-// do runs f on the decoder's thread; false once closed.
-func (d *Decoder) do(f func()) bool {
-	done := make(chan struct{})
-	select {
-	case d.calls <- func() { f(); close(done) }:
-	case <-d.quit:
-		return false
+func listGPUs() []*GPU {
+	var out []*GPU
+	for _, d := range gpus() {
+		out = append(out, &d.GPU)
 	}
-	<-done
-	return true
+	return out
 }
 
-var errClosed = errors.New("mf: decoder closed")
+// openMFT opens the first synchronous MFT that decodes c, on g when set.
+func openMFT(c Codec, g *GPU) (backend, error) {
+	m := &mft{codec: c}
+	if g != nil {
+		for _, d := range gpus() {
+			if &d.GPU == g {
+				m.dev = d
+			}
+		}
+		if m.dev == nil {
+			return nil, fmt.Errorf("mf: no D3D11 device on %s", g.Name)
+		}
+		m.info.GPU = g.Name
+	}
+	if err := m.open(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
 
-// Close releases the MFT.
-func (d *Decoder) Close() { d.closeOnce.Do(func() { close(d.quit) }) }
+func (d *mft) close() {
+	release(d.out)
+	release(d.mft)
+	d.mft, d.out = 0, 0
+}
 
-// Info describes the decoder.
-func (d *Decoder) Info() Info {
-	var i Info
-	d.do(func() { i = d.info; i.Outputs = append([]string(nil), d.info.Outputs...) })
+func (d *mft) Info() Info {
+	i := d.info
+	i.Outputs = slices.Clone(d.info.Outputs)
 	return i
 }
 
@@ -285,7 +264,7 @@ func allocString(obj uintptr, key guid) string {
 	return syscall.UTF16ToString(unsafe.Slice((*uint16)(native(p)), n))
 }
 
-func (d *Decoder) open() error {
+func (d *mft) open() error {
 	acts, err := enum(d.codec)
 	if err != nil {
 		return err
@@ -330,11 +309,21 @@ func newMediaType(sub guid, profile uint32) (uintptr, error) {
 	return t, nil
 }
 
-func (d *Decoder) configure() error {
+func (d *mft) configure() error {
 	var attrs uintptr
+	var aware uint32
 	if !failed(comCall(d.mft, mftGetAttributes, uintptr(unsafe.Pointer(&attrs)))) && attrs != 0 {
 		comCall(attrs, attrSetUINT32, uintptr(unsafe.Pointer(&codecAPILowLatency)), 1)
+		comCall(attrs, attrGetUINT32, uintptr(unsafe.Pointer(&mfSAD3D11Aware)), uintptr(unsafe.Pointer(&aware)))
 		release(attrs)
+	}
+	if d.dev != nil {
+		if aware == 0 {
+			return fmt.Errorf("mf: %q is not D3D11 aware", d.info.Name)
+		}
+		if hr := comCall(d.mft, mftProcessMessage, msgSetD3DManager, d.dev.manager); failed(hr) {
+			return hrError("MFT_MESSAGE_SET_D3D_MANAGER", hr)
+		}
 	}
 	t, err := newMediaType(subtypeOf(d.codec), 0)
 	if err != nil {
@@ -351,7 +340,7 @@ func (d *Decoder) configure() error {
 }
 
 // setOutput picks NV12 (4:2:0) or AYUV (4:4:4) from the offered types.
-func (d *Decoder) setOutput() error {
+func (d *mft) setOutput() error {
 	d.info.Outputs = nil
 	var chosen uintptr
 	for i := 0; ; i++ {
@@ -415,45 +404,10 @@ func (d *Decoder) setOutput() error {
 	return nil
 }
 
-// Decode feeds one whole access unit (Annex B) stamped t (100 ns units)
-// and returns the frames that came out, normally its own picture.
-func (d *Decoder) Decode(au []byte, t int64) ([]Frame, error) {
-	var frames []Frame
-	var err error
-	if !d.do(func() { frames, err = d.decode(au, t) }) {
-		return nil, errClosed
-	}
-	return frames, err
-}
-
-// DecodeHidden feeds au as Decode does but converts none of the pictures
-// that come out, and returns how many came: for a picture nobody will
-// see, as when newer ones wait to be decoded. Converting a 1920x1080
-// picture costs a few milliseconds and 8 MB.
-func (d *Decoder) DecodeHidden(au []byte, t int64) (int, error) {
-	var frames []Frame
-	var err error
-	if !d.do(func() {
-		d.hidden = true
-		frames, err = d.decode(au, t)
-		d.hidden = false
-	}) {
-		return 0, errClosed
-	}
-	return len(frames), err
-}
-
 // Flush drains the frames the MFT still holds.
-func (d *Decoder) Flush() ([]Frame, error) {
-	var frames []Frame
-	var err error
-	if !d.do(func() {
-		comCall(d.mft, mftProcessMessage, msgCommandDrain, 0)
-		frames, err = d.drain(nil)
-	}) {
-		return nil, errClosed
-	}
-	return frames, err
+func (d *mft) Flush() ([]Frame, error) {
+	comCall(d.mft, mftProcessMessage, msgCommandDrain, 0)
+	return d.drain(nil)
 }
 
 func newSample(n int) (sample, buf uintptr, err error) {
@@ -473,7 +427,9 @@ func newSample(n int) (sample, buf uintptr, err error) {
 // rather than when the next unit arrives, which on a still screen is never.
 var auds = map[Codec][]byte{HEVC: {0, 0, 0, 1, 0x46, 0x01, 0x50}, H264: {0, 0, 0, 1, 0x09, 0xf0}}
 
-func (d *Decoder) decode(au []byte, t int64) ([]Frame, error) {
+// Decode feeds au; hidden converts none of the pictures that come out.
+func (d *mft) Decode(au []byte, t int64, hidden bool) ([]Frame, error) {
+	d.hidden = hidden
 	au = append(au[:len(au):len(au)], auds[d.codec]...)
 	sample, buf, err := newSample(len(au))
 	if err != nil {
@@ -507,7 +463,7 @@ func (d *Decoder) decode(au []byte, t int64) ([]Frame, error) {
 // made once per output size and reused: a new 8 MB buffer per picture
 // costs the HEVC decoder some 2 ms of page faults. Each picture is copied
 // out of it before the next is decoded.
-func (d *Decoder) outputSample() (uintptr, error) {
+func (d *mft) outputSample() (uintptr, error) {
 	if d.out == 0 || d.outFor != d.outSize {
 		release(d.out)
 		d.out = 0
@@ -533,7 +489,7 @@ type outputDataBuffer struct {
 	events   uintptr
 }
 
-func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
+func (d *mft) drain(frames []Frame) ([]Frame, error) {
 	for {
 		var ob outputDataBuffer
 		var mine uintptr
@@ -579,7 +535,7 @@ func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
 	}
 }
 
-func (d *Decoder) frame(sample uintptr) (Frame, error) {
+func (d *mft) frame(sample uintptr) (Frame, error) {
 	var f Frame
 	comCall(sample, 35, uintptr(unsafe.Pointer(&f.Time))) // GetSampleTime
 	var buf uintptr
@@ -587,6 +543,16 @@ func (d *Decoder) frame(sample uintptr) (Frame, error) {
 		return f, hrError("ConvertToContiguousBuffer", hr)
 	}
 	defer release(buf)
+	if d.dev != nil {
+		// A D3D11 aware MFT that cannot use the GPU for the stream
+		// decodes on the CPU into system memory instead.
+		var db uintptr
+		comCall(buf, 0, uintptr(unsafe.Pointer(&iidIMFDXGIBuffer)), uintptr(unsafe.Pointer(&db)))
+		if db == 0 {
+			return f, errNotOnGPU
+		}
+		release(db)
+	}
 	var b2d uintptr
 	comCall(buf, 0, uintptr(unsafe.Pointer(&iidIMF2DBuffer)), uintptr(unsafe.Pointer(&b2d)))
 	var base uintptr

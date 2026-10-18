@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kyya/myvnc/internal/fakerfb"
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 )
 
@@ -56,7 +57,7 @@ func benchFrames(b *testing.B, w, h int, enc string) {
 	if enc == fakerfb.Raw {
 		cfg.Encoding = "Raw"
 	}
-	s, err := Connect(ctx, l.Addr().String(), rfb.Options{Encodings: cfg.EncodingList()},
+	s, err := Connect(ctx, l.Addr().String(), rfb.Options{Encodings: cfg.EncodingList()}, mf.Auto,
 		func(f func()) { posts <- f })
 	if err != nil {
 		b.Fatal(err)
@@ -97,7 +98,7 @@ func BenchmarkUpdateDone(b *testing.B) {
 			go fakerfb.Serve(l, w, h, msgs)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			s, err := Connect(ctx, l.Addr().String(), rfb.Options{}, func(f func()) { f() })
+			s, err := Connect(ctx, l.Addr().String(), rfb.Options{}, mf.Auto, func(f func()) { f() })
 			if err != nil {
 				b.Fatal(err)
 			}
