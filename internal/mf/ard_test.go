@@ -28,7 +28,7 @@ func TestDecodeARD444(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDecoder(HEVC)
+	d, err := NewDecoder(HEVC, Software)
 	if errors.Is(err, ErrNoDecoder) {
 		t.Skip("no HEVC decoder here")
 	}

@@ -50,7 +50,10 @@ func TestVideoPipe(t *testing.T) {
 	var failing bool
 	old := newVideoDecoder
 	t.Cleanup(func() { newVideoDecoder = old })
-	newVideoDecoder = func(c media.Codec) (videoDecoder, error) {
+	newVideoDecoder = func(c media.Codec, m mf.Mode) (videoDecoder, error) {
+		if m != mf.Hardware {
+			t.Errorf("decoder mode %v, want the pipe's", m)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if c == media.Codec(99) {
@@ -67,8 +70,8 @@ func TestVideoPipe(t *testing.T) {
 	keys := make(chan struct{}, 100)
 	shown := make(chan string, 100)
 	noCodec := make(chan error, 2)
-	p := newVideoPipe(func() { keys <- struct{}{} },
-		func(img *image.RGBA, mode string) { shown <- mode },
+	p := newVideoPipe(mf.Hardware, func() { keys <- struct{}{} },
+		func(img *image.RGBA, mode string, _ mf.Info) { shown <- mode },
 		func(err error) { noCodec <- err })
 	defer p.close()
 

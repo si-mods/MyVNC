@@ -35,7 +35,7 @@ func decodeClip(t *testing.T, c Codec, file string) (Info, []Frame, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDecoder(c)
+	d, err := NewDecoder(c, Software)
 	if errors.Is(err, ErrNoDecoder) {
 		t.Skipf("no %v decoder here", c)
 	}
@@ -149,21 +149,23 @@ func TestDecodeLive(t *testing.T) {
 		if len(units) != 3 {
 			t.Fatalf("%s: %d access units", clip.file, len(units))
 		}
-		d, err := NewDecoder(clip.c)
-		if errors.Is(err, ErrNoDecoder) {
-			t.Logf("no %v decoder here", clip.c)
-			continue
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i, u := range units {
-			frames, err := d.Decode(u, int64(i)*166666)
-			if err != nil || len(frames) != 1 {
-				t.Errorf("%s unit %d: %d pictures, %v", clip.file, i, len(frames), err)
+		for _, m := range []Mode{Software, Hardware} {
+			d, err := NewDecoder(clip.c, m)
+			if errors.Is(err, ErrNoDecoder) {
+				t.Logf("no %v decoder here", clip.c)
+				break
 			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, u := range units {
+				frames, err := d.Decode(u, int64(i)*166666)
+				if err != nil || len(frames) != 1 {
+					t.Errorf("%s, %v on %s: unit %d: %d pictures, %v", clip.file, m, d.Info().Decoding(), i, len(frames), err)
+				}
+			}
+			d.Close()
 		}
-		d.Close()
 	}
 }
 
@@ -174,7 +176,7 @@ func TestDecodeHidden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDecoder(HEVC)
+	d, err := NewDecoder(HEVC, Software)
 	if errors.Is(err, ErrNoDecoder) {
 		t.Skip("no HEVC decoder here")
 	}

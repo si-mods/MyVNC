@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/rfb/decode"
 )
@@ -30,6 +31,8 @@ type Session struct {
 	// Media says how High Performance pictures come, as "HEVC 4:4:4
 	// 1920×1080", while they do; "" in Standard mode.
 	Media string
+	// MediaDecoder is the decoder of those pictures.
+	MediaDecoder mf.Info
 	// OnMediaFallback, when set, hears why High Performance was given up
 	// (see rfb.HighPerformance.OnFallback and NoDecoderError).
 	OnMediaFallback func(err error)
@@ -53,6 +56,7 @@ type Session struct {
 
 	// High Performance, when the session negotiates it.
 	video      *videoPipe
+	h264       *decode.H264 // nil without encoding 50
 	mediaOff   atomic.Bool  // fell back: pictures still decoding are dropped
 	mediaShown atomic.Bool  // the picture is the stream's, not the framebuffer's
 	fbSize     atomic.Int64 // the framebuffer's width<<32 | height, for media pictures
@@ -79,16 +83,18 @@ type Session struct {
 }
 
 // Connect dials addr and performs the handshake. post runs a function on
-// the UI thread. Options.Decoders defaults to all of package decode.
-func Connect(ctx context.Context, addr string, opt rfb.Options, post func(func())) (*Session, error) {
-	return connect(opt, post, func(opt rfb.Options, h rfb.Handler) (*rfb.Client, error) {
+// the UI thread. Options.Decoders defaults to all of package decode. Video,
+// High Performance's and H.264's, is decoded on the GPU or the CPU as dec
+// says.
+func Connect(ctx context.Context, addr string, opt rfb.Options, dec mf.Mode, post func(func())) (*Session, error) {
+	return connect(opt, dec, post, func(opt rfb.Options, h rfb.Handler) (*rfb.Client, error) {
 		return dial(ctx, addr, opt, h.(*Session))
 	})
 }
 
-func connect(opt rfb.Options, post func(func()), dial func(rfb.Options, rfb.Handler) (*rfb.Client, error)) (*Session, error) {
+func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Options, rfb.Handler) (*rfb.Client, error)) (*Session, error) {
 	if opt.Decoders == nil {
-		opt.Decoders = decode.New()
+		opt.Decoders = decode.NewMode(dec)
 	}
 	s := &Session{
 		post: post,
@@ -98,10 +104,11 @@ func connect(opt rfb.Options, post func(func()), dial func(rfb.Options, rfb.Hand
 	}
 	s.free <- struct{}{}
 	s.n.encoding.Store(-1)
+	s.h264, _ = opt.Decoders[rfb.EncodingH264].(*decode.H264)
 	opt.Decoders = timeDecoders(opt.Decoders, &s.n)
 	if opt.HighPerformance != nil {
 		hp := *opt.HighPerformance
-		s.video = newVideoPipe(func() {
+		s.video = newVideoPipe(dec, func() {
 			if st := s.c.MediaStream(); st != nil {
 				st.RequestKeyframe()
 			}
@@ -319,7 +326,7 @@ func (s *Session) Size() (w, h int) { return s.w, s.h }
 
 // showMedia hands a decoded picture to the UI through the free token,
 // dropping it while the UI has not shown the last; the decoder's goroutine.
-func (s *Session) showMedia(img *image.RGBA, mode string) {
+func (s *Session) showMedia(img *image.RGBA, mode string, dec mf.Info) {
 	if s.mediaOff.Load() {
 		return
 	}
@@ -336,7 +343,7 @@ func (s *Session) showMedia(img *image.RGBA, mode string) {
 		} else {
 			s.Screen.Update(img)
 		}
-		s.Shown, s.Media = img, mode
+		s.Shown, s.Media, s.MediaDecoder = img, mode, dec
 		s.w, s.h = int(fb>>32), int(uint32(fb))
 		s.free <- struct{}{}
 	})
@@ -598,3 +605,12 @@ func ReconnectDelay(attempt int) (time.Duration, bool) {
 
 // ReconnectAttempts is how often a lost session is retried.
 const ReconnectAttempts = 8
+
+// H264Decoder describes the decoder of the last H.264 (encoding 50)
+// rectangle; any goroutine. Zero before one, or without the encoding.
+func (s *Session) H264Decoder() mf.Info {
+	if s.h264 == nil {
+		return mf.Info{}
+	}
+	return s.h264.Info()
+}

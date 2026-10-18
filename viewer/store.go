@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/rfb/decode"
 )
@@ -192,6 +193,9 @@ type Config struct {
 	Reconnect         bool   // after an unexpected disconnect
 	ClipboardKiB      int    // largest server clipboard accepted
 	HighPerformance   bool   // ask a Mac for ARD High Performance, on (re)connect
+	// VideoDecoding is one of VideoDecodings: where High Performance and
+	// H.264 video is decoded, on (re)connect.
+	VideoDecoding string
 	// SecureOnly refuses the security types that send credentials or
 	// the session unprotected (SecTypesSecure).
 	SecureOnly bool
@@ -218,13 +222,23 @@ type Computer struct {
 	Never bool `json:",omitempty"`
 }
 
+// VideoDecodings are the choices of where video is decoded: the GPU when
+// it decodes the stream, the GPU, the CPU (mf.Auto, Hardware, Software).
+var VideoDecodings = []string{"Auto", "Hardware", "Software"}
+
+// DecoderMode is VideoDecoding for package mf.
+func (c *Config) DecoderMode() mf.Mode {
+	m, _ := mf.ParseMode(c.VideoDecoding)
+	return m
+}
+
 // Scalings are the ways the remote screen fits the window.
 var Scalings = []string{"Fit", "1:1", "Zoom"}
 
 // DefaultConfig has TigerVNC's defaults.
 func DefaultConfig() Config {
 	return Config{Encoding: "Auto", Quality: 8, Compress: 2, Scaling: "Fit", Zoom: 100,
-		DynamicResolution: true, HighPerformance: true, Reconnect: true, ClipboardKiB: 256, PillPos: 0.5, AcceptClipboard: true, SendClipboard: true}
+		DynamicResolution: true, HighPerformance: true, VideoDecoding: "Auto", Reconnect: true, ClipboardKiB: 256, PillPos: 0.5, AcceptClipboard: true, SendClipboard: true}
 }
 
 // LoadConfig reads path; a missing file gives the defaults.
@@ -242,6 +256,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	c.Quality = min(max(c.Quality, 0), 9)
 	c.Compress = min(max(c.Compress, 0), 9)
+	if !slices.Contains(VideoDecodings, c.VideoDecoding) {
+		c.VideoDecoding = "Auto"
+	}
 	if !slices.Contains(Scalings, c.Scaling) {
 		c.Scaling = "Fit"
 	}

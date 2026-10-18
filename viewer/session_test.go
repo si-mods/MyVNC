@@ -14,6 +14,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/kyya/myvnc/internal/fakerfb"
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 )
 
@@ -47,7 +48,7 @@ func stalledSession(t *testing.T) *Session {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s, err := connect(rfb.Options{}, func(func()) {}, func(opt rfb.Options, h rfb.Handler) (*rfb.Client, error) {
+	s, err := connect(rfb.Options{}, mf.Software, func(func()) {}, func(opt rfb.Options, h rfb.Handler) (*rfb.Client, error) {
 		return rfb.NewClient(ctx, cc, "pipe", opt, h)
 	})
 	if err != nil {
@@ -241,7 +242,7 @@ func TestFastProducerBoundedQueue(t *testing.T) {
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s, err := Connect(ctx, l.Addr().String(), rfb.Options{}, func(f func()) {
+	s, err := Connect(ctx, l.Addr().String(), rfb.Options{}, mf.Auto, func(f func()) {
 		if n := inFlight.Add(1); n > maxSeen.Load() {
 			maxSeen.Store(n)
 		}

@@ -248,6 +248,7 @@ func (a *app) settingsView(c *ui.Context) {
 					ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
 					ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
 				})
+				ui.Field(c, locales.VideoDecoding(), func() { selectLabeled(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName) })
 				ui.Field(c, locales.Security(), func() {
 					ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
 				})
@@ -491,6 +492,7 @@ func (a *app) statsView(c *ui.Context) {
 			locales.StatsLink(strconv.FormatInt(l.Kbps, 10), rtt),
 			locales.StatsResolution(resolution(a.sess.Size())),
 			a.statsMode(),
+			a.statsDecoder(),
 			locales.StatsEncrypted(enc),
 		} {
 			if l != "" {
@@ -506,6 +508,15 @@ func (a *app) statsMode() string {
 		return ""
 	}
 	return locales.StatsMode(a.mediaMode())
+}
+
+// statsDecoder is the HUD's line on the H.264 decoder, empty unless the
+// last rectangle was H.264 (High Performance's is on the mode line).
+func (a *app) statsDecoder() string {
+	if a.stats.last.Encoding != rfb.EncodingH264 {
+		return ""
+	}
+	return locales.StatsDecoder(decoderName(a.sess.H264Decoder()))
 }
 
 // resolution is a size as the HUD says it.
@@ -602,6 +613,18 @@ func selectLabeled(c *ui.Context, v *string, values []string, label func(string)
 func encodingLabel(s string) string {
 	if s == "Auto" {
 		return locales.EncodingAuto()
+	}
+	return s
+}
+
+func videoDecodingName(s string) string {
+	switch s {
+	case "Auto":
+		return locales.EncodingAuto()
+	case "Hardware":
+		return locales.VideoDecodingHardware()
+	case "Software":
+		return locales.VideoDecodingSoftware()
 	}
 	return s
 }
