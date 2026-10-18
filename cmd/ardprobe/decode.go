@@ -39,7 +39,7 @@ func startDecoder(dir string, stream func() *media.Stream) *decoder {
 
 // push queues u; a full queue drops it and asks for a keyframe, as every
 // later picture predicts from it. As the viewer's pipeline does, a picture
-// with newer ones queued is decoded without converting it.
+// with two or more newer ones queued is decoded without converting it.
 func (d *decoder) push(u *media.Unit) {
 	select {
 	case d.units <- u:
@@ -78,7 +78,7 @@ func (d *decoder) run() {
 		var frames []mf.Frame
 		var err error
 		hidden := 0
-		if len(d.units) > 0 {
+		if len(d.units) >= 2 { // as the viewer's unseenBehind
 			hidden, err = dec.DecodeHidden(u.AnnexB(), t)
 		} else {
 			frames, err = dec.Decode(u.AnnexB(), t)

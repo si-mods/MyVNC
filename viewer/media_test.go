@@ -91,15 +91,16 @@ func TestVideoPipe(t *testing.T) {
 	}
 	<-keys
 	close(block)
-	// The blocked picture and the newest are shown; those between are not.
-	for range 2 {
+	// The blocked picture and the newest unseenBehind are shown; those
+	// between are not.
+	for range 1 + unseenBehind {
 		if m := <-shown; m != "HEVC 4:4:4 16×8" {
 			t.Errorf("mode %q", m)
 		}
 	}
 	mu.Lock()
-	if hidden != videoQueue-1 {
-		t.Errorf("%d pictures decoded unseen, want %d", hidden, videoQueue-1)
+	if hidden != videoQueue-unseenBehind {
+		t.Errorf("%d pictures decoded unseen, want %d", hidden, videoQueue-unseenBehind)
 	}
 	mu.Unlock()
 

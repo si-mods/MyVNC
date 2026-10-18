@@ -48,10 +48,15 @@ func (e *NoDecoderError) Unwrap() error { return e.Err }
 // HEVC decoder some 60 ms, and the pictures behind it wait.
 const videoQueue = 32
 
+// unseenBehind is how many newer units must wait for a picture to be
+// decoded unseen: with one waiting, showing it costs a frame of latency
+// and keeps the frame rate up while the decoder is near its limit.
+const unseenBehind = 2
+
 // videoPipe decodes access units on a goroutine of its own: the media
 // receiver must not block, so a full queue drops the unit and asks for a
 // keyframe, as every later picture predicts from it; so does a decoding
-// error. A picture with newer ones queued behind it is decoded but not
+// error. A picture with unseenBehind newer ones queued is decoded but not
 // converted or shown, which lets a decoder that is a little slow catch up.
 type videoPipe struct {
 	units    chan *media.Unit
@@ -115,7 +120,7 @@ func (p *videoPipe) run() {
 		}
 		var frames []mf.Frame
 		var err error
-		if len(p.units) > 0 {
+		if len(p.units) >= unseenBehind {
 			_, err = dec.DecodeHidden(u.AnnexB(), t)
 		} else {
 			frames, err = dec.Decode(u.AnnexB(), t)
