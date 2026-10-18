@@ -1,7 +1,7 @@
 {
   "name": "MyVNC",
   "identifier": "dev.kyya.myvnc",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "out": "build",
   "i18n": { "dir": "locales", "source": "en" }
 }

@@ -889,6 +889,11 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.hpNote, a.hpFailed = "", false
 	a.setTitle(s.Encrypted())
 	s.OnName = a.setName
+	s.OnEncrypted = func(encrypted bool) {
+		if a.sess == s {
+			a.setTitle(encrypted)
+		}
+	}
 	s.OnClipboard = func(text string) {
 		if !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
 			a.svc.WriteClipboard(text)
