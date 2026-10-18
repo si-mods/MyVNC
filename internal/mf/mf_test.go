@@ -35,7 +35,7 @@ func decodeClip(t *testing.T, c Codec, file string) (Info, []Frame, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDecoder(c)
+	d, err := NewDecoder(c, Software)
 	if errors.Is(err, ErrNoDecoder) {
 		t.Skipf("no %v decoder here", c)
 	}
@@ -149,7 +149,7 @@ func TestDecodeLive(t *testing.T) {
 		if len(units) != 3 {
 			t.Fatalf("%s: %d access units", clip.file, len(units))
 		}
-		d, err := NewDecoder(clip.c)
+		d, err := NewDecoder(clip.c, Software)
 		if errors.Is(err, ErrNoDecoder) {
 			t.Logf("no %v decoder here", clip.c)
 			continue
@@ -174,7 +174,7 @@ func TestDecodeHidden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDecoder(HEVC)
+	d, err := NewDecoder(HEVC, Software)
 	if errors.Is(err, ErrNoDecoder) {
 		t.Skip("no HEVC decoder here")
 	}

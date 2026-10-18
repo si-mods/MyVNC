@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 )
 
@@ -37,18 +38,19 @@ func TestKnownHosts(t *testing.T) {
 func TestConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	c, err := LoadConfig(path)
-	if err != nil || c.Encoding != "Auto" || !c.AutoSelect() || c.Quality != 8 || c.Compress != 2 {
+	if err != nil || c.Encoding != "Auto" || !c.AutoSelect() || c.Quality != 8 || c.Compress != 2 || c.DecoderMode() != mf.Auto {
 		t.Fatalf("defaults %+v, %v", c, err)
 	}
 	for _, s := range []string{"a", "b", "a"} {
 		c.AddServer(s)
 	}
 	c.Encoding = "ZRLE"
+	c.VideoDecoding = "GPU" // not a choice: Auto again
 	if err := c.Save(path); err != nil {
 		t.Fatal(err)
 	}
 	c, err = LoadConfig(path)
-	if err != nil || !slices.Equal(c.Servers, []string{"a", "b"}) || c.Encoding != "ZRLE" {
+	if err != nil || !slices.Equal(c.Servers, []string{"a", "b"}) || c.Encoding != "ZRLE" || c.VideoDecoding != "Auto" {
 		t.Errorf("loaded %+v, %v", c, err)
 	}
 	l := c.EncodingList()

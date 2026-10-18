@@ -48,6 +48,7 @@ type Viewer struct {
 	AcceptClipboard     *Bool
 	SendClipboard       *Bool
 	ShortcutModifiers   *EnumList
+	VideoDecoding       *Enum // MyVNC's own
 
 	saved []Param
 }
@@ -75,16 +76,21 @@ func NewViewer() *Viewer {
 			"and right mouse buttons simultaneously", false),
 		AcceptClipboard: NewBool("AcceptClipboard", "Accept clipboard changes from the server", true),
 		SendClipboard:   NewBool("SendClipboard", "Send clipboard changes to the server", true),
+		VideoDecoding: NewEnum("VideoDecoding", "Decode High Performance and H.264 video on the GPU "+
+			"when it decodes the stream (Auto), on the GPU (Hardware) or on the CPU (Software)",
+			[]string{"Auto", "Hardware", "Software"}, "Auto"),
 		ShortcutModifiers: NewEnumList("ShortcutModifiers", "The combination of modifier keys that triggers "+
 			"special actions in the viewer instead of being sent to the remote session (possible keys "+
 			"are a combination of Ctrl, Shift, Alt, and Super)",
 			[]string{"Ctrl", "Shift", "Alt", "Super", "Win", "Option", "Cmd"}, []string{"Ctrl", "Alt"}),
 	}
-	// TigerVNC's parameterArray order; RemoteResize is command line only.
+	// TigerVNC's parameterArray order, then MyVNC's own; RemoteResize is
+	// command line only.
 	v.saved = []Param{
 		v.SecurityTypes, v.Shared, v.AutoSelect, v.PreferredEncoding, v.CustomCompressLevel,
 		v.CompressLevel, v.NoJPEG, v.QualityLevel, v.FullScreen, v.ViewOnly,
 		v.EmulateMiddleButton, v.AcceptClipboard, v.SendClipboard, v.ShortcutModifiers,
+		v.VideoDecoding,
 	}
 	v.Add(v.saved...)
 	v.Add(v.RemoteResize)

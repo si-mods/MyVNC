@@ -4,7 +4,7 @@
 // Performance and reports, once a second, what arrives on the media
 // stream's UDP ports. It shows no picture.
 //
-//	ardprobe -host 192.168.88.241 -user yibo [-dump DIR] [-rtpdump FILE] [-decode] [-mirror] [-h264]
+//	ardprobe -host 192.168.88.241 -user yibo [-dump DIR] [-rtpdump FILE] [-decode] [-decoder auto|hw|sw] [-mirror] [-h264]
 //
 // The password comes from MYVNC_E2E_PASS, or the console without echo.
 package main
@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/rfb/ard/media"
 	"github.com/kyya/myvnc/rfb/decode"
@@ -45,7 +46,17 @@ func main() {
 	verbose := flag.Bool("v", false, "debug log")
 	rtpdumpFlag := flag.String("rtpdump", "", "write the picture leg's RTP packets, decrypted, to this file (see rtpdump.go)")
 	decodeFlag := flag.Bool("decode", false, "decode the pictures with Media Foundation (and save the first and last as DIR/frame.png and last.png with -dump)")
+	decoderFlag := flag.String("decoder", "auto", "decode on the GPU when it decodes the stream (auto), on the GPU (hw) or the CPU (sw); implies -decode")
 	flag.Parse()
+	mode, err := mf.ParseMode(*decoderFlag)
+	if err != nil {
+		fatal("bad -decoder %q", *decoderFlag)
+	}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "decoder" {
+			*decodeFlag = true
+		}
+	})
 	if *host == "" {
 		flag.Usage()
 		os.Exit(2)
@@ -55,6 +66,7 @@ func main() {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	mf.SetLogger(log)
 
 	hp := &rfb.HighPerformance{Mirror: *mirror, Offer: media.Params{Tiles: *tiles}}
 	if *size != "" {
@@ -107,7 +119,10 @@ func main() {
 	var c *rfb.Client
 	var dec *decoder
 	if *decodeFlag {
-		dec = startDecoder(*dump, func() *media.Stream { return c.MediaStream() })
+		for _, g := range mf.GPUs() {
+			note(fmt.Sprintf("GPU %q decodes %s", g.Name, strings.Join(g.Profiles, ", ")))
+		}
+		dec = startDecoder(*dump, mode, func() *media.Stream { return c.MediaStream() })
 	}
 	hp.OnUnit = func(u *media.Unit) {
 		if dec != nil {
@@ -154,7 +169,7 @@ func main() {
 			return "", p, err
 		},
 		Shared:          true,
-		Decoders:        decode.New(),
+		Decoders:        decode.NewMode(mode),
 		Logger:          log,
 		HighPerformance: hp,
 	}
@@ -166,7 +181,6 @@ func main() {
 		defer cancel()
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	var err error
 	c, err = rfb.Dial(dialCtx, net.JoinHostPort(*host, strconv.Itoa(*port)), opt, &handler{note: note})
 	cancel()
 	if err != nil {

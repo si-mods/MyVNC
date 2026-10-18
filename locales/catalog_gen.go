@@ -755,6 +755,94 @@ func (msgs Messages) RetryHighPerformance() string {
 	return Catalog.Format(msgs.locale, "retryHighPerformance", nil)
 }
 
+// VideoDecoding says "Video decoding"
+// in the language the app shows.
+//
+// Settings: where High Performance and H.264 video is decoded; applies on
+// (re)connect. Choices: Auto, videoDecodingHardware, videoDecodingSoftware.
+func VideoDecoding() string { return In(i18n.Locale()).VideoDecoding() }
+
+// VideoDecoding says "Video decoding"
+// in the language of msgs.
+//
+// Settings: where High Performance and H.264 video is decoded; applies on
+// (re)connect. Choices: Auto, videoDecodingHardware, videoDecodingSoftware.
+func (msgs Messages) VideoDecoding() string {
+	return Catalog.Format(msgs.locale, "videoDecoding", nil)
+}
+
+// VideoDecodingHardware says "Hardware (GPU)"
+// in the language the app shows.
+func VideoDecodingHardware() string { return In(i18n.Locale()).VideoDecodingHardware() }
+
+// VideoDecodingHardware says "Hardware (GPU)"
+// in the language of msgs.
+func (msgs Messages) VideoDecodingHardware() string {
+	return Catalog.Format(msgs.locale, "videoDecodingHardware", nil)
+}
+
+// VideoDecodingSoftware says "Software (CPU)"
+// in the language the app shows.
+func VideoDecodingSoftware() string { return In(i18n.Locale()).VideoDecodingSoftware() }
+
+// VideoDecodingSoftware says "Software (CPU)"
+// in the language of msgs.
+func (msgs Messages) VideoDecodingSoftware() string {
+	return Catalog.Format(msgs.locale, "videoDecodingSoftware", nil)
+}
+
+// StatsDecoder says "Decoder {decoder}"
+// in the language the app shows.
+//
+// Stats HUD, for H.264 rectangles.
+func StatsDecoder(decoder string) string { return In(i18n.Locale()).StatsDecoder(decoder) }
+
+// StatsDecoder says "Decoder {decoder}"
+// in the language of msgs.
+//
+// Stats HUD, for H.264 rectangles.
+func (msgs Messages) StatsDecoder(decoder string) string {
+	return Catalog.Format(msgs.locale, "statsDecoder", map[string]any{"decoder": decoder})
+}
+
+// DecoderHardware says "hardware ({gpu})"
+// in the language the app shows.
+//
+// Stats HUD and session panel: video is decoded on this GPU.
+func DecoderHardware(gpu string) string { return In(i18n.Locale()).DecoderHardware(gpu) }
+
+// DecoderHardware says "hardware ({gpu})"
+// in the language of msgs.
+//
+// Stats HUD and session panel: video is decoded on this GPU.
+func (msgs Messages) DecoderHardware(gpu string) string {
+	return Catalog.Format(msgs.locale, "decoderHardware", map[string]any{"gpu": gpu})
+}
+
+// DecoderSoftware says "software"
+// in the language the app shows.
+func DecoderSoftware() string { return In(i18n.Locale()).DecoderSoftware() }
+
+// DecoderSoftware says "software"
+// in the language of msgs.
+func (msgs Messages) DecoderSoftware() string {
+	return Catalog.Format(msgs.locale, "decoderSoftware", nil)
+}
+
+// DecoderFallback says "software (hardware unavailable)"
+// in the language the app shows.
+//
+// Video decoding was asked of the GPU but falls back to the CPU.
+func DecoderFallback() string { return In(i18n.Locale()).DecoderFallback() }
+
+// DecoderFallback says "software (hardware unavailable)"
+// in the language of msgs.
+//
+// Video decoding was asked of the GPU but falls back to the CPU.
+func (msgs Messages) DecoderFallback() string {
+	return Catalog.Format(msgs.locale, "decoderFallback", nil)
+}
+
 // HpOtherViewer says "High Performance unavailable: another viewer is using this Mac's High Performance stream. Using Standard mode."
 // in the language the app shows.
 func HpOtherViewer() string { return In(i18n.Locale()).HpOtherViewer() }
