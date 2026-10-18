@@ -2,8 +2,10 @@ package rfb
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"image"
+	"log/slog"
 	"os"
 	"testing"
 )
@@ -65,5 +67,75 @@ func TestARDCursorFromMac(t *testing.T) {
 	e := feed(1000, nil, image.Rectangle{})
 	if e.rect.Min != image.Pt(5, 5) || e.img.Rect.Dx() != 28 {
 		t.Errorf("select of 1000: hotspot %v size %v, want the arrow", e.rect.Min, e.img.Rect.Size())
+	}
+}
+
+func TestARDPasteboard(t *testing.T) {
+	h := &testHandler{ev: make(chan event, 4)}
+	var out bytes.Buffer
+	c := &Client{h: h, appleARD: true, out: &out, log: slog.New(slog.DiscardHandler)}
+	read := func(msg []byte) {
+		t.Helper()
+		r := bytes.NewReader(msg)
+		c.rd.r = r
+		if err := c.readMsg(); err != nil {
+			t.Fatal(err)
+		}
+		if r.Len() != 0 {
+			t.Fatalf("%d bytes left", r.Len())
+		}
+	}
+
+	// MiscStatus 2: the Mac's pasteboard changed; fetched at once
+	// without a ClipboardAnnouncer.
+	read([]byte{0x14, 0, 0, 4, 0, 1, 0, 2})
+	if !bytes.Equal(out.Bytes(), ardFetchPasteboard()) {
+		t.Fatalf("sent %x, want a fetch", out.Bytes())
+	}
+	out.Reset()
+	read([]byte{0x14, 0, 0, 4, 0, 1, 0, 4}) // a heartbeat
+	if out.Len() != 0 {
+		t.Fatalf("sent %x for a heartbeat", out.Bytes())
+	}
+
+	// The reply: an item with a tagged RTF flavor before the text, and
+	// zlib that ends in a sync flush, as the Mac sends.
+	counted := func(b []byte, s string) []byte { return append(be.AppendUint32(b, uint32(len(s))), s...) }
+	archive := be.AppendUint32(nil, 2)
+	archive = counted(archive, "public.rtf")
+	archive = be.AppendUint32(archive, 0)
+	archive = be.AppendUint32(archive, 1)
+	archive = counted(counted(archive, "key"), "value")
+	archive = counted(archive, "{\rtf1 x}")
+	archive = counted(archive, ardTextFlavor)
+	archive = append(archive, 0, 0, 0, 0, 0, 0, 0, 0)
+	archive = counted(archive, "héllo\r\nworld")
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	zw.Write(archive)
+	zw.Flush()
+	reply := be.AppendUint32([]byte{0x1f, 0, 0, 0, 0, 0, 0, 0}, uint32(len(archive)))
+	reply = be.AppendUint32(reply, uint32(z.Len()))
+	read(append(reply, z.Bytes()...))
+	if e := h.next(t, "clipboard"); e.text != "héllo\nworld" {
+		t.Errorf("clipboard %q", e.text)
+	}
+
+	// The viewer's own 0x1f has the same layout, so it reads back.
+	if err := c.ClipboardText("to the Mac ✓"); err != nil {
+		t.Fatal(err)
+	}
+	read(out.Bytes())
+	if e := h.next(t, "clipboard"); e.text != "to the Mac ✓" {
+		t.Errorf("round trip %q", e.text)
+	}
+	// Empty text is an item without flavors: nothing to paste.
+	out.Reset()
+	c.ClipboardText("")
+	read(out.Bytes())
+	select {
+	case e := <-h.ev:
+		t.Errorf("empty pasteboard gave %+v", e)
+	default:
 	}
 }
