@@ -224,13 +224,15 @@ func TestDisplayUnanswered(t *testing.T) {
 
 	// A smaller display, 32x16: what both share is 32x16.
 	call(t, s, func() error { return c.SetDisplayConfiguration(32, 16, 1) }, framebufferUpdateRequest(false, 1, 1))
+	// Taken before the update that sends the change, so the client's
+	// timers cannot have started earlier than this.
+	sent := time.Now()
 	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
 	s.expect(ardAutoFBUpdate(true, 1, 1))
 	s.expect(framebufferUpdateRequest(true, 1, 1))
 	h.next(t, "done")
 	s.expect(ardAutoFBUpdate(true, 1, 1))
 	s.recv(4 + 8 + 0xb8)
-	sent := time.Now()
 
 	s.expect(ardAutoFBUpdate(true, 32, 16))
 	s.expect(framebufferUpdateRequest(false, 32, 16))
