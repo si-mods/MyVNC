@@ -27,6 +27,12 @@ var (
 	gpuList     = listGPUs
 )
 
+// stallUnits is how many units with a picture may give none on the GPU
+// before it counts as failed: about 130 ms at 60 Hz.
+const stallUnits = 8
+
+var errStalled = errors.New("mf: the GPU decoder gives no pictures")
+
 var errNotOnGPU = errors.New("mf: the MFT decodes this stream on the CPU, not the GPU")
 
 var logger atomic.Pointer[slog.Logger]
@@ -57,6 +63,7 @@ type Decoder struct {
 	gpu      *GPU // where b decodes; nil in software
 	fallback string
 	need     string // the profile the stream needs, once seen
+	empty    int    // units in a row with a picture that gave none
 }
 
 // NewDecoder opens a decoder for codec, on the GPU or the CPU as m says.
@@ -160,8 +167,9 @@ func (d *Decoder) moveTo(g *GPU, why string) error {
 }
 
 func (d *Decoder) decode(au []byte, t int64, hidden bool) ([]Frame, error) {
+	p, picture := scan(d.codec, au)
 	if d.gpu != nil && d.mode == Auto {
-		if p := streamProfile(d.codec, au); p != "" && p != d.need {
+		if p != "" && p != d.need {
 			d.need = p
 			if !d.gpu.has(p) {
 				g, why := pick(Auto, p, gpuList())
@@ -172,6 +180,17 @@ func (d *Decoder) decode(au []byte, t int64, hidden bool) ([]Frame, error) {
 		}
 	}
 	frames, err := d.b.Decode(au, t, hidden)
+	if d.gpu != nil && err == nil && picture {
+		// Each unit's picture comes out of its own Decode (see auds);
+		// a GPU decoder seen to give none for several stopped working.
+		d.empty++
+		if len(frames) > 0 {
+			d.empty = 0
+		}
+		if d.empty >= stallUnits {
+			err = errStalled
+		}
+	}
 	if err != nil && d.gpu != nil {
 		// The unit again in software: a keyframe decodes there, and
 		// after any other the caller asks for one, as on any error.

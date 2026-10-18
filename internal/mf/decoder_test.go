@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestStreamProfile(t *testing.T) {
+func TestScan(t *testing.T) {
 	for _, c := range []struct {
 		c    Codec
 		file string
@@ -22,11 +22,16 @@ func TestStreamProfile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := streamProfile(c.c, data); got != c.want {
-			t.Errorf("%s: %q, want %q", c.file, got, c.want)
+		if got, pic := scan(c.c, data); got != c.want || !pic {
+			t.Errorf("%s: %q, picture %v; want %q", c.file, got, pic, c.want)
 		}
-		if units := split(c.c, data); len(units) > 1 && streamProfile(c.c, units[len(units)-1]) != "" {
-			t.Errorf("%s: a unit without an SPS has a profile", c.file)
+		if units := split(c.c, data); len(units) > 1 {
+			if p, pic := scan(c.c, units[len(units)-1]); p != "" || !pic {
+				t.Errorf("%s: a unit without an SPS: %q, picture %v", c.file, p, pic)
+			}
+		}
+		if p, pic := scan(c.c, data[:20]); pic {
+			t.Errorf("%s: parameter sets alone: %q, a picture", c.file, p)
 		}
 	}
 }
@@ -47,6 +52,7 @@ type fake struct {
 	gpu    string
 	log    *[]string
 	failAt int // the Decode, from 1, that fails; 0 never
+	silent bool
 	n      int
 }
 
@@ -55,6 +61,9 @@ func (f *fake) Decode(au []byte, t int64, hidden bool) ([]Frame, error) {
 	*f.log = append(*f.log, "decode on "+f.where())
 	if f.n == f.failAt {
 		return nil, errors.New("device removed")
+	}
+	if f.silent {
+		return nil, nil
 	}
 	return []Frame{{Time: t}}, nil
 }
@@ -72,6 +81,11 @@ func (f *fake) where() string {
 // open on the GPUs named in noOpen and fail their failAt'th decode on
 // the GPUs named in failDecode.
 func withFakes(t *testing.T, gpus []*GPU, noOpen, failDecode string) *[]string {
+	return withSilent(t, gpus, noOpen, failDecode, "")
+}
+
+// withSilent is withFakes with the GPUs named in silent giving no pictures.
+func withSilent(t *testing.T, gpus []*GPU, noOpen, failDecode, silent string) *[]string {
 	var log []string
 	oldOpen, oldList := openBackend, gpuList
 	t.Cleanup(func() { openBackend, gpuList = oldOpen, oldList })
@@ -87,6 +101,7 @@ func withFakes(t *testing.T, gpus []*GPU, noOpen, failDecode string) *[]string {
 			if strings.Contains(failDecode, g.Name) {
 				f.failAt = 2
 			}
+			f.silent = strings.Contains(silent, g.Name)
 		}
 		log = append(log, "open "+f.where())
 		return f, nil
@@ -177,4 +192,29 @@ func TestDecodeFailureFallsBack(t *testing.T) {
 	log := withFakes(t, []*GPU{nvidia}, "", "NVIDIA")
 	check(t, run(t, H264, Hardware, []byte{1}, []byte{2}, []byte{3}), "software", "failed to decode: device removed", log,
 		"open NVIDIA", "decode on NVIDIA", "decode on NVIDIA", "open cpu", "close NVIDIA", "decode on cpu", "decode on cpu", "close cpu")
+}
+
+// TestStallFallsBack: a GPU that takes units with pictures but gives
+// none fails after stallUnits; that unit decodes in software.
+func TestStallFallsBack(t *testing.T) {
+	log := withSilent(t, []*GPU{nvidia}, "", "", "NVIDIA")
+	d, err := NewDecoder(H264, Auto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice := []byte{0, 0, 1, 0x65, 0x88} // an IDR slice
+	for i := range stallUnits {
+		frames, err := d.Decode(slice, int64(i))
+		if want := i == stallUnits-1; err != nil || (len(frames) == 1) != want {
+			t.Fatalf("unit %d: %d frames, %v", i, len(frames), err)
+		}
+	}
+	info := d.Info()
+	d.Close()
+	if info.Decoding() != "software" || !strings.Contains(info.Fallback, "no pictures") {
+		t.Errorf("%s, %q", info.Decoding(), info.Fallback)
+	}
+	if n := strings.Count(strings.Join(*log, ";"), "decode on NVIDIA"); n != stallUnits {
+		t.Errorf("%d decodes on the GPU, want %d: %v", n, stallUnits, *log)
+	}
 }

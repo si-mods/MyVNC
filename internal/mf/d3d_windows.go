@@ -62,8 +62,8 @@ func (g guid) String() string {
 // a removed device fails the decoder, which then falls back to software.
 type device struct {
 	GPU
-	dev, manager uintptr // ID3D11Device, IMFDXGIDeviceManager
-	err          error
+	dev, ctx, manager uintptr // ID3D11Device, its immediate context, IMFDXGIDeviceManager
+	err               error
 }
 
 // gpus lists the adapters with a hardware video decoder, the preferred
@@ -117,6 +117,7 @@ func enumGPUs(prefer string) []*device {
 			list = append(list, found{d, mem})
 		} else {
 			release(d.manager)
+			release(d.ctx)
 			release(d.dev)
 		}
 	}
@@ -149,13 +150,11 @@ func (d *device) open(adapter uintptr) error {
 	levels := [...]uint32{0xb100, 0xb000, 0xa100, 0xa000} // 11.1 to 10.0
 	const flags = 0x800                                   // D3D11_CREATE_DEVICE_VIDEO_SUPPORT
 	var level uint32
-	var ctx uintptr
 	hr, _, _ := procD3D11CreateDevice.Call(adapter, 0, 0, flags, uintptr(unsafe.Pointer(&levels)), uintptr(len(levels)), 7,
-		uintptr(unsafe.Pointer(&d.dev)), uintptr(unsafe.Pointer(&level)), uintptr(unsafe.Pointer(&ctx))) // D3D_DRIVER_TYPE_UNKNOWN, D3D11_SDK_VERSION
+		uintptr(unsafe.Pointer(&d.dev)), uintptr(unsafe.Pointer(&level)), uintptr(unsafe.Pointer(&d.ctx))) // D3D_DRIVER_TYPE_UNKNOWN, D3D11_SDK_VERSION
 	if failed(hr) {
 		return hrError("D3D11CreateDevice", hr)
 	}
-	release(ctx)
 	var video uintptr
 	if hr := comCall(d.dev, 0, uintptr(unsafe.Pointer(&iidID3D11VideoDev)), uintptr(unsafe.Pointer(&video))); failed(hr) {
 		return hrError("QueryInterface(ID3D11VideoDevice)", hr)
@@ -187,4 +186,59 @@ func (d *device) open(adapter uintptr) error {
 		return hrError("IMFDXGIDeviceManager.ResetDevice", hr)
 	}
 	return nil
+}
+
+// vtable indices of ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D
+// and IMFDXGIBuffer.
+const (
+	devCreateTexture2D  = 5
+	ctxMap              = 14
+	ctxUnmap            = 15
+	ctxCopySubresource  = 46
+	texGetDesc          = 10
+	dxgiBufGetResource  = 3
+	dxgiBufGetSubresIdx = 4
+	dxgiFormatNV12      = 103
+)
+
+// mapTexture copies the picture in the DXGI buffer db to the staging
+// texture and maps it: base, the bytes between rows and the length. The
+// caller unmaps it.
+// ponytail: the copy is waited for at once; a second staging texture
+// would overlap it with the next picture's decoding if the 1-2 ms count.
+func (d *mft) mapTexture(db uintptr) (base uintptr, pitch, length int, err error) {
+	var tex uintptr
+	if hr := comCall(db, dxgiBufGetResource, uintptr(unsafe.Pointer(&iidID3D11Texture2D)), uintptr(unsafe.Pointer(&tex))); failed(hr) {
+		return 0, 0, 0, hrError("IMFDXGIBuffer.GetResource", hr)
+	}
+	defer release(tex)
+	var sub uint32
+	comCall(db, dxgiBufGetSubresIdx, uintptr(unsafe.Pointer(&sub)))
+	var desc [11]uint32 // D3D11_TEXTURE2D_DESC
+	comCall(tex, texGetDesc, uintptr(unsafe.Pointer(&desc)))
+	if key := [3]uint32{desc[0], desc[1], desc[4]}; d.staging == 0 || d.stagingFor != key {
+		release(d.staging)
+		d.staging = 0
+		// Width, Height, MipLevels, ArraySize, Format, SampleDesc,
+		// D3D11_USAGE_STAGING, no binding, D3D11_CPU_ACCESS_READ.
+		sd := [11]uint32{desc[0], desc[1], 1, 1, desc[4], 1, 0, 3, 0, 0x20000, 0}
+		if hr := comCall(d.dev.dev, devCreateTexture2D, uintptr(unsafe.Pointer(&sd)), 0, uintptr(unsafe.Pointer(&d.staging))); failed(hr) {
+			d.staging = 0
+			return 0, 0, 0, hrError("CreateTexture2D", hr)
+		}
+		d.stagingFor = key
+	}
+	comCall(d.dev.ctx, ctxCopySubresource, d.staging, 0, 0, 0, 0, tex, uintptr(sub), 0)
+	var m struct {
+		data             uintptr
+		rowPitch, depthP uint32
+	}
+	if hr := comCall(d.dev.ctx, ctxMap, d.staging, 0, 1, 0, uintptr(unsafe.Pointer(&m))); failed(hr) { // D3D11_MAP_READ
+		return 0, 0, 0, hrError("ID3D11DeviceContext.Map", hr)
+	}
+	rows := int(desc[1])
+	if desc[4] == dxgiFormatNV12 {
+		rows += rows / 2
+	}
+	return m.data, int(m.rowPitch), int(m.rowPitch) * rows, nil
 }

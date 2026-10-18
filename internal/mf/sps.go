@@ -12,9 +12,9 @@ func baseProfile(c Codec) string {
 	return ProfileH264
 }
 
-// streamProfile is the profile the first SPS in the Annex B unit au
-// needs; empty when au has none before its first slice.
-func streamProfile(c Codec, au []byte) string {
+// scan reads the Annex B unit au up to its first slice: the profile its
+// SPS needs, empty without one, and whether it holds a picture.
+func scan(c Codec, au []byte) (profile string, picture bool) {
 	for i := 0; i+3 < len(au); i++ {
 		if au[i] != 0 || au[i+1] != 0 || au[i+2] != 1 {
 			continue
@@ -22,21 +22,23 @@ func streamProfile(c Codec, au []byte) string {
 		nal := au[i+3:]
 		if c == HEVC {
 			switch t := nal[0] >> 1 & 0x3f; {
-			case t == 33:
-				return hevcProfile(nal)
+			case t == 33 && profile == "":
+				profile = hevcProfile(nal)
 			case t < 32:
-				return ""
+				return profile, true
 			}
 		} else {
 			switch nal[0] & 0x1f {
 			case 7:
-				return h264Profile(nal)
+				if profile == "" {
+					profile = h264Profile(nal)
+				}
 			case 1, 5:
-				return ""
+				return profile, true
 			}
 		}
 	}
-	return ""
+	return profile, false
 }
 
 // bits reads an RBSP, emulation prevention bytes dropped, past its end

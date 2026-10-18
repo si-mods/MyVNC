@@ -173,6 +173,8 @@ type mft struct {
 	hidden     bool    // no conversion
 	out        uintptr // the output buffer, see outputSample
 	outFor     uint32  // the output size out was made for
+	staging    uintptr // the ID3D11Texture2D pictures are read back through
+	stagingFor [3]uint32
 }
 
 // initThread joins the MTA and starts Media Foundation once.
@@ -215,6 +217,7 @@ func openMFT(c Codec, g *GPU) (backend, error) {
 }
 
 func (d *mft) close() {
+	release(d.staging)
 	release(d.out)
 	release(d.mft)
 	d.mft, d.out = 0, 0
@@ -551,7 +554,13 @@ func (d *mft) frame(sample uintptr) (Frame, error) {
 		if db == 0 {
 			return f, errNotOnGPU
 		}
-		release(db)
+		defer release(db)
+		base, pitch, length, err := d.mapTexture(db)
+		if err != nil {
+			return f, err
+		}
+		defer comCall(d.dev.ctx, ctxUnmap, d.staging, 0)
+		return d.convert(f, base, pitch, length)
 	}
 	var b2d uintptr
 	comCall(buf, 0, uintptr(unsafe.Pointer(&iidIMF2DBuffer)), uintptr(unsafe.Pointer(&b2d)))
@@ -575,6 +584,12 @@ func (d *mft) frame(sample uintptr) (Frame, error) {
 		defer comCall(buf, bufUnlock)
 		pitch, length = d.stride, int(cur)
 	}
+	return d.convert(f, base, pitch, length)
+}
+
+// convert makes f's picture of the length bytes at base, rows pitch
+// apart, in the output subtype.
+func (d *mft) convert(f Frame, base uintptr, pitch, length int) (Frame, error) {
 	// A row is at least this long; the HEVC MFT reports AYUV's default
 	// stride in pixels.
 	row := d.frameW
