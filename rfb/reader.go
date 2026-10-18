@@ -79,16 +79,14 @@ func (c *Client) readFramebufferUpdate() error {
 	c.updateStart()
 	c.mu.Lock()
 	var err error
-	w, h, ask := c.width, c.height, !c.cuEnabled
+	ask := !c.cuEnabled
+	w, h := c.requestSizeLocked() // see hp.go
 	if c.hpHolding() {
 		// The picture is the media stream's; RFB only brings cursors and
 		// layouts, which the armed one pixel still does.
 		w, h, ask = 1, 1, ask && !c.hp.live
 	}
-	if c.disp.holds() {
-		w, h = 1, 1 // a display change waits or is out; see hp.go
-	}
-	c.disp.inUpdate = true
+	c.disp.inUpdate, c.disp.heldReq = true, w == 1 && h == 1
 	if c.appleARD && w > 0 && h > 0 {
 		err = c.writeLocked(ardAutoFBUpdate(true, w, h))
 	}
@@ -346,10 +344,13 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 			c.cursorPos(r.Min)
 			return false, nil
 		case PseudoEncodingARDDisplayInfo:
-			c.ardLayout = true
+			c.mu.Lock()
+			c.ardLayout = true // read by the display timers
+			c.mu.Unlock()
 			w, h := c.rd.u16(), c.rd.u16()
 			count := c.rd.u16()
 			c.rd.skip(4 + int64(count)*28)
+			c.log.Debug("rfb: ARD layout 1101", "width", w, "height", h, "displays", count)
 			if c.rd.err == nil && w != 0 && h != 0 {
 				c.displayLaid(int(w), int(h))
 				return false, c.resize(int(w), int(h))
@@ -367,9 +368,21 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		case PseudoEncodingARDCursorAlpha:
 			return false, c.readARDCursorAlpha(r)
 		case PseudoEncodingARDDisplayInfo2:
-			c.ardLayout = true
-			c.rd.skip(int64(c.rd.u16()))
-			return false, c.rd.err
+			c.mu.Lock()
+			c.ardLayout = true // read by the display timers
+			c.mu.Unlock()
+			body := c.rd.bytes(int(c.rd.u16()))
+			if c.rd.err != nil {
+				return false, c.rd.err
+			}
+			c.log.Debug("rfb: ARD layout 1105", "body", fmt.Sprintf("%x", body))
+			if w, h, ok := ardLayout2Size(body); ok {
+				c.displayLaid(w, h)
+				if w != c.width || h != c.height { // only this goroutine sets them
+					return false, c.resize(w, h)
+				}
+			}
+			return false, nil
 		case PseudoEncodingARDSessionEncryption:
 			return false, c.readARDSessionEncryption()
 		case EncodingARDProMode, PseudoEncodingARDMediaStream:
