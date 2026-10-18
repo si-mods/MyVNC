@@ -243,7 +243,8 @@ func TestMac(t *testing.T) {
 	host := env("MYVNC_MAC_SSH", "macmini")
 	sh := func(cmd string, stdin string) string {
 		t.Helper()
-		x := exec.Command("ssh", "-o", "BatchMode=yes", host, cmd)
+		// pbcopy and pbpaste turn non-ASCII into ? without a UTF-8 locale.
+		x := exec.Command("ssh", "-o", "BatchMode=yes", host, "LANG=en_US.UTF-8 "+cmd)
 		x.Stdin = strings.NewReader(stdin)
 		b, err := x.Output()
 		if err != nil {
@@ -312,8 +313,12 @@ func TestMac(t *testing.T) {
 		if err := c.ClipboardText(send); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(time.Second)
-		if got := sh("pbpaste", ""); got != send {
+		got := ""
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end) && got != send; {
+			time.Sleep(time.Second)
+			got = sh("pbpaste", "")
+		}
+		if got != send {
 			t.Errorf("Mac pasteboard %q, want %q", got, send)
 		} else {
 			t.Logf("MyVNC -> Mac: %q", got)
