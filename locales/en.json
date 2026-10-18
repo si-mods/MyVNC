@@ -78,6 +78,8 @@
   "statsDecode": "Decode {ms} ms",
   "statsBitrate": "{mbps} Mbit/s",
   "statsEncoding": "Encoding {name}",
+  "statsDropped": "Dropped {n}/s",
+  "@statsDropped": { "description": "Stats HUD, High Performance: pictures decoded but not shown.", "placeholders": { "n": { "type": "String", "example": "3" } } },
   "statsResolution": "Resolution {size}",
   "statsMode": "Mode {mode}",
   "@statsMode": { "description": "Stats HUD and session panel.", "placeholders": { "mode": { "type": "String", "example": "Standard" } } },

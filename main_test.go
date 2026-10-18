@@ -662,3 +662,25 @@ func TestTitleFollowsARDEncryption(t *testing.T) {
 	a.until("the encrypted title", func() bool { return strings.HasSuffix(a.title, "(ARD DH, encrypted)") })
 	a.disconnect()
 }
+
+// In High Performance the HUD counts the media stream's pictures, not the
+// framebuffer's, and drops the RFB encoding lines; Standard is unchanged
+// (TestStatsOverlay).
+func TestStatsOverlayHighPerformance(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Stats = true
+	a.add(ardServer(t))
+	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	if !a.tt.HasText("Encoding Raw") {
+		t.Fatalf("standard texts %q", a.tt.Texts())
+	}
+	a.tt.Advance(time.Second)
+	a.tt.Advance(time.Second)
+	a.sess.ShowMedia(image.NewRGBA(image.Rect(0, 0, 64, 32)), "HEVC 4:4:4 64×32", mf.Info{})
+	a.until("the media picture", func() bool { return a.sess.Media != "" })
+	a.tt.Advance(time.Second)
+	if a.tt.HasText("FPS 0") || !a.tt.HasText("Dropped 0/s") || a.tt.HasText("Encoding Raw") || a.tt.HasText("Asked") {
+		t.Errorf("texts %q", a.tt.Texts())
+	}
+	a.disconnect()
+}

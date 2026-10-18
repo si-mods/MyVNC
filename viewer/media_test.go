@@ -67,12 +67,13 @@ func TestVideoPipe(t *testing.T) {
 		return d, nil
 	}
 
+	var n counters
 	keys := make(chan struct{}, 100)
 	shown := make(chan string, 100)
 	noCodec := make(chan error, 2)
 	p := newVideoPipe(mf.Hardware, func() { keys <- struct{}{} },
 		func(img *image.RGBA, mode string, _ mf.Info) { shown <- mode },
-		func(err error) { noCodec <- err })
+		func(err error) { noCodec <- err }, &n)
 	defer p.close()
 
 	unit := func(c media.Codec) *media.Unit { return &media.Unit{Codec: c, NALs: [][]byte{{0x26, 1}}} }
@@ -106,6 +107,18 @@ func TestVideoPipe(t *testing.T) {
 		t.Errorf("%d pictures decoded unseen, want %d", hidden, videoQueue-unseenBehind)
 	}
 	mu.Unlock()
+
+	// The counters: bytes of every unit that was pushed (the dropped one
+	// too), a picture decoded per unit, hidden or not.
+	if b := n.mediaBytes.Load(); b != int64(2*(videoQueue+2)) {
+		t.Errorf("%d media bytes, want %d", b, 2*(videoQueue+2))
+	}
+	if d := n.mediaDecoded.Load(); d != int64(1+videoQueue) {
+		t.Errorf("%d pictures decoded, want %d", d, 1+videoQueue)
+	}
+	if n.mediaDecodeNs.Load() <= 0 {
+		t.Error("no decode time")
+	}
 
 	// A new codec: the old decoder closes, a new one opens, and fails.
 	mu.Lock()
