@@ -4,7 +4,7 @@
 // Performance and reports, once a second, what arrives on the media
 // stream's UDP ports. It shows no picture.
 //
-//	ardprobe -host 192.168.88.241 -user yibo [-dump DIR] [-mirror] [-h264]
+//	ardprobe -host 192.168.88.241 -user yibo [-dump DIR] [-rtpdump FILE] [-decode] [-mirror] [-h264]
 //
 // The password comes from MYVNC_E2E_PASS, or the console without echo.
 package main
@@ -43,7 +43,8 @@ func main() {
 	tiles := flag.Int("tiles", 1, "tilesPerFrame (Apple's viewer: 4, with DONL strips)")
 	duration := flag.Duration("t", 0, "stop after this long (0: until Ctrl+C)")
 	verbose := flag.Bool("v", false, "debug log")
-	decodeFlag := flag.Bool("decode", false, "decode the pictures with Media Foundation (and save the first as DIR/frame.png with -dump)")
+	rtpdumpFlag := flag.String("rtpdump", "", "write the picture leg's RTP packets, decrypted, to this file (see rtpdump.go)")
+	decodeFlag := flag.Bool("decode", false, "decode the pictures with Media Foundation (and save the first and last as DIR/frame.png and last.png with -dump)")
 	flag.Parse()
 	if *host == "" {
 		flag.Usage()
@@ -89,11 +90,19 @@ func main() {
 		mu.Unlock()
 	}
 	hp.OnReply = func(r media.Reply) { note("reply " + r.String()) }
-	hp.OnFallback = func(reason string) { note("FALLBACK " + reason) }
+	hp.OnFallback = func(err error) { note("FALLBACK " + err.Error()) }
 	if *dump != "" {
 		if err := os.MkdirAll(*dump, 0o755); err != nil {
 			fatal("%v", err)
 		}
+	}
+	var rtp *rtpDump
+	if *rtpdumpFlag != "" {
+		var err error
+		if rtp, err = newRTPDump(*rtpdumpFlag); err != nil {
+			fatal("%v", err)
+		}
+		hp.OnPacket = rtp.packet
 	}
 	var c *rfb.Client
 	var dec *decoder
@@ -172,6 +181,12 @@ func main() {
 		if dumpOut != nil && dumped < *n {
 			dumpOut.Close()
 		}
+		if rtp != nil {
+			rtp.close()
+		}
+		if dec != nil {
+			dec.saveLast()
+		}
 	}
 	start := time.Now()
 	tick := time.NewTicker(time.Second)
@@ -195,7 +210,11 @@ func main() {
 		for _, e := range ev {
 			fmt.Printf("%6.1fs  %s\n", time.Since(start).Seconds(), e)
 		}
-		fmt.Printf("%6.1fs  %s\n", time.Since(start).Seconds(), statusLine(c.MediaStream()))
+		line := statusLine(c.MediaStream())
+		if dec != nil {
+			line += " | " + dec.status()
+		}
+		fmt.Printf("%6.1fs  %s\n", time.Since(start).Seconds(), line)
 	}
 }
 
@@ -218,9 +237,12 @@ func statusLine(s *media.Stream) string {
 		}
 		return b
 	}
+	pics := fmt.Sprintf("pictures %d (IDR %d) lost %d", st.Units, st.Keys, st.Lost)
+	if st.Late+st.Missing > 0 {
+		pics += fmt.Sprintf(", packets late %d missing %d", st.Late, st.Missing)
+	}
 	line := strings.Join([]string{
-		leg("video", st.Video), leg("audio", st.Audio),
-		fmt.Sprintf("pictures %d (IDR %d) lost %d", st.Units, st.Keys, st.Lost),
+		leg("video", st.Video), leg("audio", st.Audio), pics,
 		fmt.Sprintf("sent RR %d RCTL %d PLI %d refresh %d ack %d", st.RR, st.RCTL, st.PLI, st.Refresh, st.Acks),
 	}, " | ")
 	if st.SendErrors > 0 {

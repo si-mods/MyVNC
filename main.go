@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"log"
 	"log/slog"
@@ -17,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -86,9 +86,13 @@ type app struct {
 	focused    bool
 	ungrabbed  bool // the user released the grab with the shortcut keys
 	pxScale    float32
-	sentSize   image.Point // last remote resize asked for
-	lastResize time.Time
 	srvLED     uint32
+	dyn        viewer.Resizer
+	dynUrgent  bool   // the next size goes at once: a new session, full screen, another monitor
+	dynRefused bool   // the server cannot resize: the session scales to fit instead
+	dynHint    bool   // the session panel says so, until dismissed
+	hpNote     string // why High Performance fell back, shown until dismissed
+	hpFailed   bool   // it fell back: the panel offers a retry
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -220,23 +224,87 @@ func (a *app) ctrlAltDel() {
 func (a *app) toggleFullScreen() {
 	a.cfg.FullScreen = !a.cfg.FullScreen
 	a.saveConfig()
+	a.dynUrgent = true
 	a.fullScreen(a.cfg.FullScreen)
 }
 
-// remoteResize asks the server for the screen box's size in device
-// pixels, at most every 100 ms, as TigerVNC's DesktopWindow::remoteResize.
-func (a *app) remoteResize(p *ui.Painter, w, h int) {
-	want := image.Pt(w, h)
-	if a.cfg.ViewOnly || w <= 0 || h <= 0 || want == a.sentSize {
+// scaling is the scaling mode in force: Fit while dynamic resolution is
+// on, which then shows the remote desktop 1:1, and the frame before a
+// resize scaled until the new one arrives; Fit too when the server
+// refuses to resize.
+func (a *app) scaling() string {
+	if a.cfg.DynamicResolution {
+		return "Fit"
+	}
+	return a.cfg.Scaling
+}
+
+// followWindow asks the server for the screen box r's size in device
+// pixels once the window has kept it for viewer.ResizeDebounce, as macOS
+// Screen Sharing's dynamic resolution; a Mac gets a virtual display at the
+// monitor's density.
+func (a *app) followWindow(p *ui.Painter, r ui.Rect) {
+	if !a.cfg.DynamicResolution || a.dynRefused || a.cfg.ViewOnly {
 		return
 	}
-	if wait := 100*time.Millisecond - p.Now().Sub(a.lastResize); wait > 0 {
+	a.dyn.Want(viewer.DesktopSize(r.W, r.H, p.Scale()), p.Now(), a.dynUrgent)
+	a.dynUrgent = false
+	size, ok, wait := a.dyn.Due(p.Now())
+	if wait > 0 {
 		p.After(wait)
+	}
+	if !ok {
 		return
 	}
-	a.sentSize, a.lastResize = want, p.Now()
-	a.log.Debug("remote resize", "width", w, "height", h)
-	a.sess.SetDesktopSize(w, h)
+	a.log.Debug("dynamic resolution", "width", size.X, "height", size.Y, "scale", p.Scale())
+	a.sess.SetDesktopSize(size.X, size.Y, viewer.Density(p.Scale()))
+}
+
+// mediaFallback tells the user why High Performance gave way to Standard
+// mode, and offers a retry.
+func (a *app) mediaFallback(err error) {
+	a.log.Info("High Performance fell back", "err", err)
+	a.hpNote, a.hpFailed = mediaText(err), true
+}
+
+// mediaText is a High Performance fallback for the user. The protocol
+// does not say who the other viewer is, so neither does this.
+func mediaText(err error) string {
+	var refused *rfb.MediaRefusedError
+	var noDec *viewer.NoDecoderError
+	switch {
+	case errors.Is(err, rfb.ErrMediaOtherViewer):
+		return locales.HpOtherViewer()
+	case errors.Is(err, rfb.ErrMediaNotArrived):
+		return locales.HpNoMedia()
+	case errors.As(err, &noDec):
+		return locales.HpNoDecoder(noDec.Codec.String())
+	case errors.As(err, &refused):
+		return locales.HpRefused(strconv.Itoa(int(refused.Type)), strconv.Itoa(int(refused.Code)))
+	}
+	return locales.HpUnavailable(strings.TrimPrefix(err.Error(), "rfb: "))
+}
+
+// mediaMode is the session's mode, for the panel and the HUD.
+func (a *app) mediaMode() string {
+	if a.sess.Media != "" {
+		return locales.ModeHighPerformance(a.sess.Media)
+	}
+	return locales.ModeStandard()
+}
+
+// retryMedia asks for High Performance again.
+func (a *app) retryMedia() {
+	a.hpNote, a.hpFailed = "", false
+	a.sess.RetryHighPerformance()
+}
+
+// resizeRefused falls back to Fit scaling for the session.
+func (a *app) resizeRefused() {
+	if !a.dynRefused {
+		a.log.Info("the server does not change its size; scaling to fit")
+		a.dynRefused, a.dynHint = true, true
+	}
 }
 
 // pointerMask maps ui buttons (primary, secondary, middle) to RFB bits.
@@ -614,6 +682,9 @@ func (a *app) connectTo(server string, again bool) {
 				return a.verifyCert(ctx, addr, certs[0], verr)
 			},
 		}
+		if cfg.HighPerformance {
+			opt.HighPerformance = &rfb.HighPerformance{} // only an ARD server takes it
+		}
 		s, err := viewer.Connect(ctx, addr, opt, a.post)
 		if cfg.Remember {
 			var ae *rfb.AuthError
@@ -801,7 +872,9 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
 	a.stats = statsSample{}
 	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
-	a.ungrabbed, a.menuOpen, a.srvLED, a.sentSize = false, false, keymap.LEDUnknown, image.Point{}
+	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
+	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
+	a.hpNote, a.hpFailed = "", false
 	a.setTitle(s.Encrypted())
 	s.OnName = a.setName
 	s.OnClipboard = func(text string) {
@@ -811,6 +884,8 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	}
 	s.OnBell = a.beep
 	s.OnLED = a.serverLED
+	s.OnResizeRefused = a.resizeRefused
+	s.OnMediaFallback = a.mediaFallback
 	a.sendClipboard()
 	a.fullScreen(a.cfg.FullScreen)
 	a.updateGrab()
@@ -893,7 +968,7 @@ func tigerParams(cfg *viewer.Config) *params.Viewer {
 	p.CompressLevel.Set(cfg.Compress)
 	p.QualityLevel.Set(cfg.Quality)
 	p.FullScreen.Set(cfg.FullScreen)
-	p.RemoteResize.Set(cfg.RemoteResize)
+	p.RemoteResize.Set(cfg.DynamicResolution)
 	p.ViewOnly.Set(cfg.ViewOnly)
 	p.EmulateMiddleButton.Set(cfg.EmulateMiddleButton)
 	p.AcceptClipboard.Set(cfg.AcceptClipboard)
@@ -915,7 +990,7 @@ func (a *app) applyParams(p *params.Viewer) {
 	}
 	c.Quality = p.QualityLevel.Value()
 	c.FullScreen = p.FullScreen.Value()
-	c.RemoteResize = p.RemoteResize.Value()
+	c.DynamicResolution = p.RemoteResize.Value()
 	c.ViewOnly = p.ViewOnly.Value()
 	c.EmulateMiddleButton = p.EmulateMiddleButton.Value()
 	c.AcceptClipboard = p.AcceptClipboard.Value()
