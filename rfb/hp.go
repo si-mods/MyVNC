@@ -89,7 +89,6 @@ type hpState struct {
 	failed   bool
 	answers  int // answers so far, so that a timeout knows its own
 	ports    [2]uint16
-	offered  image.Point // the size of the offer out or last made
 	waitLogs bool
 	stream   *media.Stream // under c.mu
 }
@@ -218,8 +217,10 @@ func (c *Client) hpStep() error {
 }
 
 // hpOffer makes the one offer for the ports named, unless one is out or a
-// display change holds it, with the size of the framebuffer, which the
-// Mac's layout has set. Any goroutine.
+// display change holds it. Its size is the framebuffer's, which the Mac's
+// layout sets, or while a change is out past its hold the size asked:
+// the Mac takes a while to lay a new display out (1.9 to 2.3 seconds on
+// a Mac mini) and answers with the display it has then. Any goroutine.
 func (c *Client) hpOffer() error {
 	hp := c.hp
 	if hp == nil {
@@ -233,8 +234,10 @@ func (c *Client) hpOffer() error {
 	}
 	p := hp.cfg.Offer
 	p.Width, p.Height = c.width, c.height
+	if !c.disp.out.IsZero() {
+		p.Width, p.Height = c.disp.mode[0], c.disp.mode[1]
+	}
 	hp.invited, hp.pending = false, true
-	hp.offered = image.Pt(p.Width, p.Height)
 	c.mu.Unlock()
 	offer := hp.secrets.Offer(p)
 	c.log.Info("rfb: High Performance: offering the media stream", "width", p.Width, "height", p.Height,
@@ -260,10 +263,11 @@ func (c *Client) hpReply(payload []byte) error {
 	switch r.Kind {
 	case media.ReplyPorts:
 		c.mu.Lock()
-		// The Mac repeats its ports while an offer is out; a second offer
-		// as its capture starts can fail it (remotex: didStart error
-		// 32000). Only a display laid out anew since wants another.
-		if !hp.pending || hp.offered != image.Pt(c.width, c.height) || hp.ports != [2]uint16{r.AudioPort, r.VideoPort} {
+		// The Mac repeats its ports while an offer is out, also as it
+		// lays out a display changed meanwhile, and answers that offer
+		// with the new display; a second offer as its capture starts can
+		// fail it (remotex: didStart error 32000).
+		if !hp.pending || hp.ports != [2]uint16{r.AudioPort, r.VideoPort} {
 			hp.invited = true
 			hp.live = false // a display change stops the stream until the next offer
 		}
