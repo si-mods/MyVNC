@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/binary"
+	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -40,28 +41,21 @@ func mediaRect(body []byte) []any {
 	return []any{uint16(0), uint16(0), uint16(0), uint16(0), EncodingARDProMode, uint16(len(body)), body}
 }
 
-// TestHighPerformanceSequence drives the RFB side of High Performance
-// against a fake Mac over TCP: 0x1d before SetPixelFormat, no 1010 in the
-// first list, the 1010-first list only once encrypted and laid out, the
-// ports bound before the one offer, no requests after the answer, and the
-// fallback on a kind 3 error.
-func TestHighPerformanceSequence(t *testing.T) {
+// hpSession runs an ARD session with hp against a fake Mac over TCP up to
+// the second SetEncodings, the one with 1010 first.
+func hpSession(t *testing.T, hp *HighPerformance) (*Client, *fakeServer) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() { ln.Close() })
 	h := &testHandler{ev: make(chan event, 64)}
-	replies := make(chan media.Reply, 8)
-	fallback := make(chan string, 1)
 	opt := Options{
-		Username: "alice",
-		Password: func() (string, string, error) { return "", "pw", nil },
-		Decoders: map[int32]pixel.Decoder{EncodingRaw: rawDecoder{}},
-		HighPerformance: &HighPerformance{
-			OnReply:    func(r media.Reply) { replies <- r },
-			OnFallback: func(reason string) { fallback <- reason },
-		},
+		Username:        "alice",
+		Password:        func() (string, string, error) { return "", "pw", nil },
+		Decoders:        map[int32]pixel.Decoder{EncodingRaw: rawDecoder{}},
+		HighPerformance: hp,
 	}
 	type res struct {
 		c   *Client
@@ -81,7 +75,7 @@ func TestHighPerformanceSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer srv.Close()
+	t.Cleanup(func() { srv.Close() })
 	srv.SetDeadline(time.Now().Add(10 * time.Second))
 	s := &fakeServer{t: t, conn: srv, r: srv, w: srv}
 
@@ -125,7 +119,7 @@ func TestHighPerformanceSequence(t *testing.T) {
 		t.Fatal(r.err)
 	}
 	c := r.c
-	defer c.Close()
+	t.Cleanup(func() { c.Close() })
 	go c.Run()
 
 	// The first update: a layout and the session key.
@@ -142,6 +136,22 @@ func TestHighPerformanceSequence(t *testing.T) {
 	if encs := s.recvEncodings(); encs[0] != EncodingARDProMode {
 		t.Fatalf("second SetEncodings %v", encs)
 	}
+
+	return c, s
+}
+
+// TestHighPerformanceSequence drives the RFB side of High Performance
+// against a fake Mac over TCP: 0x1d before SetPixelFormat, no 1010 in the
+// first list, the 1010-first list only once encrypted and laid out, the
+// ports bound before the one offer, no requests after the answer, and the
+// fallback on a kind 3 error.
+func TestHighPerformanceSequence(t *testing.T) {
+	replies := make(chan media.Reply, 8)
+	fallback := make(chan error, 1)
+	c, s := hpSession(t, &HighPerformance{
+		OnReply:    func(r media.Reply) { replies <- r },
+		OnFallback: func(err error) { fallback <- err },
+	})
 
 	// Kind 1: the ports. They are bound, then the offer goes out.
 	ap, vp := freeUDPPort(t), freeUDPPort(t)
@@ -205,7 +215,68 @@ func TestHighPerformanceSequence(t *testing.T) {
 	}
 	s.expect(ardAutoFBUpdate(true, 64, 32))
 	s.expect(framebufferUpdateRequest(false, 64, 32))
-	if reason := <-fallback; reason == "" || c.MediaStream() != nil {
-		t.Errorf("fallback %q, stream %v", reason, c.MediaStream())
+	if reason := <-fallback; !errors.As(reason, new(*MediaRefusedError)) || c.MediaStream() != nil {
+		t.Errorf("fallback %v, stream %v", reason, c.MediaStream())
+	}
+}
+
+// expectOffer reads one 0x1c offer.
+func (s *fakeServer) expectOffer() {
+	s.t.Helper()
+	hdr := s.recv(4)
+	if hdr[0] != 0x1c {
+		s.t.Fatalf("offer header %x", hdr)
+	}
+	s.recv(int(binary.BigEndian.Uint16(hdr[2:])))
+}
+
+// TestHighPerformanceNoMedia: an answer without RTP falls back after the
+// timeout, pixels resuming at once; a retry asks for the stream again and
+// makes one offer on the ports named again.
+func TestHighPerformanceNoMedia(t *testing.T) {
+	fallback := make(chan error, 2)
+	c, s := hpSession(t, &HighPerformance{
+		MediaTimeout: 100 * time.Millisecond,
+		OnFallback:   func(err error) { fallback <- err },
+	})
+	ports := make([]byte, 36)
+	ap, vp := freeUDPPort(t), freeUDPPort(t)
+	copy(ports, []byte{0, 1, 0, 1, 0, 0, 0, 0, byte(ap >> 8), byte(ap), 0, 0, 0, 1, byte(vp >> 8), byte(vp), 0, 0, 0, 1})
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	s.expectOffer()
+	answer := append([]byte{0, 2, 0, 1, 0, 0, 0, 0}, make([]byte, 10)...)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+
+	// No RTP: Standard again, with the whole desktop armed and asked for.
+	if encs := s.recvEncodings(); encs[0] == EncodingARDProMode {
+		t.Errorf("fallback SetEncodings %v", encs)
+	}
+	s.expect(ardAutoFBUpdate(true, 64, 32))
+	s.expect(framebufferUpdateRequest(false, 64, 32))
+	if err := <-fallback; !errors.Is(err, ErrMediaNotArrived) {
+		t.Errorf("fallback %v", err)
+	}
+	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
+	s.expect(ardAutoFBUpdate(true, 64, 32))
+	s.expect(framebufferUpdateRequest(true, 64, 32))
+
+	// Retry: 1010 first again, then one offer on the ports.
+	go c.RetryHighPerformance()
+	if encs := s.recvEncodings(); encs[0] != EncodingARDProMode {
+		t.Fatalf("retry SetEncodings %v", encs)
+	}
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	s.expectOffer()
+	if c.MediaStream() == nil {
+		t.Error("no stream after the retry's ports")
+	}
+	if err := c.RetryHighPerformance(); err != nil {
+		t.Errorf("retry while on: %v", err)
 	}
 }

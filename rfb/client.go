@@ -255,6 +255,8 @@ type Client struct {
 	quality    int     // JPEG quality level in encs, -1 for none
 	fullColour bool
 	rtt        time.Duration
+
+	disp displayChange // SetDisplayConfiguration's, also under mu; see hp.go
 }
 
 // Dial connects to addr and performs the handshake.

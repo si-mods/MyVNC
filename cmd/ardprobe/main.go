@@ -89,7 +89,7 @@ func main() {
 		mu.Unlock()
 	}
 	hp.OnReply = func(r media.Reply) { note("reply " + r.String()) }
-	hp.OnFallback = func(reason string) { note("FALLBACK " + reason) }
+	hp.OnFallback = func(err error) { note("FALLBACK " + err.Error()) }
 	if *dump != "" {
 		if err := os.MkdirAll(*dump, 0o755); err != nil {
 			fatal("%v", err)

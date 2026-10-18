@@ -85,6 +85,10 @@ func (c *Client) readFramebufferUpdate() error {
 		// layouts, which the armed one pixel still does.
 		w, h, ask = 1, 1, ask && !c.hp.live
 	}
+	if c.disp.holds() {
+		w, h = 1, 1 // a display change waits or is out; see hp.go
+	}
+	c.disp.inUpdate = true
 	if c.appleARD && w > 0 && h > 0 {
 		err = c.writeLocked(ardAutoFBUpdate(true, w, h))
 	}
@@ -154,6 +158,9 @@ func (c *Client) updateEnd() error {
 		}
 	}
 	c.h.UpdateDone()
+	if err := c.displayStep(); err != nil {
+		return err
+	}
 	return c.hpStep()
 }
 
@@ -312,6 +319,9 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		// x is the reason, y the result; a failed client request changes nothing.
 		if r.Min.X == reasonClient && r.Min.Y != resultSuccess {
 			c.log.Info("rfb: remote resize failed", "result", r.Min.Y)
+			if dh, ok := c.h.(DesktopSizeHandler); ok {
+				dh.DesktopSizeFailed(r.Min.Y)
+			}
 			return false, nil
 		}
 		c.mu.Lock()
@@ -341,6 +351,7 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 			count := c.rd.u16()
 			c.rd.skip(4 + int64(count)*28)
 			if c.rd.err == nil && w != 0 && h != 0 {
+				c.displayLaid(int(w), int(h))
 				return false, c.resize(int(w), int(h))
 			}
 			return false, c.rd.err

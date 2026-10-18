@@ -181,10 +181,18 @@ func (c *Client) KeyEventCode(code, keysym uint32, down bool) error {
 // has confirmed ExtendedDesktopSize (-308).
 var ErrNoSetDesktopSize = errors.New("rfb: server does not support SetDesktopSize")
 
+// DesktopSizeHandler may be implemented by a Handler to hear that the
+// server refused a SetDesktopSize; result is the ExtendedDesktopSize
+// status: 1 prohibited, 2 out of resources, 3 invalid screen layout.
+type DesktopSizeHandler interface {
+	DesktopSizeFailed(result int)
+}
+
 // SetDesktopSize asks the server to resize the remote desktop to one
 // screen of w x h at 0,0, keeping the server's first screen id and
 // flags, as TigerVNC's remote resize does outside full-screen mode. The
-// result arrives as a Resize, or not at all if the server refuses.
+// result arrives as a Resize, or as DesktopSizeFailed if the server
+// refuses.
 func (c *Client) SetDesktopSize(w, h int) error {
 	if w <= 0 || h <= 0 || w > 0xffff || h > 0xffff {
 		return errors.New("rfb: invalid desktop size")
