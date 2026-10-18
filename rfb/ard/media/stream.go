@@ -38,7 +38,12 @@ type StreamConfig struct {
 	// goroutine; the unit is acknowledged to the Mac when OnUnit returns.
 	// Hand it to a decoder queue rather than decoding here.
 	OnUnit func(*Unit)
-	Logger *slog.Logger
+	// OnPacket, when set, sees each picture-leg RTP datagram on the
+	// receiver's goroutine, for debugging: decrypted, without its tag,
+	// when err is nil; as received with ErrStale or ErrForged. It must
+	// not keep packet.
+	OnPacket func(at time.Time, h RTPHeader, packet []byte, err error)
+	Logger   *slog.Logger
 }
 
 // LegStats count one UDP leg.
@@ -54,9 +59,12 @@ type LegStats struct {
 
 // Stats are a Stream's counters since Listen.
 type Stats struct {
-	Audio, Video  LegStats
-	Units, Keys   uint64 // access units handed on, and key pictures among them
-	Lost          uint64 // losses reported by the depacketizer
+	Audio, Video LegStats
+	Units, Keys  uint64 // access units handed on, and key pictures among them
+	Lost         uint64 // losses reported by the depacketizer
+	// Late counts sequence gaps a late packet filled; Missing, picture
+	// packets given up as lost.
+	Late, Missing uint64
 	RR, RCTL      uint64 // feedback sent
 	PLI, Refresh  uint64
 	Acks          uint64
@@ -96,6 +104,12 @@ func Listen(cfg StreamConfig) (*Stream, error) {
 		return nil, err
 	}
 	s.log.Info("media: listening", "audio", s.audio.LocalAddr(), "video", s.video.LocalAddr(), "peer", cfg.Peer)
+	// An empty datagram on each leg before the offer: a NAT between us
+	// and the Mac maps our ports now, before the Mac's first packets
+	// arrive and take the mapping (seen through a WireGuard NAT, where our
+	// later RTCP then left from another port and no media got through).
+	s.audio.Write(nil)
+	s.video.Write(nil)
 	audioIn, videoIn := make(chan []byte, 256), make(chan []byte, 4096)
 	s.wg.Add(3)
 	go s.read(s.audio, audioIn, &s.stats.Audio)
@@ -203,6 +217,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		videoRTCP  = NewSRTCPReceiver(&sec.Video.Down)
 		videoOut   = NewSRTCPSender(&sec.Video.Up)
 		dep        = Depacketizer{DONL: s.cfg.DONL}
+		order      reorder
 		feedback   = NewRateFeedback(time.Now())
 		mediaSSRC  uint32
 		owed       ask
@@ -236,6 +251,12 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			if r := feedback.Report(sec.VideoSSRC, now); r != nil {
 				send(s.video, videoOut.Protect(r), &s.stats.RCTL)
 			}
+			for _, p := range order.Expire() {
+				s.depacketize(&dep, p, &owed, &unacked)
+			}
+			s.mu.Lock()
+			s.stats.Missing = order.Missing
+			s.mu.Unlock()
 		case <-s.keyframe:
 			dep.Resync()
 			owed = askKeyframe
@@ -253,6 +274,13 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			s.mu.Lock()
 			s.count(&s.stats.Video, h, err, videoRTCP, d)
 			s.mu.Unlock()
+			if s.cfg.OnPacket != nil && (err == nil || err == ErrStale || err == ErrForged) {
+				p := d
+				if err == nil {
+					p = d[:h.Payload[1]]
+				}
+				s.cfg.OnPacket(time.Now(), h, p, err)
+			}
 			if err != nil {
 				break
 			}
@@ -264,31 +292,12 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			if h.SSRC != mediaSSRC {
 				mediaSSRC, owed = h.SSRC, askNone // a new stream starts with its own IDR
 			}
-			u, lost := dep.Push(h, d[h.Payload[0]:h.Payload[1]])
-			switch {
-			case u != nil:
-				owed = askNone
-				s.mu.Lock()
-				s.stats.Units++
-				if u.Key {
-					s.stats.Keys++
-				}
-				s.mu.Unlock()
-				if s.cfg.OnUnit != nil {
-					s.cfg.OnUnit(u)
-				}
-				ts := u.Timestamp
-				unacked = &ts
-			case lost:
-				s.mu.Lock()
-				s.stats.Lost++
-				s.mu.Unlock()
-				a := askKeyframe
-				if dep.ResumesAtRefresh() {
-					a = askRefresh
-				}
-				owed = max(owed, a)
+			for _, p := range order.push(h, d[h.Payload[0]:h.Payload[1]]) {
+				s.depacketize(&dep, p, &owed, &unacked)
 			}
+			s.mu.Lock()
+			s.stats.Late, s.stats.Missing = order.Late, order.Missing
+			s.mu.Unlock()
 		}
 		if unacked != nil {
 			send(s.video, videoOut.Protect(PictureAck(sec.VideoSSRC, *unacked)), &s.stats.Acks)
@@ -305,6 +314,36 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 				send(s.video, videoOut.Protect(PLI(sec.VideoSSRC, mediaSSRC)), &s.stats.PLI)
 			}
 		}
+	}
+}
+
+// depacketize hands one in-order picture packet to dep, a whole unit on
+// to OnUnit, and notes what to acknowledge or ask for.
+func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unacked **uint32) {
+	u, lost := dep.Push(p.h, p.payload)
+	switch {
+	case u != nil:
+		*owed = askNone
+		s.mu.Lock()
+		s.stats.Units++
+		if u.Key {
+			s.stats.Keys++
+		}
+		s.mu.Unlock()
+		if s.cfg.OnUnit != nil {
+			s.cfg.OnUnit(u)
+		}
+		ts := u.Timestamp
+		*unacked = &ts
+	case lost:
+		s.mu.Lock()
+		s.stats.Lost++
+		s.mu.Unlock()
+		a := askKeyframe
+		if dep.ResumesAtRefresh() {
+			a = askRefresh
+		}
+		*owed = max(*owed, a)
 	}
 }
 

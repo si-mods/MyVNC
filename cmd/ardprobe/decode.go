@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -18,24 +19,27 @@ import (
 // goroutine, to show whether this machine can decode what the Mac sends.
 type decoder struct {
 	units  chan *media.Unit
-	dir    string // first frame as frame.png, when set
+	dir    string // first frame as frame.png and the last as last.png, when set
 	stream func() *media.Stream
 
 	mu                       sync.Mutex
 	decoded, failed, dropped uint64
+	hidden                   uint64 // decoded, not converted: newer ones waited
 	spent                    time.Duration
 	desc, lastErr            string
 	saved                    bool
+	last                     *image.RGBA
 }
 
 func startDecoder(dir string, stream func() *media.Stream) *decoder {
-	d := &decoder{units: make(chan *media.Unit, 8), dir: dir, stream: stream}
+	d := &decoder{units: make(chan *media.Unit, 32), dir: dir, stream: stream}
 	go d.run()
 	return d
 }
 
 // push queues u; a full queue drops it and asks for a keyframe, as every
-// later picture predicts from it.
+// later picture predicts from it. As the viewer's pipeline does, a picture
+// with two or more newer ones queued is decoded without converting it.
 func (d *decoder) push(u *media.Unit) {
 	select {
 	case d.units <- u:
@@ -71,21 +75,27 @@ func (d *decoder) run() {
 			codec = u.Codec
 		}
 		start := time.Now()
-		frames, err := dec.Decode(u.AnnexB(), t)
+		var frames []mf.Frame
+		var err error
+		hidden := 0
+		if len(d.units) >= 2 { // as the viewer's unseenBehind
+			hidden, err = dec.DecodeHidden(u.AnnexB(), t)
+		} else {
+			frames, err = dec.Decode(u.AnnexB(), t)
+		}
 		t += 166666
 		d.mu.Lock()
 		d.spent += time.Since(start)
-		d.decoded += uint64(len(frames))
+		d.decoded += uint64(len(frames) + hidden)
+		d.hidden += uint64(hidden)
 		if len(frames) > 0 {
 			i := dec.Info()
 			f := frames[len(frames)-1]
 			d.desc = fmt.Sprintf("%dx%d %s via %q", f.Rect.Dx(), f.Rect.Dy(), i.Output, i.Name)
+			d.last = f.RGBA
 			if d.dir != "" && !d.saved {
 				d.saved = true
-				if out, err := os.Create(filepath.Join(d.dir, "frame.png")); err == nil {
-					png.Encode(out, f.RGBA)
-					out.Close()
-				}
+				savePNG(filepath.Join(d.dir, "frame.png"), f.RGBA)
 			}
 		}
 		d.mu.Unlock()
@@ -95,6 +105,22 @@ func (d *decoder) run() {
 				s.RequestKeyframe()
 			}
 		}
+	}
+}
+
+// saveLast writes the last picture shown as DIR/last.png.
+func (d *decoder) saveLast() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.dir != "" && d.last != nil {
+		savePNG(filepath.Join(d.dir, "last.png"), d.last)
+	}
+}
+
+func savePNG(name string, img *image.RGBA) {
+	if out, err := os.Create(name); err == nil {
+		png.Encode(out, img)
+		out.Close()
 	}
 }
 
@@ -111,6 +137,9 @@ func (d *decoder) status() string {
 	s := fmt.Sprintf("decoded %d", d.decoded)
 	if d.decoded > 0 {
 		s += fmt.Sprintf(" (%s, %.1f ms/unit)", d.desc, float64(d.spent.Microseconds())/1000/float64(d.decoded))
+	}
+	if d.hidden > 0 {
+		s += fmt.Sprintf(" unshown %d", d.hidden)
 	}
 	if d.dropped > 0 {
 		s += fmt.Sprintf(" dropped %d", d.dropped)

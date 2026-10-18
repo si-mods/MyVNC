@@ -106,9 +106,10 @@ func (d *Depacketizer) ResumesAtRefresh() bool { return !d.synced && d.resumable
 // Resync drops everything to the next key picture.
 func (d *Depacketizer) Resync() { d.synced, d.resumable = false, false }
 
-// Push takes one decrypted packet. It returns a whole decodable unit, or
-// lost when packets were lost or the stream has no key picture yet, so
-// the sender should be asked for one.
+// Push takes one decrypted packet, in sequence order. It returns a whole
+// decodable unit, or lost when a picture ended that is not handed on,
+// damaged by lost packets or before the stream's key picture, so the
+// sender should be asked for one.
 func (d *Depacketizer) Push(h RTPHeader, payload []byte) (u *Unit, lost bool) {
 	codec := HEVC
 	if h.PayloadType == uint8(H264) {
@@ -130,12 +131,12 @@ func (d *Depacketizer) Push(h RTPHeader, payload []byte) (u *Unit, lost bool) {
 	if d.haveTS && d.ts != h.Timestamp && (d.damaged || len(d.nals) > 0) {
 		d.damaged = true // the previous picture's marked packet never came
 		d.finish()
+		lost = true
 	}
 	if gap {
 		d.damaged = true
 		d.resumable = d.resumable || d.synced
 		d.synced = false
-		lost = true
 	}
 	d.haveTS, d.ts = true, h.Timestamp
 	d.refresh = d.refresh || h.Refresh
@@ -316,4 +317,94 @@ func parseAvcC(b []byte) ([][]byte, bool) {
 		}
 	}
 	return out, len(out) > 0
+}
+
+// reorderWait is how many packets may wait behind a gap before it is
+// given up; Expire gives it up sooner when the packets stop.
+const reorderWait = 64
+
+type orderedPacket struct {
+	h       RTPHeader
+	payload []byte
+}
+
+// reorder puts one leg's packets back in sequence order: a packet ahead
+// of the next expected one waits until the gap fills. A gap is given up
+// when reorderWait packets wait behind it, or when it is still there at
+// the second Expire; the packets after it then go on, and the
+// depacketizer sees the loss.
+type reorder struct {
+	have    bool
+	ssrc    uint32
+	next    uint16
+	wait    map[uint16]orderedPacket
+	expired bool // the gap was there at the last Expire
+	// Late counts gaps a late packet filled; Missing, packets given up.
+	Late, Missing uint64
+}
+
+// push takes a packet and returns the packets now in order.
+func (r *reorder) push(h RTPHeader, payload []byte) []orderedPacket {
+	if !r.have || r.ssrc != h.SSRC {
+		r.have, r.ssrc, r.next, r.wait, r.expired = true, h.SSRC, h.Sequence, nil, false
+	}
+	ahead := h.Sequence - r.next
+	switch {
+	case ahead >= 0x8000:
+		return nil // a duplicate, or later than a given-up gap
+	case ahead == 0:
+		if len(r.wait) > 0 {
+			r.Late++
+		}
+		r.next++
+		r.expired = false
+		return r.drain([]orderedPacket{{h, payload}})
+	}
+	if _, dup := r.wait[h.Sequence]; dup {
+		return nil
+	}
+	if r.wait == nil {
+		r.wait = map[uint16]orderedPacket{}
+	}
+	r.wait[h.Sequence] = orderedPacket{h, payload}
+	if len(r.wait) > reorderWait {
+		return r.skip()
+	}
+	return nil
+}
+
+// Expire gives up a gap that was already there at the last call.
+func (r *reorder) Expire() []orderedPacket {
+	if len(r.wait) == 0 {
+		return nil
+	}
+	if !r.expired {
+		r.expired = true
+		return nil
+	}
+	return r.skip()
+}
+
+// skip gives up the gap before the first waiting packet.
+func (r *reorder) skip() []orderedPacket {
+	first := uint16(0xffff)
+	for s := range r.wait {
+		first = min(first, s-r.next)
+	}
+	r.Missing += uint64(first)
+	r.next += first
+	r.expired = false
+	return r.drain(nil)
+}
+
+func (r *reorder) drain(out []orderedPacket) []orderedPacket {
+	for {
+		p, ok := r.wait[r.next]
+		if !ok {
+			return out
+		}
+		delete(r.wait, r.next)
+		out = append(out, p)
+		r.next++
+	}
 }

@@ -172,6 +172,9 @@ type Decoder struct {
 	fullRange  bool
 	bt709      bool
 	haveOutput bool
+	hidden     bool    // DecodeHidden: no conversion
+	out        uintptr // the output buffer, see outputSample
+	outFor     uint32  // the output size out was made for
 }
 
 // NewDecoder opens the first synchronous MFT that decodes codec.
@@ -201,8 +204,9 @@ func (d *Decoder) thread(errc chan<- error) {
 		case f := <-d.calls:
 			f()
 		case <-d.quit:
+			release(d.out)
 			release(d.mft)
-			d.mft = 0
+			d.mft, d.out = 0, 0
 			return
 		}
 	}
@@ -422,6 +426,23 @@ func (d *Decoder) Decode(au []byte, t int64) ([]Frame, error) {
 	return frames, err
 }
 
+// DecodeHidden feeds au as Decode does but converts none of the pictures
+// that come out, and returns how many came: for a picture nobody will
+// see, as when newer ones wait to be decoded. Converting a 1920x1080
+// picture costs a few milliseconds and 8 MB.
+func (d *Decoder) DecodeHidden(au []byte, t int64) (int, error) {
+	var frames []Frame
+	var err error
+	if !d.do(func() {
+		d.hidden = true
+		frames, err = d.decode(au, t)
+		d.hidden = false
+	}) {
+		return 0, errClosed
+	}
+	return len(frames), err
+}
+
 // Flush drains the frames the MFT still holds.
 func (d *Decoder) Flush() ([]Frame, error) {
 	var frames []Frame
@@ -482,6 +503,29 @@ func (d *Decoder) decode(au []byte, t int64) ([]Frame, error) {
 	return d.drain(frames)
 }
 
+// outputSample is a new sample for the MFT to decode into, on a buffer
+// made once per output size and reused: a new 8 MB buffer per picture
+// costs the HEVC decoder some 2 ms of page faults. Each picture is copied
+// out of it before the next is decoded.
+func (d *Decoder) outputSample() (uintptr, error) {
+	if d.out == 0 || d.outFor != d.outSize {
+		release(d.out)
+		d.out = 0
+		if hr, _, _ := procMFCreateMemBuffer.Call(uintptr(d.outSize), uintptr(unsafe.Pointer(&d.out))); failed(hr) {
+			d.out = 0
+			return 0, hrError("MFCreateMemoryBuffer", hr)
+		}
+		d.outFor = d.outSize
+	}
+	var sample uintptr
+	if hr, _, _ := procMFCreateSample.Call(uintptr(unsafe.Pointer(&sample))); failed(hr) {
+		return 0, hrError("MFCreateSample", hr)
+	}
+	comCall(d.out, bufSetCurLen, 0)
+	comCall(sample, sampleAddBuffer, d.out)
+	return sample, nil
+}
+
 type outputDataBuffer struct {
 	streamID uint32
 	sample   uintptr
@@ -494,7 +538,7 @@ func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
 		var ob outputDataBuffer
 		var mine uintptr
 		if d.haveOutput && !d.provides {
-			s, _, err := newSample(int(d.outSize))
+			s, err := d.outputSample()
 			if err != nil {
 				return frames, err
 			}
@@ -517,7 +561,13 @@ func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
 			release(mine)
 			return frames, hrError("ProcessOutput", hr)
 		}
-		f, err := d.frame(ob.sample)
+		var f Frame
+		var err error
+		if d.hidden {
+			comCall(ob.sample, 35, uintptr(unsafe.Pointer(&f.Time))) // GetSampleTime
+		} else {
+			f, err = d.frame(ob.sample)
+		}
 		if ob.sample != mine {
 			release(ob.sample)
 		}
