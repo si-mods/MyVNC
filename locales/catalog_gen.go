@@ -329,6 +329,22 @@ func (msgs Messages) SendClipboard() string {
 	return Catalog.Format(msgs.locale, "sendClipboard", nil)
 }
 
+// FetchClipboard says "Copy the server's clipboard here"
+// in the language the app shows.
+//
+// Session menu button: fetches the clipboard text the server announced into
+// the local clipboard.
+func FetchClipboard() string { return In(i18n.Locale()).FetchClipboard() }
+
+// FetchClipboard says "Copy the server's clipboard here"
+// in the language of msgs.
+//
+// Session menu button: fetches the clipboard text the server announced into
+// the local clipboard.
+func (msgs Messages) FetchClipboard() string {
+	return Catalog.Format(msgs.locale, "fetchClipboard", nil)
+}
+
 // Input says "Input"
 // in the language the app shows.
 func Input() string { return In(i18n.Locale()).Input() }

@@ -121,6 +121,13 @@ func (c *conv) readN(r io.Reader, n int, out []byte) error {
 }
 
 func (c *conv) convert(raw []byte, n int, out []byte) {
+	if c.fast && c.mode == modeNormal { // what put does, a row at a time
+		copy(out[:n*4], raw[:n*4])
+		for i := 3; i < n*4; i += 4 {
+			out[i] = 0xff
+		}
+		return
+	}
 	for i := 0; i < n; i++ {
 		c.put(out[i*4:i*4+4], raw[i*c.size:(i+1)*c.size])
 	}

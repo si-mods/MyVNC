@@ -9,7 +9,7 @@ import (
 )
 
 // RRE is the RRE encoding (2).
-type RRE struct{}
+type RRE struct{ plain }
 
 func (RRE) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *image.RGBA) error {
 	if err := check(fb, rect); err != nil {

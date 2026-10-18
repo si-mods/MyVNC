@@ -13,8 +13,10 @@ import (
 	"image"
 	"image/draw"
 	"io"
-	"unicode/utf8"
+	"slices"
+	"strings"
 
+	"github.com/kyya/myvnc/internal/text"
 	"github.com/kyya/myvnc/rfb/ard"
 	"github.com/kyya/myvnc/rfb/pixel"
 )
@@ -109,7 +111,23 @@ func (c *Client) readFramebufferUpdate() error {
 			break
 		}
 	}
+	if err := c.flush(); err != nil {
+		return err
+	}
 	return c.updateEnd()
+}
+
+// flush waits for the rectangles being decoded and passes them to
+// Updated, as TigerVNC's DecodeManager::flush.
+func (c *Client) flush() error {
+	if err := c.dm.wait(); err != nil {
+		return err
+	}
+	for _, r := range c.decoded {
+		c.h.Updated(r)
+	}
+	c.decoded = c.decoded[:0]
+	return nil
 }
 
 func (c *Client) updateEnd() error {
@@ -226,6 +244,11 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 		return false, c.readSetCursorWithAlpha(r)
 	case PseudoEncodingXCursor:
 		return false, c.readSetXCursor(r)
+	case PseudoEncodingVMwareCursor:
+		return false, c.readSetVMwareCursor(r)
+	case PseudoEncodingVMwareCursorPosition:
+		c.cursorPos(r.Min)
+		return false, nil
 	case PseudoEncodingLEDState:
 		return false, c.ledState(uint32(c.rd.u8()))
 	case PseudoEncodingVMwareLEDState:
@@ -242,11 +265,18 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 			return false, errors.New("rfb: desktop name is too long")
 		}
 		name := c.rd.bytes(int(n))
-		if c.rd.err == nil && r == (image.Rectangle{}) && utf8.Valid(name) {
-			c.name = string(name)
-			c.h.Name(c.name)
+		if c.rd.err != nil {
+			return false, c.rd.err
 		}
-		return false, c.rd.err
+		// As TigerVNC: up to the first NUL, and dropped unless UTF-8.
+		s, _, _ := strings.Cut(string(name), "\x00")
+		if r != (image.Rectangle{}) || !text.IsValidUTF8(s) {
+			c.log.Info("rfb: invalid desktop name received")
+			return false, nil
+		}
+		c.name = s
+		c.h.Name(c.name)
+		return false, nil
 	case PseudoEncodingDesktopSize:
 		return false, c.resize(r.Dx(), r.Dy())
 	case PseudoEncodingExtendedDesktopSize:
@@ -291,6 +321,7 @@ func (c *Client) readRect(r image.Rectangle, enc int32) (last bool, err error) {
 	if c.appleARD {
 		switch enc {
 		case PseudoEncodingARDCursorPos:
+			c.cursorPos(r.Min)
 			return false, nil
 		case PseudoEncodingARDDisplayInfo:
 			c.ardLayout = true
@@ -344,6 +375,17 @@ func (c *Client) dataRect(r image.Rectangle, enc int32) error {
 	if dec == nil {
 		return fmt.Errorf("rfb: unknown encoding %d", enc)
 	}
+	if pd, ok := dec.(pixel.ParallelDecoder); ok && c.dm.workers > 1 {
+		if err := c.dm.submit(c, pd, enc, r); err != nil {
+			return err
+		}
+		c.decoded = append(c.decoded, r)
+		return nil
+	}
+	// Other decoders (ARD, MVS) run here, alone.
+	if err := c.flush(); err != nil {
+		return err
+	}
 	if err := dec.Decode(c.rd.r, r, &c.pf, c.fb); err != nil {
 		return err
 	}
@@ -351,9 +393,18 @@ func (c *Client) dataRect(r image.Rectangle, enc int32) error {
 	return nil
 }
 
+func (c *Client) cursorPos(p image.Point) {
+	if ph, ok := c.h.(CursorPosHandler); ok {
+		ph.CursorPos(p)
+	}
+}
+
 // resize reallocates the framebuffer, keeping the still valid area and
 // filling new areas with opaque black.
 func (c *Client) resize(w, h int) error {
+	if err := c.flush(); err != nil {
+		return err
+	}
 	fb := newFramebuffer(w, h)
 	draw.Draw(fb, fb.Rect, c.fb, image.Point{}, draw.Src)
 	c.fb = fb
@@ -482,6 +533,10 @@ func (c *Client) readSetCursorWithAlpha(r image.Rectangle) error {
 		if dec == nil {
 			return fmt.Errorf("rfb: unknown cursor encoding %d", enc)
 		}
+		// The decoder's state (zlib streams) may be in use by workers.
+		if err := c.flush(); err != nil {
+			return err
+		}
 		if err := dec.Decode(c.rd.r, img.Rect, &cursorPF, img); err != nil {
 			return err
 		}
@@ -492,6 +547,63 @@ func (c *Client) readSetCursorWithAlpha(r image.Rectangle) error {
 		img.Pix[i] = min(img.Pix[i], a)
 		img.Pix[i+1] = min(img.Pix[i+1], a)
 		img.Pix[i+2] = min(img.Pix[i+2], a)
+	}
+	c.h.Cursor(img, r.Min)
+	return nil
+}
+
+// readSetVMwareCursor is TigerVNC's CMsgReader::readSetVMwareCursor:
+// type 0 is an AND and an XOR mask in the pixel format, type 1 straight
+// (not premultiplied) RGBA.
+func (c *Client) readSetVMwareCursor(r image.Rectangle) error {
+	w, h := r.Dx(), r.Dy()
+	if w > maxCursorSize || h > maxCursorSize {
+		return errors.New("rfb: received cursor is too large")
+	}
+	typ := c.rd.u8()
+	c.rd.skip(1)
+	if c.rd.err != nil {
+		return c.rd.err
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	switch typ {
+	case 0:
+		bpp := int(c.pf.BPP) / 8
+		and := c.rd.bytes(w * h * bpp)
+		xor := c.rd.bytes(w * h * bpp)
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		zero := func(b []byte) bool { return !slices.ContainsFunc(b, func(v byte) bool { return v != 0 }) }
+		for i := 0; i < w*h; i++ {
+			a, x := and[i*bpp:(i+1)*bpp], xor[i*bpp:(i+1)*bpp]
+			p := img.Pix[i*4 : i*4+4]
+			switch {
+			case zero(a): // opaque
+				p[0], p[1], p[2] = rgbFromPixel(&c.pf, x)
+				p[3] = 0xff
+			case zero(x): // transparent
+			default:
+				// Inverted or partly inverted: black, as TigerVNC,
+				// which cannot show those either.
+				p[3] = 0xff
+			}
+		}
+	case 1:
+		c.rd.read(img.Pix)
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		// TigerVNC passes these to setCursor, which takes straight
+		// alpha; image.RGBA wants it premultiplied.
+		for i := 0; i < len(img.Pix); i += 4 {
+			a := uint32(img.Pix[i+3])
+			for k := i; k < i+3; k++ {
+				img.Pix[k] = uint8(uint32(img.Pix[k]) * a / 255)
+			}
+		}
+	default:
+		return errors.New("rfb: unknown cursor type")
 	}
 	c.h.Cursor(img, r.Min)
 	return nil
@@ -644,11 +756,7 @@ func (c *Client) readServerCutText() error {
 	if c.rd.err != nil {
 		return c.rd.err
 	}
-	r := make([]rune, len(data))
-	for i, b := range data {
-		r[i] = rune(b)
-	}
-	c.h.Clipboard(toLF(string(r)))
+	c.h.Clipboard(text.ConvertLF(text.Latin1ToUTF8(string(data))))
 	return nil
 }
 
@@ -696,23 +804,23 @@ func (c *Client) readExtendedClipboard(n int) error {
 	}
 
 	if action == clipboardProvide {
-		data := c.rd.bytes(n - 4)
+		payload := c.rd.bytes(n - 4)
 		if c.rd.err != nil {
 			return c.rd.err
 		}
-		zr, err := zlib.NewReader(bytes.NewReader(data))
+		zr, err := zlib.NewReader(bytes.NewReader(payload))
 		if err != nil {
 			return fmt.Errorf("rfb: invalid extended clipboard message: %w", err)
 		}
 		zrd := reader{r: zr}
-		var text []byte
+		var data []byte
 		for i := 0; i < 16; i++ {
 			if flags&(1<<i) == 0 {
 				continue
 			}
 			size := zrd.u32()
 			if i == 0 && size <= uint32(c.maxCutText()) {
-				text = zrd.bytes(int(size))
+				data = zrd.bytes(int(size))
 			} else {
 				zrd.skip(int64(size))
 			}
@@ -720,22 +828,27 @@ func (c *Client) readExtendedClipboard(n int) error {
 		if zrd.err != nil {
 			return fmt.Errorf("rfb: invalid extended clipboard message: %w", zrd.err)
 		}
-		if flags&clipboardUTF8 == 0 || text == nil {
+		if flags&clipboardUTF8 == 0 || data == nil {
 			return nil
 		}
-		if i := bytes.IndexByte(text, 0); i >= 0 {
-			text = text[:i]
-		}
-		if !utf8.Valid(text) {
+		// As TigerVNC's handleClipboardProvide: dropped unless UTF-8.
+		if !text.IsValidUTF8(string(data)) {
+			c.log.Info("rfb: invalid UTF-8 sequence in clipboard")
 			return nil
 		}
-		c.h.Clipboard(toLF(string(text)))
+		c.mu.Lock()
+		c.remoteClip = false
+		c.mu.Unlock()
+		c.h.Clipboard(text.ConvertLF(string(data)))
 		return nil
 	}
 
 	c.rd.skip(int64(n - 4))
 	if c.rd.err != nil {
 		return c.rd.err
+	}
+	if action == clipboardNotify {
+		return c.clipboardNotify(flags)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -752,17 +865,28 @@ func (c *Client) readExtendedClipboard(n int) error {
 			}
 			return c.writeLocked(clipboardMsg(f, nil))
 		}
-	case clipboardNotify:
-		if flags&clipboardUTF8 != 0 {
-			c.localClip = nil
-			if c.clipFlags&clipboardRequest != 0 {
-				return c.writeLocked(clipboardMsg(clipboardRequest|clipboardUTF8, nil))
-			}
-		}
 	default:
 		return errors.New("rfb: invalid extended clipboard message")
 	}
 	return nil
+}
+
+// clipboardNotify is TigerVNC's handleClipboardNotify: new text on the
+// server replaces the local clipboard there, and the handler decides
+// when to pull it (RequestClipboard), or it is pulled at once.
+func (c *Client) clipboardNotify(flags uint32) error {
+	available := flags&clipboardUTF8 != 0
+	c.mu.Lock()
+	c.remoteClip = available
+	if available {
+		c.localClip = nil
+	}
+	c.mu.Unlock()
+	if ca, ok := c.h.(ClipboardAnnouncer); ok {
+		ca.ClipboardAnnounced(available)
+		return nil
+	}
+	return c.RequestClipboard()
 }
 
 // Pixels
