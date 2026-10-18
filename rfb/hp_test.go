@@ -336,7 +336,8 @@ func TestHighPerformanceDisplayChange(t *testing.T) {
 }
 
 // TestHighPerformanceOfferNotHeld: a display change the Mac does not answer
-// holds the offer back for displayHold only.
+// holds the offer back for displayHold only; the offer has the size asked,
+// and the layout that comes after it brings no other.
 func TestHighPerformanceOfferNotHeld(t *testing.T) {
 	hold := displayHold
 	displayHold = 100 * time.Millisecond
@@ -345,13 +346,27 @@ func TestHighPerformanceOfferNotHeld(t *testing.T) {
 	call(t, s, func() error { return c.SetDisplayConfiguration(40, 20, 2) }, ardAutoFBUpdate(true, 1, 1))
 	s.recv(4 + 8 + 0xb8)
 	sent := time.Now()
-	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(portsBody(t))...)...)
+	ports := portsBody(t)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
 	s.expect(ardAutoFBUpdate(true, 1, 1))
 	s.expect(framebufferUpdateRequest(true, 1, 1))
-	if got := s.recvOffer(); !bytes.Equal(got, c.hp.secrets.Offer(media.Params{Width: 64, Height: 32})) {
-		t.Error("the offer is not of the framebuffer")
+	if got := s.recvOffer(); !bytes.Equal(got, c.hp.secrets.Offer(media.Params{Width: 80, Height: 40})) {
+		t.Error("the offer is not of the 80x40 display asked")
 	}
 	if d := time.Since(sent); d < displayHold || d > displayHold+time.Second {
 		t.Errorf("offered %v after the change", d)
 	}
+
+	// The layout comes late, with the ports again, then the answer.
+	upd := append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(2)}, layout2(40, 20, 80, 40)[2:]...)
+	s.send(append(upd, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	answer := append([]byte{0, 2, 0, 1, 0, 0, 0, 0}, make([]byte, 10)...)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	call(t, s, func() error { return c.KeyEvent(0x61, true) }, []byte{msgKeyEvent, 1, 0, 0, 0, 0, 0, 0x61})
 }
