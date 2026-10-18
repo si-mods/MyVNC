@@ -59,9 +59,12 @@ type LegStats struct {
 
 // Stats are a Stream's counters since Listen.
 type Stats struct {
-	Audio, Video  LegStats
-	Units, Keys   uint64 // access units handed on, and key pictures among them
-	Lost          uint64 // losses reported by the depacketizer
+	Audio, Video LegStats
+	Units, Keys  uint64 // access units handed on, and key pictures among them
+	Lost         uint64 // losses reported by the depacketizer
+	// Late counts sequence gaps a late packet filled; Missing, picture
+	// packets given up as lost.
+	Late, Missing uint64
 	RR, RCTL      uint64 // feedback sent
 	PLI, Refresh  uint64
 	Acks          uint64
@@ -214,6 +217,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		videoRTCP  = NewSRTCPReceiver(&sec.Video.Down)
 		videoOut   = NewSRTCPSender(&sec.Video.Up)
 		dep        = Depacketizer{DONL: s.cfg.DONL}
+		order      reorder
 		feedback   = NewRateFeedback(time.Now())
 		mediaSSRC  uint32
 		owed       ask
@@ -247,6 +251,12 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			if r := feedback.Report(sec.VideoSSRC, now); r != nil {
 				send(s.video, videoOut.Protect(r), &s.stats.RCTL)
 			}
+			for _, p := range order.Expire() {
+				s.depacketize(&dep, p, &owed, &unacked)
+			}
+			s.mu.Lock()
+			s.stats.Missing = order.Missing
+			s.mu.Unlock()
 		case <-s.keyframe:
 			dep.Resync()
 			owed = askKeyframe
@@ -282,31 +292,12 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			if h.SSRC != mediaSSRC {
 				mediaSSRC, owed = h.SSRC, askNone // a new stream starts with its own IDR
 			}
-			u, lost := dep.Push(h, d[h.Payload[0]:h.Payload[1]])
-			switch {
-			case u != nil:
-				owed = askNone
-				s.mu.Lock()
-				s.stats.Units++
-				if u.Key {
-					s.stats.Keys++
-				}
-				s.mu.Unlock()
-				if s.cfg.OnUnit != nil {
-					s.cfg.OnUnit(u)
-				}
-				ts := u.Timestamp
-				unacked = &ts
-			case lost:
-				s.mu.Lock()
-				s.stats.Lost++
-				s.mu.Unlock()
-				a := askKeyframe
-				if dep.ResumesAtRefresh() {
-					a = askRefresh
-				}
-				owed = max(owed, a)
+			for _, p := range order.push(h, d[h.Payload[0]:h.Payload[1]]) {
+				s.depacketize(&dep, p, &owed, &unacked)
 			}
+			s.mu.Lock()
+			s.stats.Late, s.stats.Missing = order.Late, order.Missing
+			s.mu.Unlock()
 		}
 		if unacked != nil {
 			send(s.video, videoOut.Protect(PictureAck(sec.VideoSSRC, *unacked)), &s.stats.Acks)
@@ -323,6 +314,36 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 				send(s.video, videoOut.Protect(PLI(sec.VideoSSRC, mediaSSRC)), &s.stats.PLI)
 			}
 		}
+	}
+}
+
+// depacketize hands one in-order picture packet to dep, a whole unit on
+// to OnUnit, and notes what to acknowledge or ask for.
+func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unacked **uint32) {
+	u, lost := dep.Push(p.h, p.payload)
+	switch {
+	case u != nil:
+		*owed = askNone
+		s.mu.Lock()
+		s.stats.Units++
+		if u.Key {
+			s.stats.Keys++
+		}
+		s.mu.Unlock()
+		if s.cfg.OnUnit != nil {
+			s.cfg.OnUnit(u)
+		}
+		ts := u.Timestamp
+		*unacked = &ts
+	case lost:
+		s.mu.Lock()
+		s.stats.Lost++
+		s.mu.Unlock()
+		a := askKeyframe
+		if dep.ResumesAtRefresh() {
+			a = askRefresh
+		}
+		*owed = max(*owed, a)
 	}
 }
 
