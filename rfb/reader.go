@@ -58,7 +58,7 @@ func (c *Client) readMsg() error {
 			c.log.Info("rfb: server supports continuous updates")
 		}
 		c.serverCU = true
-		return nil
+		return c.endOfCU()
 	case msgServerFence:
 		return c.readFence()
 	case msgQEMUServer:
@@ -76,6 +76,7 @@ func (c *Client) readFramebufferUpdate() error {
 
 	// Request the next update before decoding this one, unless the
 	// server sends them unasked (continuous updates).
+	c.updateStart()
 	c.mu.Lock()
 	var err error
 	w, h, ask := c.width, c.height, !c.cuEnabled
@@ -86,6 +87,9 @@ func (c *Client) readFramebufferUpdate() error {
 	}
 	if c.appleARD && w > 0 && h > 0 {
 		err = c.writeLocked(ardAutoFBUpdate(true, w, h))
+	}
+	if err == nil {
+		err = c.sendChangesLocked()
 	}
 	if err == nil && ask {
 		err = c.writeLocked(framebufferUpdateRequest(true, w, h))
@@ -167,6 +171,10 @@ func (c *Client) updateEndLocked() error {
 		c.ardEnabled = true
 		c.log.Info("rfb: ARD session encryption active", "afterUpdate", c.updates+1)
 	}
+	// Past the update in the old format, a pending one takes over.
+	if c.pendingPF != nil && !c.cuEnabled {
+		c.pf, c.pendingPF = *c.pendingPF, nil
+	}
 	c.updates++
 	if c.updates == 1 && c.serverCU {
 		c.cuEnabled = true
@@ -175,7 +183,7 @@ func (c *Client) updateEndLocked() error {
 			return err
 		}
 	}
-	return nil
+	return c.autoSelectLocked()
 }
 
 func (c *Client) readFence() error {
@@ -191,8 +199,12 @@ func (c *Client) readFence() error {
 		c.log.Info("rfb: server supports fences")
 	}
 	c.log.Debug("rfb: fence", "flags", flags)
-	if n > 64 || flags&fenceRequest == 0 {
-		return nil // too large (ignored, as TigerVNC does) or a reply
+	if n > 64 {
+		return nil // too large, ignored as TigerVNC does
+	}
+	if flags&fenceRequest == 0 {
+		c.fenceReply(data)
+		return nil
 	}
 	// Messages are handled synchronously, in order, so BlockBefore and
 	// BlockAfter already hold; SyncNext is dropped, as TigerVNC does.

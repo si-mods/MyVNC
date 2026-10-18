@@ -570,6 +570,7 @@ func (a *app) connectTo(server string, again bool) {
 			Username:      user,
 			Shared:        cfg.Shared,
 			Encodings:     cfg.EncodingList(),
+			AutoSelect:    cfg.AutoSelect(),
 			Logger:        lg,
 			MaxClipboard:  cfg.ClipboardKiB << 10,
 			SecurityTypes: secTypes,
@@ -884,7 +885,10 @@ func (a *app) cancelReconnect() {
 func tigerParams(cfg *viewer.Config) *params.Viewer {
 	p := params.NewViewer()
 	p.Shared.Set(cfg.Shared)
-	p.PreferredEncoding.SetString(cfg.Encoding)
+	p.AutoSelect.Set(cfg.AutoSelect())
+	if !cfg.AutoSelect() {
+		p.PreferredEncoding.SetString(cfg.Encoding)
+	}
 	p.CustomCompressLevel.Set(cfg.Compress != 2)
 	p.CompressLevel.Set(cfg.Compress)
 	p.QualityLevel.Set(cfg.Quality)
@@ -903,6 +907,9 @@ func (a *app) applyParams(p *params.Viewer) {
 	c := &a.cfg
 	c.Shared = p.Shared.Value()
 	c.Encoding = p.PreferredEncoding.Value()
+	if p.AutoSelect.Value() {
+		c.Encoding = "Auto"
+	}
 	if p.CustomCompressLevel.Value() {
 		c.Compress = p.CompressLevel.Value()
 	}
