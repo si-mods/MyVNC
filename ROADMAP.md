@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.3 (2026-10-18). Open work is tracked in GitHub issues.
+Status as of v0.0.4 (2026-10-18). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -30,19 +30,28 @@ Status as of v0.0.3 (2026-10-18). Open work is tracked in GitHub issues.
   - UI performance harness and measurements (#14).
   - ARD High Performance media path: SRTP, RTP, HEVC 4:4:4 / H.264 via
     Media Foundation, `cmd/ardprobe` (#2, not yet verified on a Mac).
+- v0.0.4:
+  - ARD High Performance works end to end against macOS 27.2: HEVC 4:4:4
+    over SRTP at ~50 fps, NAT punch before the offer, packet reordering,
+    fallback banner with reasons and Retry (#2).
+  - Dynamic resolution like macOS Screen Sharing (#26).
+  - Parallel rectangle decoding (4K Tight ~100 → ~21 ms/frame), local
+    cursor sprite, per-frame pointer pacing, TigerVNC AutoSelect, H.264
+    (encoding 50), VMware cursors, lazy extended clipboard (#10, #11, #17,
+    #21, #22).
+  - Media Foundation memory-safety fix for COM out-parameters (#30).
+
+## Deferred by the owner
+
+- Partial / YUV texture upload (needs a mygo change).
+- Code signing and auto-update (#15).
 
 ## Open
 
 | Issue | Remaining |
 |---|---|
-| #2 | ARD High Performance: verify on macmini with ardprobe, then wire into the UI |
+| #2 | High Performance: hardware (D3D11) decoding headroom, real loss in RCTL feedback |
 | #3 | Confirm the security type used against macmini from the log |
 | #4 | Checklist run against macmini and a Linux server |
 | #6 | ARD encryption timing, cursor 1104 alpha, ARD clipboard |
-| #10 | VMware cursor |
-| #11 | Extended clipboard lazy pull, ARD clipboard |
-| #15 | Code signing certificate, auto-update feed decision |
 | #16 | Remove `myvnc.exe` from git history |
-| #17 | Use the shared text helpers in rfb clipboard code |
-| #21 | RDP-style smoothness: local cursor, parallel decode, partial/YUV upload, vsync |
-| #22 | Home cards: IP avatar, last-connected time |
