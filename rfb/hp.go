@@ -43,6 +43,9 @@ type HighPerformance struct {
 	// OnUnit receives each decodable access unit, on the media receiver's
 	// goroutine; see media.StreamConfig.OnUnit.
 	OnUnit func(*media.Unit)
+	// OnPacket, when set, sees each picture packet; see
+	// media.StreamConfig.OnPacket.
+	OnPacket func(at time.Time, h media.RTPHeader, packet []byte, err error)
 	// OnReply, when set, sees each encoding-1010 reply, on the Run goroutine.
 	OnReply func(media.Reply)
 	// OnFallback, when set, is told why High Performance was given up: an
@@ -290,7 +293,7 @@ func (c *Client) hpListen(audio, video uint16) error {
 	}
 	s, err := media.Listen(media.StreamConfig{
 		Local: local.IP, Peer: peer.IP, AudioPort: int(audio), VideoPort: int(video),
-		Secrets: hp.secrets, DONL: hp.cfg.Offer.Tiles > 1, OnUnit: hp.cfg.OnUnit, Logger: c.log,
+		Secrets: hp.secrets, DONL: hp.cfg.Offer.Tiles > 1, OnUnit: hp.cfg.OnUnit, OnPacket: hp.cfg.OnPacket, Logger: c.log,
 	})
 	if err != nil {
 		return err
