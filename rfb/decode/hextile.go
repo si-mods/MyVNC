@@ -18,7 +18,7 @@ const (
 )
 
 // Hextile is the Hextile encoding (5).
-type Hextile struct{}
+type Hextile struct{ plain }
 
 func (Hextile) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *image.RGBA) error {
 	if err := check(fb, rect); err != nil {

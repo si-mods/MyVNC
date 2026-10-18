@@ -10,7 +10,7 @@ import (
 )
 
 // Raw is the Raw encoding (0).
-type Raw struct{}
+type Raw struct{ plain }
 
 func (Raw) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *image.RGBA) error {
 	if err := check(fb, rect); err != nil {
@@ -33,7 +33,7 @@ func (Raw) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *image
 }
 
 // CopyRect is the CopyRect encoding (1).
-type CopyRect struct{}
+type CopyRect struct{ plain }
 
 func (CopyRect) Decode(r io.Reader, rect image.Rectangle, _ *pixel.Format, fb *image.RGBA) error {
 	sx, err := readU16(r)
