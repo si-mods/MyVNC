@@ -214,7 +214,7 @@ type Client struct {
 	name         string
 	pf           pixel.Format
 	fb           *image.RGBA
-	cursorCache  map[uint32]*image.RGBA
+	cursorCache  map[uint32]ardCursor
 	haveCreds    bool
 	user, pass   string
 	updates      int  // FramebufferUpdates finished
@@ -280,7 +280,7 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 	conn = in
 	c := &Client{
 		conn: conn, opt: opt, h: h, serverName: serverName,
-		out: conn, cursorCache: make(map[uint32]*image.RGBA),
+		out: conn, cursorCache: make(map[uint32]ardCursor),
 		log: opt.Logger, in: in, bps: initialBPS, fullColour: true,
 	}
 	if c.log == nil {
