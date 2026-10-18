@@ -3,14 +3,33 @@
 What is known about Apple Remote Desktop / Screen Sharing drag-and-drop and
 file copy over the RFB 003.889 session, and where MyVNC stands.
 
-Status: **protocol mapped, not implemented.** The message framing and command
-set below are recovered from the macOS 27.2 (build 26B5101f) `screensharingd`
-binary and the private `ScreenSharing.framework` headers, and cross-checked
-against the capability bitmaps both ends advertise. The one piece still missing
-is the file *content* channel (see [Open questions](#open-questions)), without
-which a transfer cannot be implemented end to end. No disruptive live drag was
-run against the user's Mac, and no second Apple viewer was available to capture
-a real transfer, so the byte layouts are from the binary, not a packet capture.
+Status: **command layer decoded and verified live; file content channel still
+unknown.** On 2026-10-18 a live capture against desktop (macOS 27.2, build
+26B5101f, standard mode) drove the `0x22` FileCopy command directly and watched
+`screensharingd`, `SSFileCopySender` and `SSFileCopyReceiver` in `log stream`.
+The results below are from that capture plus the binary and the private
+`ScreenSharing.framework` headers.
+
+What now works, confirmed by the Mac's own logs:
+
+- The exact `0x22` command framing (byte layout, length field, NUL-terminated
+  path) — the Mac parses version/cmd/sessionID/flags/pathLen correctly and no
+  longer desyncs the RFB stream.
+- **Upload (viewer -> Mac), cmd 2 StartFileReceive, up to the point of sending
+  bytes.** With the right command the Mac resolves the destination
+  (`GetDestinationFolderFSRefFromPath error 0`), launches `SSFileCopyReceiver`
+  (`ProcessStartStartFileReceiverMessage error 0`) and sits in
+  `WaitForDataFromSender` waiting for the viewer to stream the file.
+- The `0x22` status record the Mac sends back (`[pad][u32 len][body]`), captured
+  verbatim.
+
+What is still missing is the **file content sub-protocol** (ItemInfo / NewItem /
+data / EndSession records the sender streams inside the session; see
+[Open questions](#open-questions)). Its byte layouts are not recovered, so a
+real file cannot be pushed yet and no SHA-256 round trip was achieved. Download
+(Mac -> viewer) is **not** initiated by a viewer `0x22` command at all (see
+below). No second Apple viewer was available to capture a ground-truth transfer,
+and no disruptive drag was injected into the Mac.
 
 ## Evidence
 
@@ -35,8 +54,7 @@ log prints (`slog` renders the byte as decimal).
 |---|---|---|---|
 | `0x0e` (14) | viewer → Mac | DragEvent | drag motion/type during a drag; `HandleDragEventMessage` |
 | `0x20` (32) | both | ServerDragEvent / DropEvent | `[u32 sessionID/type][u32 extraSize][extra…]`; extra is a zlib drag pasteboard |
-| `0x22` (34) | viewer → Mac | FileCopy command | see below; `HandleFileCopyMessage` → `ServerProcessFileCopyCmd` |
-| `0x23` (35) | Mac → viewer | FileCopy status | item/progress/result info (SSFileCopy); u16-length-prefixed body (framing unverified) |
+| `0x22` (34) | **both** | FileCopy command / status / content | `[pad][u32 bodyLen][body]`; verified live (below). The viewer sends commands; the **Mac also sends `0x22` back** for status and content. |
 
 Both ends already advertise the matching capability bits, so no ViewerInfo
 change is needed to turn the feature on:
@@ -44,61 +62,123 @@ change is needed to turn the feature on:
 - The Mac's ServerInit bitmap lists `0x0e`, `0x20` and `0x22` among the client
   messages it accepts.
 - MyVNC's ViewerInfo bitmap (inherited from Apple's native viewer) lists `0x20`
-  and `0x23` among the server messages it accepts. It does **not** list `0x22`,
-  which is correct: `0x22` is viewer → Mac only.
+  and `0x23` among the server messages it accepts.
 
-A real transfer therefore makes the Mac send `0x23`, which MyVNC previously did
-not route — it fell through to the generic dispatch and killed the session.
-That is now fixed (`reader.go`): `0x20` and `0x23` are stepped over and the body
-is dumped at debug level.
+Correction from the live capture: the file-copy status/content the Mac sends
+back arrives as **`0x22`**, not `0x23`. `0x23` was never observed. MyVNC now
+routes `0x22`, `0x20` and `0x23` and steps over each; a transfer no longer kills
+the session.
 
-## FileCopy command (`0x22`)
+## FileCopy command (`0x22`) — verified live
 
-`ServerProcessFileCopyCmd` parses, big-endian:
+`ServerProcessFileCopyCmd` → `HandleFileCopyMessage`, forwarded to
+`SSFileCopySender` / `SSFileCopyReceiver`. Big-endian layout, confirmed by the
+daemon's and the receiver tool's own logs (`got command N messageSize M`,
+`pathlen = P`, `cmd = N messageSize = M`):
 
 ```
 offset  size  field
 0       u8    type = 0x22
 1       u8    pad
-2       u32   messageSize   (whole message, must be >= 18)
-6       u16   version
+2       u32   bodyLen       (= total - 6; the daemon reads this many bytes
+                             AFTER the 6-byte header. Over-stating it makes the
+                             daemon over-read and desync the whole RFB stream —
+                             it then misreads the next message as SetPixelFormat
+                             and drops the connection.)
+6       u16   version = 1   (the daemon logs "message is old version" for 1)
 8       u16   cmd
 0xa     u32   sessionID
 0xe     u32   flags
-0x12    u32   (unidentified; reserved / size-or-offset)
-0x16    u16   pathLen       (StartFileSend / StartFileReceive)
-0x18    ...   path          (pathLen bytes)
+0x12    u32   reserved      (0 accepted)
+0x16    u16   pathLen       (bytes, INCLUDING the trailing NUL)
+0x18    ...   path          NUL-terminated, then >= 6 trailing bytes
 ```
 
-`cmd` (from the daemon's own log strings):
+Two things the Mac is strict about, each found by the receiver's error logs:
 
-| cmd | Name | Meaning |
+- The path must be **NUL-terminated** (else `destination path is not
+  terminated`, error -2).
+- `bodyLen` must be **>= 0x18 + pathLen**, i.e. at least 6 bytes beyond the
+  NUL-terminated path (else `start file receive path does not fit`, error -2).
+  So the effective base is 0x18 (24) bytes, not the struct's nominal 18 (0x12);
+  `ardFileCopyCmd` appends 6 zero bytes after the path.
+
+`cmd` (from the daemon's log strings) and the direction it actually produces:
+
+| cmd | Name | Observed effect |
 |---|---|---|
-| 1 | StartFileSend | Mac → viewer: the Mac starts sending a file (download) |
-| 2 | StartFileReceive | viewer → Mac: the Mac starts receiving a file (upload) |
-| 3 | Pause transfer | |
-| 4 | Continue transfer | resume |
-| 5 | Stop file transfer | cancel |
+| 1 | StartFileSend | Daemon: `do not start file send`, `viewer is sender 1`; **no** `SSFileCopySender` is launched. A viewer `0x22` does not pull a download — see below. |
+| 2 | StartFileReceive | Daemon launches `SSFileCopyReceiver`, resolves the destination folder from the path, and waits for the viewer to stream the file (**upload**). This path works up to the content phase. |
+| 3 | Pause | |
+| 4 | Continue | resume |
+| 5 | Stop | cancel |
 
-These line up with `SSSession`: `fileCopyLocalPath:toRemotePath:` (upload,
-StartFileReceive on the server), `fileCopyRemotePath:toLocalPath:withFileName:`
-(download, StartFileSend on the server), `pause/resume/cancelFileCopy:`.
+A verified StartFileReceive (upload) command, path
+`/Users/jdoe/myvnc-drag-test/upload_dest.txt` (43 chars):
 
-## FileCopy status (`0x23`, Mac → viewer)
+```
+22 00 00000044 0001 0002 00000001 00000000 00000000 002c
+2f 55 73 65 72 73 … 74 78 74 00                 (path + NUL, 44 bytes)
+00 00 00 00 00 00                               (6 trailing bytes)
+```
 
-Carried by the `SSSession` handlers; the struct shapes are from the headers
-(so they are the in-memory structs, not necessarily the exact wire bytes):
+(`bodyLen 0x44 = 68`, total 74; the daemon logs `messageSize 74`.)
 
-- `handleFileTransferItemInfo:` `{u32; s16; u8; u8; u64; u64; u64; u64; u64; u32}`
-  — per-item: identifier, flags, direction, isDirectory, sizes/counts.
-- `handleFileTransferProgressInfo:` `{u32; double}` — identifier, fraction.
-- `handleFileTransferResultInfo:` `{u32; s16; u16; char[]}` — identifier,
-  result/error code, then a trailing string.
-- `handleFileRequest:` `{int; char[]}`.
+### Download direction
 
-`SSFileCopy` properties: `identifier u64`, `direction`, `sourcePath`,
-`destinationPath`, `bytesToCopy`, `bytesCopied`, `state`, `errorCode`,
-`isDirectory`, `displayName`.
+cmd 1 (StartFileSend) from the viewer does **not** make the Mac send a file: the
+daemon logs `viewer is sender 1` / `do not start file send` and keeps a
+`viewerIsSenderFlag` set. The sender tool
+(`screensharingd.bundle/.../SSFileCopySender`) is only launched when
+`viewerIsSenderFlag == 0`, which a plain viewer `0x22` command never sets. A
+download is therefore Mac-initiated — it happens when the user drags a file out
+of the remote screen (the drag subsystem, `0x0e` / `0x20`), after which the Mac
+runs `SSFileCopySender`. Pulling a download with `0x22` alone is not supported.
+
+## FileCopy status / content (`0x22`, Mac → viewer)
+
+Same framing as the command, `[0x22][pad][u32 bodyLen][body]`. Captured status
+body (13 bytes) the Mac sent after a StartFileReceive it then stopped:
+
+```
+00 01  00 c8  00 00 00 01  00 05  00 00 00
+ver=1  0x00c8  sessionID=1   cmd=5  (= Stop)
+```
+
+so a status/result record reuses the command's `version / code / sessionID /
+cmd` shape; `0x00c8` (200) is a status/result code and `cmd 5` is Stop.
+
+### File content sub-protocol (still unknown)
+
+After StartFileReceive the Mac's `SSFileCopyReceiver` loops in
+`WaitForDataFromSender`, reading further records from the same (decrypted) RFB
+connection — confirmed: a follow-up `0x22` the viewer sent was forwarded to the
+receiver (`cmd = 2 messageSize = N`). So content **is inline on the same
+connection**, as the 2026 CVE write-ups claimed. The receiver's strings name the
+sub-messages it expects within the session:
+
+- `kRFBFileCopy_ItemInfo` → `ProcessItemInfoMessage`, fields
+  `lFileSize / pFileSize / fileCount / forkCount / folderCount / allocSize`.
+- `NewItem` → `ProcessNewItemMessage` (`newItemName`, `newItemExtraInfo`, a
+  `level`, sym-link handling, `CreateNewItem`), then the file bytes.
+- `EndSession` → `ProcessEndSessionMessage` → `MoveItemsToDestinationFolder`,
+  then an end-status record back to the viewer.
+- extended attributes (`ExtendedAttributes_*`), and a per-chunk read bounded by
+  `minBytesToRead / maxBytesToRead`.
+
+The exact sub-message cmd values and byte layouts are **not** recovered. A
+follow-up `0x22` with a guessed cmd/payload was consumed without being parsed as
+an ItemInfo (no `itemInfo->…` log, no `unexpected cmd`), so the sub-framing
+differs from the command's and needs the `SSFileCopyReceiver` disassembly or a
+ground-truth Apple-viewer upload capture. Until then the viewer cannot push the
+file bytes, so no end-to-end transfer / SHA-256 round trip is possible yet.
+
+The `SSSession` header handlers (in-memory structs, not necessarily wire bytes):
+`handleFileTransferItemInfo:` `{u32; s16; u8; u8; u64×5; u32}`,
+`handleFileTransferProgressInfo:` `{u32; double}`,
+`handleFileTransferResultInfo:` `{u32; s16; u16; char[]}`. `SSFileCopy`
+properties: `identifier u64`, `direction`, `sourcePath`, `destinationPath`,
+`bytesToCopy`, `bytesCopied`, `state`, `errorCode`, `isDirectory`, `displayName`.
 
 ## Drag (`0x0e`, `0x20`)
 
@@ -113,28 +193,37 @@ Carried by the `SSSession` handlers; the struct shapes are from the headers
   viewer.
 
 Drag is a UI signal only. The actual bytes move through the FileCopy subsystem
-(`0x22`/`0x23` plus the content channel below), which is why `screensharingd`
+(`0x22` plus the content sub-protocol above), which is why `screensharingd`
 ships separate `SSFileCopySender` / `SSFileCopyReceiver` helper tools.
 
 ## Open questions
 
-1. **File content channel.** `ServerProcessFileCopyCmd` parses only the command
-   header and path. The daemon then drives `SSFileCopySender` /
-   `SSFileCopyReceiver` helper tools. Whether the file bytes stream as further
-   `0x22`/`0x23` records on the same RFB connection (as 2026 CVE write-ups claim,
-   `FILE_CONTENT_BEGIN/END`) or over a side channel the helpers open is not
-   settled from the binary alone. Decoding it needs a captured transfer.
-2. `0x23` body framing (u16-length assumed, matching the `0x51`/metadata
-   pattern) is unverified; the debug dump will capture the real bytes the first
-   time a transfer runs.
-3. Bytes at offset `0x12` of the FileCopy command are not identified.
+1. **File content sub-protocol.** Content streams inline on the same connection
+   (confirmed), but the ItemInfo / NewItem / data / EndSession sub-message cmd
+   values and byte layouts are not recovered. Needed to push a file (upload) and
+   to interpret a Mac-sent file (download). Decode from the `SSFileCopyReceiver`
+   arm64 disassembly or a ground-truth Apple-viewer upload capture.
+2. **Download initiation.** A viewer `0x22` cmd 1 does not start a download
+   (`viewer is sender 1`). Confirm download only starts from a drag out of the
+   remote screen, and capture the `0x22` records `SSFileCopySender` then emits —
+   those reveal the content sub-protocol for free (the Mac is the sender).
+3. The **version 2** ("new version") command/content format — the daemon treats
+   version 1 as the "old version"; Apple's own viewer may use 2 with a cleaner
+   layout.
+4. The `0x12` reserved field, the status `code 0x00c8`, and whether `0x23` is
+   used at all (never observed live).
 
 ## How to capture more
 
-With MyVNC's new debug dump (`Options.Logger` at `slog.LevelDebug`), every ARD
-server message logs its type and a bounded hex of the buffered head, unknown
-types included, without consuming or desyncing the stream. To provoke the drag
-and file-copy messages, a drag-and-drop file copy has to actually happen in the
-session — either Apple's own viewer doing a copy against the Mac (to capture
-ground truth), or MyVNC initiating one once the content channel is known. Do not
+`rfb/filecopy_test.go` `TestMacFileCopyCapture` (env `MYVNC_FILECOPY_TEST=1`,
+`MYVNC_E2E_PASS`) drives a `0x22` command against a Mac in standard mode, taps
+the whole decrypted stream to a file, and logs every inbound `0x22` body; knobs
+(`MYVNC_FC_CMD`, `MYVNC_FC_PATH`, `MYVNC_FC_PREPAD`/`POSTPAD`/`SIZE`,
+`MYVNC_FC_AFTERCMD`/`AFTERLEN`) let you sweep the layout. Watch the Mac with
+`log stream --debug --info --predicate 'process == "screensharingd" OR process
+CONTAINS "SSFileCopy"'`; the receiver tool logs its parse in detail
+(`cmd = N messageSize = M`, `itemInfo->…`, `unexpected cmd N size U`,
+`path does not fit`, `destination path is not terminated`). To capture
+ground-truth content, have Apple's own viewer run a copy against the Mac, or get
+download working (item 2) so the Mac itself emits the content records. Do not
 inject a drag into a Mac a user is actively on.

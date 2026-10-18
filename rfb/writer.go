@@ -145,6 +145,38 @@ func ardSessionCommand(user []byte) []byte {
 	return append(b, name[:]...)
 }
 
+// ardFileCopyCmd builds a 0x22 FileCopy command (viewer -> Mac); see
+// docs/ard-drag.md. cmd: 1 StartFileSend, 2 StartFileReceive (viewer ->
+// Mac upload), 3 Pause, 4 Continue, 5 Stop. Framing, verified live against
+// screensharingd / SSFileCopyReceiver on macOS 27.2:
+//
+//	0x00 u8  type = 0x22
+//	0x01 u8  pad
+//	0x02 u32 body length (= total - 6; the daemon reads this many bytes
+//	         after the 6-byte header, so over-stating it desyncs the stream)
+//	0x06 u16 version = 1
+//	0x08 u16 cmd
+//	0x0a u32 sessionID
+//	0x0e u32 flags
+//	0x12 u32 reserved
+//	0x16 u16 pathLen (bytes, including the trailing NUL)
+//	0x18 ... path, NUL-terminated, then 6 trailing bytes the receiver
+//	         requires (messageSize must be >= 0x18 + pathLen).
+func ardFileCopyCmd(cmd uint16, sessionID, flags uint32, path string) []byte {
+	p := append([]byte(path), 0) // the daemon requires a NUL-terminated path
+	b := make([]byte, 0, 0x1e+len(p))
+	b = append(b, 0x22, 0)
+	b = be.AppendUint32(b, uint32(0x18+len(p))) // 0x02 body length (= total - 6)
+	b = be.AppendUint16(b, 1)                   // 0x06 version
+	b = be.AppendUint16(b, cmd)                 // 0x08 cmd
+	b = be.AppendUint32(b, sessionID)           // 0x0a sessionID
+	b = be.AppendUint32(b, flags)               // 0x0e flags
+	b = be.AppendUint32(b, 0)                   // 0x12 reserved
+	b = be.AppendUint16(b, uint16(len(p)))      // 0x16 pathLen (incl. NUL)
+	b = append(b, p...)                         // 0x18 path
+	return append(b, 0, 0, 0, 0, 0, 0)          // 6 trailing bytes
+}
+
 func ardSetEncryption(ack bool) []byte {
 	if ack {
 		return []byte{0x12, 0, 0, 2, 0, 1, 0, 0}
