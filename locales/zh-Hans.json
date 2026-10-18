@@ -28,6 +28,7 @@
   "clipboard": "剪贴板",
   "acceptClipboard": "接收服务器的剪贴板",
   "sendClipboard": "发送本机的剪贴板",
+  "fetchClipboard": "将服务器的剪贴板复制到本机",
   "input": "输入",
   "viewOnly": "仅查看",
   "emulateMiddleButton": "模拟鼠标中键（左键 + 右键）",

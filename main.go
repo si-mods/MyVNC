@@ -400,6 +400,16 @@ func (a *app) blur() {
 	}
 	a.focused = false
 	a.updateGrab()
+	// The user may be about to paste elsewhere.
+	a.requestClipboard()
+}
+
+// requestClipboard pulls the server's announced clipboard text, which
+// rfb leaves on the server until then (#11).
+func (a *app) requestClipboard() {
+	if a.sess != nil && !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
+		a.sess.RequestClipboard()
+	}
 }
 
 // serverLED follows the server's lock key LEDs, as TigerVNC's

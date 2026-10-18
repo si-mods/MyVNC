@@ -41,6 +41,8 @@
   "clipboard": "Clipboard",
   "acceptClipboard": "Receive the server's clipboard",
   "sendClipboard": "Send the local clipboard",
+  "fetchClipboard": "Copy the server's clipboard here",
+  "@fetchClipboard": { "description": "Session menu button: fetches the clipboard text the server announced into the local clipboard." },
   "input": "Input",
   "viewOnly": "View only",
   "emulateMiddleButton": "Emulate middle button (left + right)",

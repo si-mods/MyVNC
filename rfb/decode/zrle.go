@@ -10,7 +10,10 @@ import (
 )
 
 // ZRLE is the ZRLE encoding (16). It keeps one zlib stream.
-type ZRLE struct{ zs zstream }
+type ZRLE struct {
+	plain
+	zs zstream
+}
 
 func (z *ZRLE) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *image.RGBA) error {
 	if err := check(fb, rect); err != nil {

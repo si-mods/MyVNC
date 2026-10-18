@@ -45,6 +45,8 @@ const (
 	PseudoEncodingCursorWithAlpha      int32 = -314
 	PseudoEncodingExtendedMouseButtons int32 = -316
 	PseudoEncodingExtendedClipboard    int32 = -1063131698 // 0xC0A1E5CE
+	PseudoEncodingVMwareCursor         int32 = 0x574d5664
+	PseudoEncodingVMwareCursorPosition int32 = 0x574d5666
 	PseudoEncodingVMwareLEDState       int32 = 0x574d5668
 
 	PseudoEncodingQualityLevel0  int32 = -32
