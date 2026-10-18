@@ -452,13 +452,20 @@ func (a *app) statsView(c *ui.Context) {
 		a.stats.link = a.sess.Link()
 		if !a.stats.at.IsZero() {
 			p, sec := a.stats.last, d.Seconds()
-			n := s.Updates - p.Updates
-			a.stats.fps = float64(n) / sec
+			n, ns, bytes := s.Updates-p.Updates, s.DecodeNs-p.DecodeNs, s.Bytes-p.Bytes
+			if a.mediaLive() { // the media stream's pictures, not the framebuffer's
+				shown := s.MediaShown - p.MediaShown
+				n, ns, bytes = s.MediaDecoded-p.MediaDecoded, s.MediaDecodeNs-p.MediaDecodeNs, s.MediaBytes-p.MediaBytes
+				a.stats.fps = float64(shown) / sec
+				a.stats.dropped = float64(max(n-shown, 0)) / sec
+			} else {
+				a.stats.fps = float64(n) / sec
+			}
 			a.stats.decodeMs = 0
 			if n > 0 {
-				a.stats.decodeMs = float64(s.DecodeNs-p.DecodeNs) / float64(n) / 1e6
+				a.stats.decodeMs = float64(ns) / float64(n) / 1e6
 			}
-			a.stats.mbps = float64(s.Bytes-p.Bytes) * 8 / sec / 1e6
+			a.stats.mbps = float64(bytes) * 8 / sec / 1e6
 		}
 		a.stats.at, a.stats.last = now, s
 	}
@@ -483,12 +490,20 @@ func (a *app) statsView(c *ui.Context) {
 		colour = "full"
 	}
 	ui.Column(c).Absolute().Top(8).Left(8).Padding(6, 8).Radius(6).Background(ui.RGBA(0, 0, 0, 0.6)).Children(func() {
+		// The RFB encoding lines say nothing while the media stream draws;
+		// the mode line names its codec.
+		encoding, requested, dropped := locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
+			locales.StatsRequested(auto, colour, viewer.EncodingName(l.Encoding), q), ""
+		if a.mediaLive() {
+			encoding, requested, dropped = "", "", locales.StatsDropped(n(a.stats.dropped, 0))
+		}
 		for _, l := range []string{
 			locales.StatsFps(n(a.stats.fps, 0)),
 			locales.StatsDecode(n(a.stats.decodeMs, 1)),
 			locales.StatsBitrate(n(a.stats.mbps, 1)),
-			locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
-			locales.StatsRequested(auto, colour, viewer.EncodingName(l.Encoding), q),
+			dropped,
+			encoding,
+			requested,
 			locales.StatsLink(strconv.FormatInt(l.Kbps, 10), rtt),
 			locales.StatsResolution(resolution(a.sess.Size())),
 			a.statsMode(),
@@ -501,6 +516,9 @@ func (a *app) statsView(c *ui.Context) {
 		}
 	})
 }
+
+// mediaLive says High Performance's pictures are the ones on screen.
+func (a *app) mediaLive() bool { return a.sess.HighPerformance() && a.sess.Media != "" }
 
 // statsMode is the HUD's mode line, empty without High Performance.
 func (a *app) statsMode() string {
@@ -523,10 +541,10 @@ func (a *app) statsDecoder() string {
 func resolution(w, h int) string { return strconv.Itoa(w) + "×" + strconv.Itoa(h) }
 
 type statsSample struct {
-	at                  time.Time
-	last                viewer.Stats
-	link                rfb.LinkStats
-	fps, decodeMs, mbps float64
+	at                           time.Time
+	last                         viewer.Stats
+	link                         rfb.LinkStats
+	fps, decodeMs, mbps, dropped float64
 }
 
 func (a *app) screenView(c *ui.Context) {

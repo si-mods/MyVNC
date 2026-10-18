@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.6 (2026-10-18). Open work is tracked in GitHub issues.
+Status as of v0.0.7 (2026-10-18). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -56,6 +56,10 @@ Status as of v0.0.6 (2026-10-18). Open work is tracked in GitHub issues.
     2 s, one media offer of the real display size.
   - The title follows ARD session encryption (#36).
   - Tests for the coverage gaps; CI lists skipped tests.
+
+- v0.0.7:
+  - The stats HUD counts High Performance pictures: FPS shown, decode ms,
+    media Mbit/s and dropped pictures (#40).
 
 ## Deferred by the owner
 

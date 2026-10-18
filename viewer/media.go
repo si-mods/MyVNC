@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"time"
 
 	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb/ard/media"
@@ -66,17 +67,21 @@ type videoPipe struct {
 	// show has a decoded picture, how it came and the decoder
 	show    func(img *image.RGBA, how string, dec mf.Info)
 	noCodec func(error) // nothing decodes the codec: give up
+	n       *counters   // the session's, for the statistics overlay
 }
 
-func newVideoPipe(m mf.Mode, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error)) *videoPipe {
+func newVideoPipe(m mf.Mode, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), n *counters) *videoPipe {
 	p := &videoPipe{units: make(chan *media.Unit, videoQueue), done: make(chan struct{}), mode: m,
-		keyframe: keyframe, show: show, noCodec: noCodec}
+		keyframe: keyframe, show: show, noCodec: noCodec, n: n}
 	go p.run()
 	return p
 }
 
 // push is media.StreamConfig.OnUnit.
 func (p *videoPipe) push(u *media.Unit) {
+	for _, n := range u.NALs {
+		p.n.mediaBytes.Add(int64(len(n)))
+	}
 	select {
 	case p.units <- u:
 	case <-p.done:
@@ -122,11 +127,16 @@ func (p *videoPipe) run() {
 		}
 		var frames []mf.Frame
 		var err error
+		start := time.Now()
 		if len(p.units) >= unseenBehind {
-			_, err = dec.DecodeHidden(u.AnnexB(), t)
+			var n int
+			n, err = dec.DecodeHidden(u.AnnexB(), t)
+			p.n.mediaDecoded.Add(int64(n))
 		} else {
 			frames, err = dec.Decode(u.AnnexB(), t)
+			p.n.mediaDecoded.Add(int64(len(frames)))
 		}
+		p.n.mediaDecodeNs.Add(int64(time.Since(start)))
 		t += 166666 // 100 ns units at 60 Hz
 		if err != nil {
 			p.keyframe()
