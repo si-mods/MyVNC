@@ -129,13 +129,7 @@ func ardPasteboard(s string) []byte {
 		archive = be.AppendUint32(archive, uint32(len(s)))
 		archive = append(archive, s...)
 	}
-	var z bytes.Buffer
-	zw := zlib.NewWriter(&z)
-	zw.Write(archive)
-	zw.Flush()
-	b := be.AppendUint32([]byte{0x1f, 0, 0, 0, 0, 0, 0, 0}, uint32(len(archive)))
-	b = be.AppendUint32(b, uint32(z.Len()))
-	return append(b, z.Bytes()...)
+	return ardPasteboardMessage(archive)
 }
 
 func ardSessionCommand(user []byte) []byte {

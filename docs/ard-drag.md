@@ -228,7 +228,31 @@ receiver's logs: `level = 0`, `namelength 16`, `extra amount 0`,
 `bodyLen = 0xc + length`. Chunks are counted against the open fork's
 `dataLogicalSize`; the receiver logs `bytes written N total M` and rejects a
 chunk larger than the remainder. 64 KiB chunks work (`messageSize 65548` in its
-log). `0x67` is the same with a zlib-compressed payload; MyVNC sends `0x66`.
+log).
+
+### Compressed file data (0x67)
+
+```
+0x0e u16 flag = 1       (wired as 00 01; the receiver normalises it)
+0x10 u32 raw length
+0x14 u32 compressed length
+0x18 ... zlib stream
+```
+
+`bodyLen = 0x12 + compressedLen`. Two details from the disassembly matter:
+
+- The sender uses `deflateInit2_` level 9 and ends every chunk with
+  **Z_SYNC_FLUSH**, not Z_FINISH. All compressed chunks of one transfer are
+  **one continuous zlib stream**: the receiver calls `inflate` per chunk and
+  never resets its state.
+- A chunk is compressed only when it pays off (`IsBufferWorthCompressing`);
+  otherwise it goes as an uncompressed `0x66`.
+
+MyVNC does the same (level 9, continuous stream, 3% saving threshold), which
+cut a 200000-byte text upload from 200000 to ~650 bytes of payload; incompressible
+data still goes out as `0x66`. Verified live: the receiver logged
+`compressed filedata` and `end status = 0`, and the received file matched the
+source SHA-256.
 
 ### EndSession (0x68)
 
@@ -270,6 +294,34 @@ Drag is a UI signal only. The actual bytes move through the FileCopy subsystem
 (`0x22` plus the content sub-protocol above), which is why `screensharingd`
 ships separate `SSFileCopySender` / `SSFileCopyReceiver` helper tools.
 
+## Clipboard files
+
+The Mac's pasteboard agent (`ScreensharingAgent`) installs a remote
+`0x1f` archive with `CreateUTIsFromPackedTypeData`, which drops
+`public.file-url` with `-39` (`noTypeErr`) on macOS 27.2 — verified live. It
+does accept `public.url` when the record uses the promise-style shape: the
+`0x1f` header's promise byte is 1, and the archive is a bare flavor list
+(`u32 flavorCount`, then name/reserved/tags/data per flavor) without the
+normal item wrapper. Text keeps the normal item archive with promise = 0.
+
+MyVNC uses this for Windows -> Mac:
+
+1. `win32.ReadClipboardFiles` reads CF_HDROP when files are copied.
+2. `Client.UploadFiles` sends each regular file with the file-copy path above
+   to `/Users/<login>/Downloads`.
+3. `Client.ClipboardFiles` puts the last remote path on the Mac pasteboard as
+   a `public.url` file URL (promise flag 1). The Mac's `clipboard info` then
+   shows `URL`.
+
+Limitation: this puts the file URL on the pasteboard, so the Mac user can
+paste the path (Finder's Go to Folder, a URL-aware app) and the file is
+already in Downloads. Native Finder "paste as file" needs a file promise:
+the Mac helper serves it through `OurPromiseKeeper` -> agent
+`SSDaemon_PasteboardDataNeeded_rpc` -> daemon -> viewer, and that request /
+response half is not implemented yet. The promises-only archive the Mac sends
+(4 flavors, zero-length data) was captured and is documented above; the
+viewer-side response is the remaining work.
+
 ## Open questions
 
 1. **Download initiation.** A viewer `0x22` cmd 1 does not start a download
@@ -281,11 +333,14 @@ ships separate `SSFileCopySender` / `SSFileCopyReceiver` helper tools.
    length at 0x18, path at 0x1a (the receiver accepts it, and logs
    `message is old version` for v1). v1 carries the destination path directly
    and is what MyVNC sends.
-3. The `0x12` reserved field (0 accepted) and the `0x67` compressed-data chunk
-   fields (`u16` at 0x0e, `u32` sizes at 0x10/0x14, zlib payload); MyVNC uses
-   uncompressed `0x66` chunks.
+3. The `0x12` reserved field (0 accepted); `0x67` is implemented (continuous
+   zlib stream, level 9, sync flush) and verified live.
 4. `0x23` has never been observed live for file copy; the Mac sends status and
    content as `0x22`.
+5. **Clipboard file promises.** The viewer puts already-uploaded files on the
+   Mac pasteboard as `public.url` URLs. Native Finder paste-as-file needs the
+   promise content request/response (helper -> agent -> daemon -> viewer),
+   which is not decoded yet; see [Clipboard files](#clipboard-files).
 
 ## How to test and capture more
 
