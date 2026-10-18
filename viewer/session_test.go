@@ -8,10 +8,12 @@ import (
 	"image"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/kyya/myvnc/internal/fakerfb"
 	"github.com/kyya/myvnc/rfb"
 )
 
@@ -207,5 +209,117 @@ func TestSecurityLevel(t *testing.T) {
 	if !PasswordUnprotected(rfb.SecTypeVncAuth) || !PasswordUnprotected(rfb.SecTypePlain) ||
 		PasswordUnprotected(rfb.SecTypeX509Plain) || PasswordUnprotected(rfb.SecTypeRA256) {
 		t.Error("PasswordUnprotected")
+	}
+}
+
+// A server faster than the UI: the read loop hands the UI one frame at a
+// time (UpdateDone waits for the one before to be taken up), so that no
+// more than one waits, and every frame shown is a complete one, the
+// newest, with the rectangles of the updates it replaced.
+func TestFastProducerBoundedQueue(t *testing.T) {
+	const w, h, frames = 64, 48, 400
+	msgs, err := fakerfb.Frames(1, 1, fakerfb.Raw) // never read
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go fakerfb.Serve(l, w, h, msgs)
+
+	type frame struct {
+		show func()
+		n    int
+	}
+	var (
+		cur      atomic.Int32 // the frame being produced
+		inFlight atomic.Int32 // posted, not yet taken up by the UI
+		maxSeen  atomic.Int32
+		posted   = make(chan frame, frames)
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s, err := Connect(ctx, l.Addr().String(), rfb.Options{}, func(f func()) {
+		if n := inFlight.Add(1); n > maxSeen.Load() {
+			maxSeen.Store(n)
+		}
+		posted <- frame{f, int(cur.Load())}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Frame k paints three squares, so that what a frame changes is
+	// several rectangles, and what it leaves is what earlier ones made.
+	fb := s.c.Framebuffer()
+	want := make([]*image.RGBA, frames)
+	squares := func(k int) [3]image.Rectangle {
+		var r [3]image.Rectangle
+		for i := range r {
+			x, y := (k*7+i*19)%(w-8), (k*5+i*11)%(h-8)
+			r[i] = image.Rect(x, y, x+8, y+8)
+		}
+		return r
+	}
+	{ // the expected screens, made on the side
+		ref := image.NewRGBA(fb.Rect)
+		copy(ref.Pix, fb.Pix)
+		for k := range frames {
+			for i, r := range squares(k) {
+				paint(ref, r, byte(1+(k*3+i)%250))
+			}
+			want[k] = image.NewRGBA(ref.Rect)
+			copy(want[k].Pix, ref.Pix)
+		}
+	}
+	go func() {
+		for k := range frames {
+			cur.Store(int32(k))
+			for i, r := range squares(k) {
+				paint(fb, r, byte(1+(k*3+i)%250))
+				s.Updated(r)
+			}
+			s.UpdateDone() // waits while the UI holds the last frame
+		}
+	}()
+
+	last := -1
+	for got := 0; got < frames; {
+		select {
+		case f := <-posted:
+			if k := inFlight.Load(); k != 1 {
+				t.Fatalf("%d frames wait for the UI", k)
+			}
+			if got%7 == 0 {
+				time.Sleep(time.Millisecond) // a UI slower than the server
+			}
+			inFlight.Add(-1) // before show: it frees the next
+			f.show()
+			got++
+			if f.n <= last {
+				t.Fatalf("frame %d shown after %d", f.n, last)
+			}
+			last = f.n
+			if !bytes.Equal(s.Shown.Pix, want[f.n].Pix) {
+				t.Fatalf("frame %d shown incomplete: the rectangles of earlier updates are lost", f.n)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("stuck after %d frames", got)
+		}
+	}
+	if maxSeen.Load() != 1 {
+		t.Errorf("up to %d frames waited at once", maxSeen.Load())
+	}
+}
+
+func paint(img *image.RGBA, r image.Rectangle, v byte) {
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			o := img.PixOffset(x, y)
+			copy(img.Pix[o:o+4], []byte{v, v, v, 255})
+		}
 	}
 }
