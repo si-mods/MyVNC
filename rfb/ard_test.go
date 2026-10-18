@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"encoding/hex"
 	"image"
 	"log/slog"
 	"os"
@@ -172,11 +173,51 @@ func TestARDDragFileCopySkip(t *testing.T) {
 	// 0x23 server file-copy status: u16 length, then the body.
 	read([]byte{0x23, 0, 4, 0x01, 0x02, 0x03, 0x04})
 
+	// 0x22 file-copy record from the Mac: [pad][u32 len][body]. These are
+	// the exact bytes macmini sent after a StartFileReceive it stopped
+	// (version 1, code 0x00c8, sessionID 1, cmd 5 Stop), captured live on
+	// 2026-10-18 (macOS 27.2). The fcServer hook gets the 13-byte body.
+	var gotBody []byte
+	c.fcServer = func(b []byte) { gotBody = append([]byte(nil), b...) }
+	status, _ := hex.DecodeString("000100c8000000010005000000")
+	rec := append([]byte{0x22, 0}, be.AppendUint32(nil, uint32(len(status)))...)
+	read(append(rec, status...))
+	if !bytes.Equal(gotBody, status) {
+		t.Errorf("0x22 body = %x, want %x", gotBody, status)
+	}
+
 	s := logbuf.String()
 	if !strings.Contains(s, "type=32") || !strings.Contains(s, "head=00000001000000") {
 		t.Errorf("0x20 not dumped: %s", s)
 	}
 	if !strings.Contains(s, "type=35") || !strings.Contains(s, "head=000401020304") {
 		t.Errorf("0x23 not dumped: %s", s)
+	}
+	if !strings.Contains(s, "ARD file-copy 0x22") {
+		t.Errorf("0x22 not logged: %s", s)
+	}
+}
+
+// TestARDFileCopyCmd checks the 0x22 StartFileReceive (upload) command
+// against the layout verified live against screensharingd /
+// SSFileCopyReceiver on macOS 27.2 (2026-10-18): a 6-byte RFB header, an
+// 18-byte body base, the NUL-terminated path at offset 0x18 and 6 trailing
+// bytes; the body-length field is total-6. This exact framing made the
+// Mac accept the command and launch its receiver (see docs/ard-drag.md).
+func TestARDFileCopyCmd(t *testing.T) {
+	const path = "/Users/yibo/myvnc-drag-test/upload_dest.txt" // 43 bytes
+	msg := ardFileCopyCmd(2, 1, 0, path)
+	want := "22 00" + // type, pad
+		"00000044" + // body length = 0x18 + 44 = 68 (total 74, minus 6-byte header)
+		"0001" + // version
+		"0002" + // cmd = StartFileReceive
+		"00000001" + // sessionID
+		"00000000" + // flags
+		"00000000" + // reserved
+		"002c" + // pathLen = 44 (incl. NUL)
+		hex.EncodeToString(append([]byte(path), 0)) +
+		"000000000000" // 6 trailing bytes
+	if got := hex.EncodeToString(msg); got != strings.ReplaceAll(want, " ", "") {
+		t.Errorf("ardFileCopyCmd:\n got %s\nwant %s", got, strings.ReplaceAll(want, " ", ""))
 	}
 }
