@@ -188,9 +188,10 @@ type Config struct {
 	FullScreenDisplay string
 	Scaling           string // one of Scalings
 	Zoom              int    // percent, 50-200, for Scaling "Zoom"
-	RemoteResize      bool   // resize the remote desktop to the window
+	DynamicResolution bool   // the remote desktop follows the window (TigerVNC's RemoteResize)
 	Reconnect         bool   // after an unexpected disconnect
 	ClipboardKiB      int    // largest server clipboard accepted
+	HighPerformance   bool   // ask a Mac for ARD High Performance, on (re)connect
 	// SecureOnly refuses the security types that send credentials or
 	// the session unprotected (SecTypesSecure).
 	SecureOnly bool
@@ -223,7 +224,7 @@ var Scalings = []string{"Fit", "1:1", "Zoom"}
 // DefaultConfig has TigerVNC's defaults.
 func DefaultConfig() Config {
 	return Config{Encoding: "Auto", Quality: 8, Compress: 2, Scaling: "Fit", Zoom: 100,
-		Reconnect: true, ClipboardKiB: 256, PillPos: 0.5, AcceptClipboard: true, SendClipboard: true}
+		DynamicResolution: true, HighPerformance: true, Reconnect: true, ClipboardKiB: 256, PillPos: 0.5, AcceptClipboard: true, SendClipboard: true}
 }
 
 // LoadConfig reads path; a missing file gives the defaults.

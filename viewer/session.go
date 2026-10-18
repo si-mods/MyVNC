@@ -27,19 +27,35 @@ type Session struct {
 	CursorImage *ui.Bitmap // the remote cursor, nil for none
 	Hotspot     image.Point
 	Shown       *image.RGBA // what Screen shows; the read loop leaves it alone
+	// Media says how High Performance pictures come, as "HEVC 4:4:4
+	// 1920×1080", while they do; "" in Standard mode.
+	Media string
+	// OnMediaFallback, when set, hears why High Performance was given up
+	// (see rfb.HighPerformance.OnFallback and NoDecoderError).
+	OnMediaFallback func(err error)
+	w, h            int // the framebuffer Screen stands for
 	// OnName and OnClipboard, when set, see the desktop name and the
 	// server's clipboard text, on the UI thread.
 	OnName      func(string)
 	OnClipboard func(string)
 	// OnBell and OnLED, when set, hear the bell and the server's lock
 	// key LEDs (rfb.LED* bits), on the UI thread.
-	OnBell  func()
-	OnLED   func(state uint32)
-	clip    string // last clipboard text either side sent
-	ptrMask uint16 // of the last pointer event
+	OnBell func()
+	OnLED  func(state uint32)
+	// OnResizeRefused, when set, hears that the server cannot or will not
+	// change its size for SetDesktopSize, on the UI thread.
+	OnResizeRefused func()
+	clip            string // last clipboard text either side sent
+	ptrMask         uint16 // of the last pointer event
 
 	c    *rfb.Client
 	post func(func())
+
+	// High Performance, when the session negotiates it.
+	video      *videoPipe
+	mediaOff   atomic.Bool  // fell back: pictures still decoding are dropped
+	mediaShown atomic.Bool  // the picture is the stream's, not the framebuffer's
+	fbSize     atomic.Int64 // the framebuffer's width<<32 | height, for media pictures
 
 	// Run's goroutine.
 	imgs    [2]*image.RGBA
@@ -47,6 +63,7 @@ type Session struct {
 	pending [2][]image.Rectangle // rects each image misses
 	dirty   []image.Rectangle    // rects of the current update
 	resized bool
+	cover   cover         // of the framebuffer since a resize
 	free    chan struct{} // a token while imgs[back] is not shown
 	audio   *audioOut
 
@@ -82,8 +99,24 @@ func connect(opt rfb.Options, post func(func()), dial func(rfb.Options, rfb.Hand
 	s.free <- struct{}{}
 	s.n.encoding.Store(-1)
 	opt.Decoders = timeDecoders(opt.Decoders, &s.n)
+	if opt.HighPerformance != nil {
+		hp := *opt.HighPerformance
+		s.video = newVideoPipe(func() {
+			if st := s.c.MediaStream(); st != nil {
+				st.RequestKeyframe()
+			}
+		}, s.showMedia, func(err error) {
+			s.send(input{f: func(c *rfb.Client) error { return c.StopHighPerformance(err) }})
+		})
+		hp.OnUnit = s.video.push
+		hp.OnFallback = s.mediaFallback
+		opt.HighPerformance = &hp
+	}
 	c, err := dial(opt, s)
 	if err != nil {
+		if s.video != nil {
+			s.video.close()
+		}
 		return nil, err
 	}
 	s.c = c
@@ -111,6 +144,9 @@ func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.done)
 		s.c.Close()
+		if s.video != nil {
+			s.video.close()
+		}
 	})
 }
 
@@ -215,16 +251,34 @@ func (s *Session) Pointer(mask uint16, x, y int) {
 	s.send(input{ptr: true, move: move, mask: mask, x: x, y: y})
 }
 
-// SetDesktopSize asks the server for a w×h desktop; servers that cannot
-// resize ignore it.
-func (s *Session) SetDesktopSize(w, h int) {
+// SetDesktopSize asks the server for a desktop of w×h pixels: a Mac that
+// takes SetDisplayConfiguration for a virtual display of that many pixels
+// at density (1 or 2) pixels a point, any other server for one screen
+// keeping its id and flags. One that cannot is told OnResizeRefused.
+func (s *Session) SetDesktopSize(w, h, density int) {
 	s.send(input{f: func(c *rfb.Client) error {
-		if err := c.SetDesktopSize(w, h); err != nil && !errors.Is(err, rfb.ErrNoSetDesktopSize) {
-			return err
+		err := c.SetDisplayConfiguration(w/density, h/density, density)
+		if errors.Is(err, rfb.ErrNoDisplayConfiguration) {
+			err = c.SetDesktopSize(w, h)
 		}
-		return nil
+		if errors.Is(err, rfb.ErrNoSetDesktopSize) {
+			s.refused()
+			return nil
+		}
+		return err
 	}})
 }
+
+func (s *Session) refused() {
+	s.post(func() {
+		if s.OnResizeRefused != nil {
+			s.OnResizeRefused()
+		}
+	})
+}
+
+// DesktopSizeFailed is rfb.DesktopSizeHandler.
+func (s *Session) DesktopSizeFailed(int) { s.refused() }
 
 // SendClipboard announces local clipboard text unless it is what was
 // last exchanged.
@@ -243,6 +297,64 @@ func (s *Session) RequestClipboard() {
 	s.send(input{f: func(c *rfb.Client) error { return c.RequestClipboard() }})
 }
 
+// HighPerformance says the session negotiates ARD High Performance,
+// whether or not it fell back.
+func (s *Session) HighPerformance() bool { return s.c.HighPerformance() }
+
+// RetryHighPerformance asks the Mac for the media stream again after a
+// fallback.
+func (s *Session) RetryHighPerformance() {
+	s.mediaOff.Store(false)
+	s.send(input{f: func(c *rfb.Client) error {
+		if err := c.RetryHighPerformance(); err != nil && !errors.Is(err, rfb.ErrNoHighPerformance) {
+			return err
+		}
+		return nil
+	}})
+}
+
+// Size is the framebuffer size the picture shown stands for, in which
+// pointer positions are; UI thread.
+func (s *Session) Size() (w, h int) { return s.w, s.h }
+
+// showMedia hands a decoded picture to the UI through the free token,
+// dropping it while the UI has not shown the last; the decoder's goroutine.
+func (s *Session) showMedia(img *image.RGBA, mode string) {
+	if s.mediaOff.Load() {
+		return
+	}
+	select {
+	case <-s.free:
+	default:
+		return
+	}
+	s.mediaShown.Store(true)
+	fb := s.fbSize.Load()
+	s.post(func() {
+		if s.Screen == nil {
+			s.Screen = ui.NewBitmap(img)
+		} else {
+			s.Screen.Update(img)
+		}
+		s.Shown, s.Media = img, mode
+		s.w, s.h = int(fb>>32), int(uint32(fb))
+		s.free <- struct{}{}
+	})
+}
+
+// mediaFallback is rfb.HighPerformance.OnFallback: the framebuffer's
+// pictures again, which the full update asked for brings.
+func (s *Session) mediaFallback(err error) {
+	s.mediaOff.Store(true)
+	s.mediaShown.Store(false)
+	s.post(func() {
+		s.Media = ""
+		if s.OnMediaFallback != nil {
+			s.OnMediaFallback(err)
+		}
+	})
+}
+
 // SecurityType is the negotiated security type; see rfb.Client.
 func (s *Session) SecurityType() uint32 { return s.c.SecurityType() }
 
@@ -252,9 +364,45 @@ func (s *Session) Encrypted() bool { return s.encrypted.Load() }
 
 // rfb.Handler, on Run's goroutine.
 
-func (s *Session) Resize(w, h int) { s.resized = true }
+func (s *Session) Resize(w, h int) {
+	s.resized = true
+	s.fbSize.Store(int64(w)<<32 | int64(h))
+	if s.imgs[0] != nil || s.imgs[1] != nil {
+		s.cover = cover{on: true, at: time.Now()}
+	}
+}
+
+// cover is how much of the framebuffer the updates since a resize drew:
+// until they have drawn all of it, the frame before the resize stays up,
+// scaled, instead of the new size's black.
+type cover struct {
+	on   bool
+	at   time.Time
+	box  image.Rectangle
+	area int
+}
+
+// coverWait is the longest the frame before a resize stays up.
+const coverWait = 2 * time.Second
+
+// waits says the new framebuffer fb is not drawn yet.
+func (c *cover) waits(fb image.Rectangle) bool {
+	if !c.on {
+		return false
+	}
+	// ponytail: rectangles drawn twice count twice, so a partly drawn
+	// framebuffer may show early; servers repaint all of it after a resize.
+	if c.box == fb && c.area >= fb.Dx()*fb.Dy() || time.Since(c.at) > coverWait {
+		c.on = false
+	}
+	return c.on
+}
 
 func (s *Session) Updated(r image.Rectangle) {
+	if s.cover.on {
+		s.cover.box = s.cover.box.Union(r)
+		s.cover.area += r.Dx() * r.Dy()
+	}
 	if len(s.dirty) >= 64 {
 		u := r
 		for _, d := range s.dirty {
@@ -270,7 +418,12 @@ func (s *Session) UpdateDone() {
 	s.n.updates.Add(1)
 	// ARD session encryption starts after the handshake.
 	s.encrypted.Store(s.c.Encrypted())
-	if len(s.dirty) == 0 && !s.resized {
+	if s.mediaShown.Load() {
+		// The stream draws the picture; the framebuffer has no pixels.
+		s.dirty, s.resized = s.dirty[:0], false
+		return
+	}
+	if len(s.dirty) == 0 && !s.resized || s.cover.waits(s.c.Framebuffer().Rect) {
 		return
 	}
 	select {
@@ -308,7 +461,7 @@ func (s *Session) UpdateDone() {
 		} else {
 			s.Screen.Update(img)
 		}
-		s.Shown = img
+		s.Shown, s.w, s.h = img, img.Rect.Dx(), img.Rect.Dy()
 		// The image shown until now is free.
 		s.free <- struct{}{}
 	})

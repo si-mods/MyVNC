@@ -246,13 +246,14 @@ func (a *app) settingsView(c *ui.Context) {
 				ui.Field(c, locales.Connection(), func() {
 					ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
 					ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
+					ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
 				})
 				ui.Field(c, locales.Security(), func() {
 					ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
 				})
 				ui.Field(c, locales.Window(), func() {
 					ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
-					ui.Checkbox(c, &a.cfg.RemoteResize, locales.RemoteResize())
+					ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution())
 				})
 				if a.displays != nil {
 					if ds := a.displays(); len(ds) > 1 {
@@ -315,6 +316,11 @@ func (a *app) sessionView(c *ui.Context) {
 		if a.cfg.Stats {
 			a.statsView(c)
 		}
+		if a.hpNote != "" {
+			ui.Box(c).Absolute().Top(pillH + 8).Left(16).Width(max(ww-32, 0)).Radius(6).Background(ui.RGBA(20, 20, 20, 0.85)).Children(func() {
+				banner(c, c.Theme().Warning, a.hpNote, locales.Dismiss(), func() { a.hpNote = "" })
+			})
+		}
 		left := float32(a.cfg.PillPos) * max(ww-pillW, 0)
 		pill := ui.Box(c).Label(locales.SessionMenu()).Absolute().Top(0).Left(left).Size(pillW, pillH).
 			Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M").Bind(&a.pillBox)
@@ -375,20 +381,36 @@ func (a *app) panel(c *ui.Context) {
 			color, text = t.Warning, locales.LevelEncrypted()
 		}
 		ui.Text(c, text+" · "+kind).TextColor(color)
+		if a.sess.HighPerformance() {
+			ui.Text(c, locales.StatsMode(a.mediaMode()))
+			if a.hpFailed && ui.Button(c, locales.RetryHighPerformance()).Clicked() {
+				a.retryMedia()
+				a.menuOpen = false
+			}
+		}
 		ui.Divider(c)
 		ui.Field(c, locales.Scaling(), func() {
-			if selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName).Changed() {
+			if selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName).Disabled(a.cfg.DynamicResolution).Changed() {
 				a.saveConfig()
 			}
 		})
+		if ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution()).Changed() {
+			a.dyn.Forget()
+			a.dynUrgent = true
+			a.saveConfig()
+		}
+		if a.dynHint {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, locales.DynamicResolutionRefused()).TextColor(t.Warning).Wrap().Grow(1)
+				if ui.Button(c, locales.Dismiss()).Clicked() {
+					a.dynHint = false
+				}
+			})
+		}
 		if ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly()).Changed() {
 			if a.cfg.ViewOnly && a.sc != nil {
 				a.sendKeys(a.sc.Reset())
 			}
-			a.saveConfig()
-		}
-		if ui.Checkbox(c, &a.cfg.RemoteResize, locales.RemoteResize()).Changed() {
-			a.sentSize = image.Point{}
 			a.saveConfig()
 		}
 		fs := a.cfg.FullScreen
@@ -467,12 +489,27 @@ func (a *app) statsView(c *ui.Context) {
 			locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
 			locales.StatsRequested(auto, colour, viewer.EncodingName(l.Encoding), q),
 			locales.StatsLink(strconv.FormatInt(l.Kbps, 10), rtt),
+			locales.StatsResolution(resolution(a.sess.Size())),
+			a.statsMode(),
 			locales.StatsEncrypted(enc),
 		} {
-			ui.Text(c, l).FontSize(11).TextColor(ui.RGBA(255, 255, 255, 1))
+			if l != "" {
+				ui.Text(c, l).FontSize(11).TextColor(ui.RGBA(255, 255, 255, 1))
+			}
 		}
 	})
 }
+
+// statsMode is the HUD's mode line, empty without High Performance.
+func (a *app) statsMode() string {
+	if !a.sess.HighPerformance() {
+		return ""
+	}
+	return locales.StatsMode(a.mediaMode())
+}
+
+// resolution is a size as the HUD says it.
+func resolution(w, h int) string { return strconv.Itoa(w) + "×" + strconv.Itoa(h) }
 
 type statsSample struct {
 	at                  time.Time
@@ -484,13 +521,14 @@ type statsSample struct {
 func (a *app) screenView(c *ui.Context) {
 	s := a.sess
 	var box ui.Element
-	if a.cfg.Scaling == "Fit" {
+	scaling := a.scaling()
+	if scaling == "Fit" {
 		box = ui.Box(c).Fill().Bind(&a.screen)
 	} else {
 		ui.ScrollBoth(c).Fill().Children(func() {
 			box = ui.Box(c).Bind(&a.screen)
-			w, h := s.Screen.Size()
-			f := viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, 0, 0, w, h)
+			w, h := s.Size()
+			f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, 0, 0, w, h)
 			box.Width(f.W).Height(f.H)
 		})
 	}
@@ -499,22 +537,21 @@ func (a *app) screenView(c *ui.Context) {
 	// no framebuffer update to move. The system cursor is hidden only over
 	// the remote image.
 	showCursor := s.CursorImage != nil && !a.cfg.ViewOnly
-	w, h := s.Screen.Size()
+	w, h := s.Size()
 	hovered := box.Hovered()
-	if showCursor && hovered && a.overImage(viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, a.screenRect.W, a.screenRect.H, w, h)) {
+	if showCursor && hovered && a.overImage(viewer.Place(scaling, a.cfg.Zoom, a.pxScale, a.screenRect.W, a.screenRect.H, w, h)) {
 		box.Cursor(ui.CursorNone)
 	}
 	box.HandleInput(func(ev ui.InputEvent) bool { return a.pointer(c, ev) })
 	box.Draw(func(p *ui.Painter, r ui.Rect) {
 		if p.Scale() != a.pxScale {
-			a.pxScale = p.Scale()
+			// Another monitor, or its scale changed: the desktop follows at once.
+			a.pxScale, a.dynUrgent = p.Scale(), true
 			a.svc.Invalidate() // 1:1 and zoom sizes depend on it
 		}
-		if a.cfg.RemoteResize && a.cfg.Scaling == "Fit" {
-			a.remoteResize(p, int(r.W*p.Scale()), int(r.H*p.Scale()))
-		}
-		w, h := s.Screen.Size()
-		f := viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
+		a.followWindow(p, r)
+		w, h := s.Size()
+		f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
 		p.Image(s.Screen, ui.Rect{X: r.X + f.X, Y: r.Y + f.Y, W: f.W, H: f.H}, ui.FillBox)
 		// The frame is the pointer's clock: the moves since the last one
 		// go out as one.
@@ -524,8 +561,8 @@ func (a *app) screenView(c *ui.Context) {
 		}
 	})
 	box.DrawOver(func(p *ui.Painter, r ui.Rect) {
-		w, h := s.Screen.Size()
-		f := viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
+		w, h := s.Size()
+		f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
 		if !showCursor || !hovered || !a.overImage(f) {
 			return
 		}

@@ -110,6 +110,6 @@ func (a *app) touchPointer(x, y float64, mask uint16) {
 // toFramebuffer maps a point of the screen box b to the framebuffer
 // pixel it shows, with the scaling in use.
 func (a *app) toFramebuffer(b ui.Rect, x, y float32) (int, int) {
-	w, h := a.sess.Screen.Size()
-	return viewer.ToFramebuffer(x, y, viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, b.W, b.H, w, h), w, h)
+	w, h := a.sess.Size()
+	return viewer.ToFramebuffer(x, y, viewer.Place(a.scaling(), a.cfg.Zoom, a.pxScale, b.W, b.H, w, h), w, h)
 }
