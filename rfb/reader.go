@@ -38,7 +38,7 @@ func (c *Client) readMsg() error {
 	c.log.Debug("rfb: message", "type", t)
 	if c.appleARD {
 		switch t {
-		case 0x04, 0x07, 0x14, 0x1f, 0x20, 0x23, 0x51:
+		case 0x04, 0x07, 0x14, 0x1f, 0x20, 0x22, 0x23, 0x51:
 			return c.readARDServerMessage(t)
 		}
 	}
@@ -174,7 +174,11 @@ func (c *Client) updateEndLocked() error {
 		if err := c.writeLocked(ardSetEncryption(true)); err != nil {
 			return err
 		}
-		c.rd.r = bufio.NewReader(ard.NewReader(c.rd.r, k[0], k[1]))
+		var ar io.Reader = ard.NewReader(c.rd.r, k[0], k[1])
+		if c.rawTap != nil { // test-only capture of the decrypted stream (#43)
+			ar = io.TeeReader(ar, c.rawTap)
+		}
+		c.rd.r = bufio.NewReader(ar)
 		c.out = ard.NewWriter(c.out, k[0], k[1])
 		c.ardEnabled = true
 		c.log.Info("rfb: ARD session encryption active", "afterUpdate", c.updates+1)
@@ -783,6 +787,26 @@ func (c *Client) readARDServerMessage(t byte) error {
 		// see docs/ard-drag.md. The body is dumped above at debug level.
 		c.rd.skip(4)
 		c.rd.skip(int64(c.rd.u32()))
+	case 0x22:
+		// FileCopy record from the Mac: same framing as our outbound 0x22
+		// command, [pad u8][u32 bodyLen][body]. Carries file-copy status
+		// and (for a download) file content. See docs/ard-drag.md.
+		c.rd.skip(1)
+		n := c.rd.u32()
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		if n > 64<<20 {
+			return fmt.Errorf("rfb: ARD file-copy record too large (%d)", n)
+		}
+		body := c.rd.bytes(int(n))
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		c.log.Debug("rfb: ARD file-copy 0x22", "len", n, "body", hex.EncodeToString(body))
+		if c.fcServer != nil {
+			c.fcServer(body)
+		}
 	case 0x23:
 		// Server file-copy status (SSFileCopy ItemInfo/ProgressInfo/
 		// ResultInfo). The viewer advertises accepting it in ViewerInfo,
