@@ -44,7 +44,7 @@ func main() {
 	duration := flag.Duration("t", 0, "stop after this long (0: until Ctrl+C)")
 	verbose := flag.Bool("v", false, "debug log")
 	rtpdumpFlag := flag.String("rtpdump", "", "write the picture leg's RTP packets, decrypted, to this file (see rtpdump.go)")
-	decodeFlag := flag.Bool("decode", false, "decode the pictures with Media Foundation (and save the first as DIR/frame.png with -dump)")
+	decodeFlag := flag.Bool("decode", false, "decode the pictures with Media Foundation (and save the first and last as DIR/frame.png and last.png with -dump)")
 	flag.Parse()
 	if *host == "" {
 		flag.Usage()
@@ -184,6 +184,9 @@ func main() {
 		if rtp != nil {
 			rtp.close()
 		}
+		if dec != nil {
+			dec.saveLast()
+		}
 	}
 	start := time.Now()
 	tick := time.NewTicker(time.Second)
@@ -234,9 +237,12 @@ func statusLine(s *media.Stream) string {
 		}
 		return b
 	}
+	pics := fmt.Sprintf("pictures %d (IDR %d) lost %d", st.Units, st.Keys, st.Lost)
+	if st.Late+st.Missing > 0 {
+		pics += fmt.Sprintf(", packets late %d missing %d", st.Late, st.Missing)
+	}
 	line := strings.Join([]string{
-		leg("video", st.Video), leg("audio", st.Audio),
-		fmt.Sprintf("pictures %d (IDR %d) lost %d", st.Units, st.Keys, st.Lost),
+		leg("video", st.Video), leg("audio", st.Audio), pics,
 		fmt.Sprintf("sent RR %d RCTL %d PLI %d refresh %d ack %d", st.RR, st.RCTL, st.PLI, st.Refresh, st.Acks),
 	}, " | ")
 	if st.SendErrors > 0 {
