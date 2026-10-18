@@ -200,7 +200,11 @@ type Config struct {
 // Computer is what the home view knows of a server.
 type Computer struct {
 	Name string    // the desktop name it last gave
-	Last time.Time // last connected
+	Last time.Time // last connected; zero in configs of v0.0.1, which kept none
+	// Never is set when a connection failed and none ever succeeded; a
+	// computer with no Last and no Never connected before v0.0.2 kept the
+	// time, so the home view says nothing of it.
+	Never bool `json:",omitempty"`
 }
 
 // Scalings are the ways the remote screen fits the window.
