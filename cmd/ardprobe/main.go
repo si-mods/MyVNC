@@ -4,7 +4,7 @@
 // Performance and reports, once a second, what arrives on the media
 // stream's UDP ports. It shows no picture.
 //
-//	ardprobe -host 192.0.2.10 -user jdoe [-dump DIR] [-mirror] [-h264]
+//	ardprobe -host 192.0.2.10 -user jdoe [-dump DIR] [-rtpdump FILE] [-decode] [-mirror] [-h264]
 //
 // The password comes from MYVNC_E2E_PASS, or the console without echo.
 package main
@@ -43,6 +43,7 @@ func main() {
 	tiles := flag.Int("tiles", 1, "tilesPerFrame (Apple's viewer: 4, with DONL strips)")
 	duration := flag.Duration("t", 0, "stop after this long (0: until Ctrl+C)")
 	verbose := flag.Bool("v", false, "debug log")
+	rtpdumpFlag := flag.String("rtpdump", "", "write the picture leg's RTP packets, decrypted, to this file (see rtpdump.go)")
 	decodeFlag := flag.Bool("decode", false, "decode the pictures with Media Foundation (and save the first as DIR/frame.png with -dump)")
 	flag.Parse()
 	if *host == "" {
@@ -94,6 +95,14 @@ func main() {
 		if err := os.MkdirAll(*dump, 0o755); err != nil {
 			fatal("%v", err)
 		}
+	}
+	var rtp *rtpDump
+	if *rtpdumpFlag != "" {
+		var err error
+		if rtp, err = newRTPDump(*rtpdumpFlag); err != nil {
+			fatal("%v", err)
+		}
+		hp.OnPacket = rtp.packet
 	}
 	var c *rfb.Client
 	var dec *decoder
@@ -172,6 +181,9 @@ func main() {
 		if dumpOut != nil && dumped < *n {
 			dumpOut.Close()
 		}
+		if rtp != nil {
+			rtp.close()
+		}
 	}
 	start := time.Now()
 	tick := time.NewTicker(time.Second)
@@ -195,7 +207,11 @@ func main() {
 		for _, e := range ev {
 			fmt.Printf("%6.1fs  %s\n", time.Since(start).Seconds(), e)
 		}
-		fmt.Printf("%6.1fs  %s\n", time.Since(start).Seconds(), statusLine(c.MediaStream()))
+		line := statusLine(c.MediaStream())
+		if dec != nil {
+			line += " | " + dec.status()
+		}
+		fmt.Printf("%6.1fs  %s\n", time.Since(start).Seconds(), line)
 	}
 }
 

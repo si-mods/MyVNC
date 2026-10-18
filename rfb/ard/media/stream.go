@@ -38,7 +38,12 @@ type StreamConfig struct {
 	// goroutine; the unit is acknowledged to the Mac when OnUnit returns.
 	// Hand it to a decoder queue rather than decoding here.
 	OnUnit func(*Unit)
-	Logger *slog.Logger
+	// OnPacket, when set, sees each picture-leg RTP datagram on the
+	// receiver's goroutine, for debugging: decrypted, without its tag,
+	// when err is nil; as received with ErrStale or ErrForged. It must
+	// not keep packet.
+	OnPacket func(at time.Time, h RTPHeader, packet []byte, err error)
+	Logger   *slog.Logger
 }
 
 // LegStats count one UDP leg.
@@ -259,6 +264,13 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			s.mu.Lock()
 			s.count(&s.stats.Video, h, err, videoRTCP, d)
 			s.mu.Unlock()
+			if s.cfg.OnPacket != nil && (err == nil || err == ErrStale || err == ErrForged) {
+				p := d
+				if err == nil {
+					p = d[:h.Payload[1]]
+				}
+				s.cfg.OnPacket(time.Now(), h, p, err)
+			}
 			if err != nil {
 				break
 			}
