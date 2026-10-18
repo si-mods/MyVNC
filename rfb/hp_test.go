@@ -336,12 +336,12 @@ func TestHighPerformanceDisplayChange(t *testing.T) {
 }
 
 // TestHighPerformanceOfferNotHeld: a display change the Mac does not answer
-// holds the offer back for displayHold only; the offer has the size asked,
+// holds the offer back for displayOfferHold only; the offer has the size asked,
 // and the layout that comes after it brings no other.
 func TestHighPerformanceOfferNotHeld(t *testing.T) {
-	hold := displayHold
-	displayHold = 100 * time.Millisecond
-	t.Cleanup(func() { displayHold = hold })
+	hold, offerHold := displayHold, displayOfferHold
+	displayHold, displayOfferHold = 100*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { displayHold, displayOfferHold = hold, offerHold })
 	c, s := hpSession(t, &HighPerformance{})
 	call(t, s, func() error { return c.SetDisplayConfiguration(40, 20, 2) }, ardAutoFBUpdate(true, 1, 1))
 	s.recv(4 + 8 + 0xb8)
@@ -353,7 +353,7 @@ func TestHighPerformanceOfferNotHeld(t *testing.T) {
 	if got := s.recvOffer(); !bytes.Equal(got, c.hp.secrets.Offer(media.Params{Width: 80, Height: 40})) {
 		t.Error("the offer is not of the 80x40 display asked")
 	}
-	if d := time.Since(sent); d < displayHold || d > displayHold+time.Second {
+	if d := time.Since(sent); d < displayOfferHold || d > displayOfferHold+time.Second {
 		t.Errorf("offered %v after the change", d)
 	}
 
