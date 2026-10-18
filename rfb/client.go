@@ -81,6 +81,8 @@ type Options struct {
 	Encodings []int32
 	// Decoders by encoding number. Raw cursors (-314) are decoded
 	// internally; everything else in a FramebufferUpdate goes here.
+	// Encodings 0-255 without a decoder are not asked for. Run closes
+	// the decoders that are io.Closers as it returns.
 	Decoders map[int32]pixel.Decoder
 	// SecurityTypes is the allow-list of security types. Values >= 256
 	// are VeNCrypt subtypes. As in TigerVNC, the type used is the first
@@ -118,6 +120,11 @@ type Options struct {
 	// ARD server: the picture comes as HEVC/H.264 over SRTP; see
 	// HighPerformance. nil is Standard mode.
 	HighPerformance *HighPerformance
+	// AutoSelect is TigerVNC's AutoSelect: Tight is preferred, and the
+	// JPEG quality level (8 or 6) and the pixel format (full or 256
+	// colours) follow the measured throughput, re-sent as it changes.
+	// The compression level in Encodings is kept. Not for ARD servers.
+	AutoSelect bool
 }
 
 // Handler receives server events; see the package comment.
@@ -217,6 +224,15 @@ type Client struct {
 	audioAsked   bool
 	dm           decodeManager
 	decoded      []image.Rectangle // decoded or queued, not yet passed to Updated
+	in           *countConn
+	fullPF       pixel.Format  // the format asked for at first
+	nextPF       *pixel.Format // to send at the next update (TigerVNC's formatChange)
+	pendingPF    *pixel.Format // sent, not yet in use
+	encChange    bool          // SetEncodings to send at the next update
+	updStart     time.Time
+	updPos       int64
+	pingAt       time.Time // a ping fence is out
+	lastPing     time.Time
 
 	mu         sync.Mutex // serialises writes and guards the fields below
 	out        io.Writer
@@ -233,6 +249,12 @@ type Client struct {
 	clipSize   uint32 // server's UTF-8 auto-send limit
 	localClip  *string
 	remoteClip bool // announced by the server and not yet received
+	auto       bool
+	encs       []int32 // the last SetEncodings
+	bps        uint64  // line speed estimate
+	quality    int     // JPEG quality level in encs, -1 for none
+	fullColour bool
+	rtt        time.Duration
 }
 
 // Dial connects to addr and performs the handshake.
@@ -252,10 +274,12 @@ func Dial(ctx context.Context, addr string, opt Options, h Handler) (*Client, er
 // NewClient performs the handshake over an established connection.
 // serverName is used for TLS verification. conn is closed on error.
 func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Options, h Handler) (*Client, error) {
+	in := &countConn{Conn: conn}
+	conn = in
 	c := &Client{
 		conn: conn, opt: opt, h: h, serverName: serverName,
 		out: conn, cursorCache: make(map[uint32]*image.RGBA),
-		log: opt.Logger,
+		log: opt.Logger, in: in, bps: initialBPS, fullColour: true,
 	}
 	if c.log == nil {
 		c.log = slog.New(slog.DiscardHandler)
@@ -266,6 +290,7 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 	if c.pf == (pixel.Format{}) {
 		c.pf = pixel.RGBA
 	}
+	c.fullPF = c.pf
 	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Unix(1, 0)) })
 	err := c.handshake(ctx)
 	if !stop() {
@@ -308,6 +333,13 @@ func (c *Client) Encrypted() bool {
 // Run reads server messages until the connection fails or is closed.
 // It first reports the desktop name and size.
 func (c *Client) Run() error {
+	defer func() {
+		for _, d := range c.opt.Decoders {
+			if cl, ok := d.(io.Closer); ok {
+				cl.Close()
+			}
+		}
+	}()
 	defer c.dm.shutdown()
 	c.h.Name(c.name)
 	b := c.fb.Bounds()
@@ -460,7 +492,10 @@ func (c *Client) finishInit() error {
 		}
 	}
 	msgs = append(msgs, c.hpInit()...)
+	c.auto = c.opt.AutoSelect && !c.appleARD
+	c.quality = qualityOf(c.opt.Encodings)
 	encs := c.encodingList()
+	c.encs = encs
 	if c.hp != nil {
 		// 1010 is named once the layout has arrived, first; see hp.go.
 		encs = slices.DeleteFunc(encs, func(e int32) bool { return e == EncodingARDProMode })
@@ -482,6 +517,12 @@ func (c *Client) encodingList() []int32 {
 	list := c.opt.Encodings
 	if list == nil {
 		list = defaultEncodings(c.opt.Decoders)
+	}
+	// Never ask for an encoding there is no decoder for (H.264 off
+	// Windows, say).
+	list = slices.DeleteFunc(slices.Clone(list), func(e int32) bool { return e >= 0 && e <= 255 && c.opt.Decoders[e] == nil })
+	if c.auto {
+		list = c.autoEncodings(list)
 	}
 	// Pseudo-encodings the client always handles, as TigerVNC sends them.
 	// Their position does not matter.

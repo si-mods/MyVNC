@@ -675,6 +675,50 @@ func (msgs Messages) StatsEncrypted(encrypted string) string {
 	return Catalog.Format(msgs.locale, "statsEncrypted", map[string]any{"encrypted": encrypted})
 }
 
+// StatsLink says "Line {kbps} kbit/s, RTT {rtt} ms"
+// in the language the app shows.
+//
+// Throughput estimate and fence round trip; rtt is a dash before one is
+// measured.
+func StatsLink(kbps string, rtt string) string { return In(i18n.Locale()).StatsLink(kbps, rtt) }
+
+// StatsLink says "Line {kbps} kbit/s, RTT {rtt} ms"
+// in the language of msgs.
+//
+// Throughput estimate and fence round trip; rtt is a dash before one is
+// measured.
+func (msgs Messages) StatsLink(kbps string, rtt string) string {
+	return Catalog.Format(msgs.locale, "statsLink", map[string]any{"kbps": kbps, "rtt": rtt})
+}
+
+// StatsRequested says "Asked {name}{auto, select, yes { (auto)} other {}}, quality {quality}, {colour, select, full {full colour} other {256…"
+// in the language the app shows.
+//
+// What MyVNC asks the server for: preferred encoding, JPEG quality level (a
+// dash for none), colour depth.
+func StatsRequested(auto string, colour string, name string, quality string) string {
+	return In(i18n.Locale()).StatsRequested(auto, colour, name, quality)
+}
+
+// StatsRequested says "Asked {name}{auto, select, yes { (auto)} other {}}, quality {quality}, {colour, select, full {full colour} other {256…"
+// in the language of msgs.
+//
+// What MyVNC asks the server for: preferred encoding, JPEG quality level (a
+// dash for none), colour depth.
+func (msgs Messages) StatsRequested(auto string, colour string, name string, quality string) string {
+	return Catalog.Format(msgs.locale, "statsRequested", map[string]any{"auto": auto, "colour": colour, "name": name, "quality": quality})
+}
+
+// EncodingAuto says "Auto"
+// in the language the app shows.
+func EncodingAuto() string { return In(i18n.Locale()).EncodingAuto() }
+
+// EncodingAuto says "Auto"
+// in the language of msgs.
+func (msgs Messages) EncodingAuto() string {
+	return Catalog.Format(msgs.locale, "encodingAuto", nil)
+}
+
 // TitleSession says "{name} - {app} ({kind}, {encrypted, select, yes {encrypted} other {unencrypted}})"
 // in the language the app shows.
 //
