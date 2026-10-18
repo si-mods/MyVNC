@@ -8,11 +8,14 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/zlib"
+	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
 	"image/draw"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -35,7 +38,7 @@ func (c *Client) readMsg() error {
 	c.log.Debug("rfb: message", "type", t)
 	if c.appleARD {
 		switch t {
-		case 0x04, 0x07, 0x14, 0x1f, 0x20, 0x51:
+		case 0x04, 0x07, 0x14, 0x1f, 0x20, 0x23, 0x51:
 			return c.readARDServerMessage(t)
 		}
 	}
@@ -753,6 +756,7 @@ func (c *Client) readARDSessionEncryption() error {
 }
 
 func (c *Client) readARDServerMessage(t byte) error {
+	c.dumpARDBody(t)
 	switch t {
 	case 0x14:
 		// MiscStatus: u16 version, u16 command; 2 says the Mac's
@@ -773,12 +777,51 @@ func (c *Client) readARDServerMessage(t byte) error {
 	case 0x1f:
 		return c.readARDPasteboard()
 	case 0x20:
+		// ServerDragEvent: [u32 sessionID/type][u32 extraSize][extra].
+		// A drag the Mac starts toward the viewer; the payload is a zlib
+		// drag pasteboard (file promises, drag image). Skipped for now;
+		// see docs/ard-drag.md. The body is dumped above at debug level.
 		c.rd.skip(4)
 		c.rd.skip(int64(c.rd.u32()))
+	case 0x23:
+		// Server file-copy status (SSFileCopy ItemInfo/ProgressInfo/
+		// ResultInfo). The viewer advertises accepting it in ViewerInfo,
+		// so the Mac may send it during a transfer; without it the
+		// session would hit the generic "unknown message type" and die.
+		// ponytail: u16-length skip is the 0x51/metadata framing, not yet
+		// confirmed for 0x23; the debug dump above captures the real
+		// bytes. Replace with a real parser once the layout is verified.
+		c.rd.skip(int64(c.rd.u16()))
 	case 0x51:
 		c.rd.skip(int64(c.rd.u16()))
 	}
 	return c.rd.err
+}
+
+// dumpARDBody logs, at debug level, the message type and a bounded hex
+// of the already-buffered body that follows it, without consuming the
+// stream. It is the diagnostic hook for the ARD drag/file-copy work
+// (issue #43): it shows what every ARD server message carries, unknown
+// types included. The peek never blocks — it reads only what the
+// bufio.Reader already holds — so it cannot desync or stall a session.
+func (c *Client) dumpARDBody(t byte) {
+	if !c.log.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	br, ok := c.rd.r.(*bufio.Reader)
+	if !ok {
+		return
+	}
+	n := min(br.Buffered(), 64)
+	if n <= 0 {
+		return
+	}
+	b, err := br.Peek(n)
+	if err != nil && len(b) == 0 {
+		return
+	}
+	c.log.Debug("rfb: ARD server message", "type", t,
+		"buffered", br.Buffered(), "head", hex.EncodeToString(b))
 }
 
 // readARDPasteboard reads the Mac's pasteboard, the reply to
