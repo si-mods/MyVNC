@@ -7,6 +7,7 @@ import (
 	"image"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -205,8 +206,12 @@ func TestMacFileCopyUpload(t *testing.T) {
 	// Deterministic, incompressible-ish content so a wrong offset or a
 	// chunking bug changes the hash.
 	data := make([]byte, 200000)
-	for i := range data {
-		data[i] = byte(i*7 + i/251 + 13)
+	if os.Getenv("MYVNC_FC_TEXT") == "1" {
+		data = bytes.Repeat([]byte("myvnc file copy compression test\n"), 10000)[:200000]
+	} else {
+		for i := range data {
+			data[i] = byte(i*7 + i/251 + 13)
+		}
 	}
 	sum := sha256.Sum256(data)
 	t.Logf("upload %d bytes to %s, sha256 %x", len(data), dest, sum)
@@ -268,6 +273,63 @@ func TestMacFileCopyUpload(t *testing.T) {
 			t.Log(line)
 		}
 	}
+}
+
+// TestMacClipboardFiles uploads a local file and leaves its remote URL on
+// the Mac pasteboard (UploadFiles), the clipboard-file path. Runs only with
+// MYVNC_CLIP_FILE=1 and MYVNC_E2E_PASS; verify the file and `clipboard
+// info` on the Mac.
+func TestMacClipboardFiles(t *testing.T) {
+	if os.Getenv("MYVNC_CLIP_FILE") != "1" {
+		t.Skip("MYVNC_CLIP_FILE is not 1")
+	}
+	env := func(k, def string) string {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+		return def
+	}
+	addr := env("MYVNC_MAC_ADDR", "192.0.2.10:5900")
+	user := env("MYVNC_E2E_USER", "jdoe")
+	pass := os.Getenv("MYVNC_E2E_PASS")
+	dir := env("MYVNC_CLIP_DIR", "/Users/jdoe/myvnc-drag-test")
+
+	local := filepath.Join(t.TempDir(), "clip file.txt")
+	body := []byte("clipboard file payload\n")
+	if err := os.WriteFile(local, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := &logLines{t: t}
+	h := &macHandler{clip: make(chan string, 8)}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, addr, Options{
+		Username: user, Password: func() (string, string, error) { return user, pass, nil },
+		Shared: true, Decoders: decode.New(),
+		SecurityTypes: []uint32{SecTypeDH},
+		Logger:        slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.c = c
+	defer c.Close()
+	go c.Run()
+	var base *image.RGBA
+	for i := 0; i < 25 && (base == nil || !c.Encrypted()); i++ {
+		base = h.settle(time.Second)
+	}
+	if base == nil || !c.Encrypted() {
+		t.Fatal("no encryption")
+	}
+	h.settle(2 * time.Second)
+	remote, err := c.UploadFiles([]string{local}, dir)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	t.Logf("remote: %v", remote)
+	time.Sleep(3 * time.Second)
 }
 
 // buildFileCopyRaw is the sweep version of ardFileCopyCmd with explicit

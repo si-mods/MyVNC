@@ -4,9 +4,14 @@
 package rfb
 
 import (
+	"bytes"
+	"compress/zlib"
 	"errors"
 	"io"
+	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"time"
 )
 
@@ -16,12 +21,17 @@ import (
 // recovered from SSFileCopyReceiver (macOS 27.2): 0x64 ItemInfo, 0x65
 // NewItem, 0x66 file data, 0x68 EndSession. See docs/ard-drag.md.
 const (
-	fileCopyCmdItemInfo  = 0x64
-	fileCopyCmdNewItem   = 0x65
-	fileCopyCmdFileData  = 0x66
-	fileCopyCmdEndSess   = 0x68
-	ardFileCopyChunkSize = 64 << 10
+	fileCopyCmdItemInfo   = 0x64
+	fileCopyCmdNewItem    = 0x65
+	fileCopyCmdFileData   = 0x66
+	fileCopyCmdCompressed = 0x67
+	fileCopyCmdEndSess    = 0x68
 )
+
+// ardFileCopyChunkSize is the payload per 0x66/0x67 record. A variable so
+// benchmarks can compare sizes; 64 KiB matches the sizes the Mac accepts
+// and keeps each encrypted record small.
+var ardFileCopyChunkSize = 64 << 10
 
 // ardUTCOffset is the number of seconds between the Unix epoch and
 // 1904-01-01, the epoch of the Mac's UTCDateTime.
@@ -106,6 +116,123 @@ func ardFileCopyFileData(sessionID uint32, chunk []byte) []byte {
 	return ardFileCopyRecord(fileCopyCmdFileData, sessionID, p)
 }
 
+// ardFileCopyCompressedData builds a 0x67 record: a zlib stream of one
+// data chunk. The receiver inflates it into the same fork accounting as
+// 0x66. Layout, from SSFileCopySender/SSFileCopyReceiver (macOS 27.2):
+//
+//	0x0e u16 compression flag (1)
+//	0x10 u32 uncompressed length
+//	0x14 u32 compressed length
+//	0x18 ... zlib stream
+func ardFileCopyCompressedData(sessionID uint32, comp []byte, rawLen int) []byte {
+	p := make([]byte, 0, 0x12+len(comp))
+	p = be.AppendUint16(p, 1) // wired as 00 01, the receiver reads 1
+	p = be.AppendUint32(p, uint32(rawLen))
+	p = be.AppendUint32(p, uint32(len(comp)))
+	p = append(p, comp...)
+	return ardFileCopyRecord(fileCopyCmdCompressed, sessionID, p)
+}
+
+// ardFileURLFlavor carries a file URL on the pasteboard. The Mac's
+// pasteboard agent drops public.file-url from a remote archive (it only
+// accepts registered UTIs; verified live on macOS 27.2) but takes the same
+// URL under public.url, which Finder and other paste targets resolve.
+const ardFileURLFlavor = "public.url"
+
+// ardPasteboardMessage wraps an uncompressed pasteboard archive in the
+// viewer's 0x1f header, zlib-compressed with a sync flush.
+func ardPasteboardMessage(archive []byte) []byte {
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	zw.Write(archive)
+	zw.Flush()
+	b := be.AppendUint32([]byte{0x1f, 0, 0, 0, 0, 0, 0, 0}, uint32(len(archive)))
+	b = be.AppendUint32(b, uint32(z.Len()))
+	return append(b, z.Bytes()...)
+}
+
+// ardPasteboardFiles builds the promise-style archive the Mac's pasteboard
+// agent accepts for a URL (verified live: the normal item archive drops
+// it): a flavor count and the flavors themselves, with the 0x1f promise
+// flag set. Without a Mac-side helper it carries one URL.
+func ardPasteboardFiles(u string) []byte {
+	archive := be.AppendUint32(nil, 1) // one flavor
+	archive = be.AppendUint32(archive, uint32(len(ardFileURLFlavor)))
+	archive = append(archive, ardFileURLFlavor...)
+	archive = append(archive, 0, 0, 0, 0, 0, 0, 0, 0) // reserved, no tags
+	archive = be.AppendUint32(archive, uint32(len(u)))
+	archive = append(archive, u...)
+	msg := ardPasteboardMessage(archive)
+	msg[2] = 1 // promises flag: the Mac routes this through its pasteboard helper
+	return msg
+}
+
+// fileURLString formats an absolute Mac path as a file URL.
+func fileURLString(p string) string {
+	u := url.URL{Scheme: "file", Path: p}
+	return u.String()
+}
+
+// FileCopyAvailable reports whether FileCopyUpload and ClipboardFiles can
+// run now: an ARD server with session encryption active.
+func (c *Client) FileCopyAvailable() bool {
+	return c.appleARD && c.Encrypted()
+}
+
+// ClipboardFiles puts file URLs on the ARD server's pasteboard, so the
+// server's user can paste the paths (Cmd+V in Finder's path field or an
+// application that accepts URL items). UploadFiles puts local files there
+// first. An empty list clears the pasteboard.
+func (c *Client) ClipboardFiles(u string) error {
+	if !c.appleARD || !c.Encrypted() {
+		return ErrFileCopyUnsupported
+	}
+	if !path.IsAbs(u) {
+		return errors.New("rfb: clipboard file path must be absolute")
+	}
+	return c.write(ardPasteboardFiles(fileURLString(u)))
+}
+
+// UploadFiles sends local regular files to remoteDir on an ARD server and
+// then puts their remote file URLs on the Mac's pasteboard, so Finder can
+// paste them. It returns the remote paths it offered. Directories are
+// skipped.
+func (c *Client) UploadFiles(paths []string, remoteDir string) ([]string, error) {
+	if !c.appleARD || !c.Encrypted() {
+		return nil, ErrFileCopyUnsupported
+	}
+	if !path.IsAbs(remoteDir) {
+		return nil, errors.New("rfb: remote directory must be an absolute path")
+	}
+	remote := make([]string, 0, len(paths))
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			return remote, err
+		}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return remote, err
+		}
+		if !st.Mode().IsRegular() {
+			f.Close()
+			continue
+		}
+		dest := path.Join(remoteDir, filepath.Base(p))
+		err = c.FileCopyUpload(dest, f, st.Size())
+		f.Close()
+		if err != nil {
+			return remote, err
+		}
+		remote = append(remote, dest)
+	}
+	if len(remote) == 0 {
+		return nil, errors.New("rfb: no regular files to upload")
+	}
+	return remote, c.ClipboardFiles(remote[len(remote)-1])
+}
+
 // ardFileCopyEndSession builds the 0x68 record that makes the receiver
 // move the received items to the destination and report the result.
 func ardFileCopyEndSession(sessionID uint32) []byte {
@@ -165,6 +292,8 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 	}
 
 	buf := make([]byte, ardFileCopyChunkSize)
+	comp := new(bytes.Buffer)
+	zw, _ := zlib.NewWriterLevel(comp, zlib.BestCompression)
 	var sent int64
 	for sent < size {
 		n := size - sent
@@ -174,7 +303,34 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 		if _, err := io.ReadFull(r, buf[:n]); err != nil {
 			return err
 		}
-		if err := c.write(ardFileCopyFileData(sessionID, buf[:n])); err != nil {
+		chunk := buf[:n]
+		// The Mac's own sender compresses a chunk when it pays off
+		// (IsBufferWorthCompressing) and asks zlib for level 9 in
+		// deflateInit2_. CPU is not the bottleneck next to the
+		// network; incompressible data still goes out as 0x66.
+		rec := ardFileCopyFileData(sessionID, chunk)
+		if n >= 1024 {
+			// One zlib stream spans every compressed chunk: the
+			// receiver inflates them in sequence and only resets
+			// its state when the session ends. comp.Reset only
+			// drops the previous chunk's bytes; the writer keeps
+			// its deflate state.
+			comp.Reset()
+			if _, err := zw.Write(chunk); err != nil {
+				return err
+			}
+			// The Mac's sender ends each chunk with Z_SYNC_FLUSH, not
+			// Z_FINISH: the receiver inflates exactly one chunk and
+			// compares the output length. Close would append an end
+			// marker and make that check fail.
+			if err := zw.Flush(); err != nil {
+				return err
+			}
+			if comp.Len() < int(n)-int(n)/32 {
+				rec = ardFileCopyCompressedData(sessionID, comp.Bytes(), int(n))
+			}
+		}
+		if err := c.write(rec); err != nil {
 			return err
 		}
 		sent += n
