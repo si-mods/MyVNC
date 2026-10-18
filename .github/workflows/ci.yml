@@ -31,7 +31,16 @@ jobs:
           CGO_ENABLED: "0"
 
       - name: Test
-        run: go test ./...
+        shell: bash
+        run: |
+          go test -count=1 -v ./... 2>&1 | tee test.log
+          rc=${PIPESTATUS[0]}
+          # Skips do not fail the build, but they are listed with the reason.
+          {
+            echo "### Skipped tests"
+            grep -B1 -E -- '--- SKIP' test.log | grep -v -- '^--$' || echo "none"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       - name: Check the tag matches mygo.json
         if: startsWith(github.ref, 'refs/tags/v')
