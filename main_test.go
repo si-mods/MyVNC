@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -27,6 +28,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/kyya/myvnc/internal/mf"
 	"github.com/kyya/myvnc/rfb"
+	"github.com/kyya/myvnc/rfb/ard"
 	"github.com/kyya/myvnc/viewer"
 	"github.com/kyya/myvnc/viewer/emulatemb"
 	"github.com/kyya/myvnc/viewer/keymap"
@@ -572,5 +574,91 @@ func TestLocalCursorAndPointerPacing(t *testing.T) {
 	if !slices.Equal(masks, []uint16{1, 1, 0}) || sent[0].x != 4 {
 		t.Errorf("press, drag, release sent %v", sent)
 	}
+	a.disconnect()
+}
+
+// oakley2 is the 1024-bit MODP group a Mac's ARD DH sends.
+const oakley2 = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381FFFFFFFFFFFFFFFF"
+
+// fakeARD is a Mac at ARD DH that, once update is closed, sends one update
+// with an 8x8 Raw rectangle and the ARD session key (1103), and then
+// reads whatever comes.
+func fakeARD(t *testing.T, update chan struct{}) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		defer func() { recover() }() // the client hung up
+		read := func(n int) []byte {
+			b := make([]byte, n)
+			if _, err := io.ReadFull(conn, b); err != nil {
+				panic(err)
+			}
+			return b
+		}
+		be := binary.BigEndian
+		conn.Write([]byte("RFB 003.889\n"))
+		read(12)
+		conn.Write([]byte{1, byte(rfb.SecTypeDH)})
+		read(1)
+		p, _ := new(big.Int).SetString(oakley2, 16)
+		x := big.NewInt(0x123456789)
+		A := new(big.Int).Exp(big.NewInt(2), x, p)
+		conn.Write(slices.Concat([]byte{0, 2, 0, 128}, p.FillBytes(make([]byte, 128)), A.FillBytes(make([]byte, 128))))
+		read(128)
+		B := new(big.Int).SetBytes(read(128))
+		key := md5.Sum(new(big.Int).Exp(B, x, p).FillBytes(make([]byte, 128)))
+		conn.Write([]byte{0, 0, 0, 0})
+		read(1)
+		name := append(make([]byte, 22), "\x00Mac"...)
+		init := be.AppendUint16(be.AppendUint16(nil, 8), 8)
+		init = append(init, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0)
+		conn.Write(append(be.AppendUint32(init, uint32(len(name))), name...))
+		go io.Copy(io.Discard, conn)
+		<-update
+		var b bytes.Buffer
+		b.Write([]byte{0, 0, 0, 2})
+		binary.Write(&b, be, []uint16{0, 0, 8, 8})
+		binary.Write(&b, be, int32(0))
+		b.Write(make([]byte, 8*8*4))
+		binary.Write(&b, be, []uint16{0, 0, 0, 0})
+		binary.Write(&b, be, int32(rfb.PseudoEncodingARDSessionEncryption))
+		ek, eiv := ard.EncryptBlock(key, [16]byte{1}), ard.EncryptBlock(key, [16]byte{2})
+		b.Write(slices.Concat([]byte{0, 0, 0, 1}, ek[:], eiv[:]))
+		conn.Write(b.Bytes())
+		time.Sleep(time.Minute) // the test ends first
+	}()
+	_, port, _ := net.SplitHostPort(l.Addr().String())
+	return "127.0.0.1::" + port
+}
+
+// TestTitleFollowsARDEncryption (#36): the title says unencrypted until
+// ARD session encryption starts after the first update, and encrypted
+// from then on.
+func TestTitleFollowsARDEncryption(t *testing.T) {
+	update := make(chan struct{})
+	server := fakeARD(t, update)
+	a := newTestApp(t)
+	a.add(server)
+	a.until("the password prompt", func() bool { return a.authOpen })
+	a.tt.Type("secret")
+	if err := a.tt.Click("OK"); err != nil {
+		t.Fatal(err)
+	}
+	// The desktop name, which also sets the title, comes before the update.
+	a.until("the desktop name", func() bool { return a.sess != nil && a.name == "Mac" })
+	if !strings.HasSuffix(a.title, "(ARD DH, unencrypted)") {
+		t.Errorf("title before the switch %q", a.title)
+	}
+	close(update)
+	a.until("the encrypted title", func() bool { return strings.HasSuffix(a.title, "(ARD DH, encrypted)") })
 	a.disconnect()
 }

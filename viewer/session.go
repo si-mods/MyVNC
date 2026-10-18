@@ -48,8 +48,11 @@ type Session struct {
 	// OnResizeRefused, when set, hears that the server cannot or will not
 	// change its size for SetDesktopSize, on the UI thread.
 	OnResizeRefused func()
-	clip            string // last clipboard text either side sent
-	ptrMask         uint16 // of the last pointer event
+	// OnEncrypted, when set, hears that Encrypted changed, as when ARD
+	// session encryption starts after the first update, on the UI thread.
+	OnEncrypted func(encrypted bool)
+	clip        string // last clipboard text either side sent
+	ptrMask     uint16 // of the last pointer event
 
 	c    *rfb.Client
 	post func(func())
@@ -424,7 +427,13 @@ func (s *Session) Updated(r image.Rectangle) {
 func (s *Session) UpdateDone() {
 	s.n.updates.Add(1)
 	// ARD session encryption starts after the handshake.
-	s.encrypted.Store(s.c.Encrypted())
+	if enc := s.c.Encrypted(); s.encrypted.Swap(enc) != enc {
+		s.post(func() {
+			if s.OnEncrypted != nil {
+				s.OnEncrypted(enc)
+			}
+		})
+	}
 	if s.mediaShown.Load() {
 		// The stream draws the picture; the framebuffer has no pixels.
 		s.dirty, s.resized = s.dirty[:0], false

@@ -338,8 +338,9 @@ func (m *MVS) ensure(w, h int) {
 		m.descRef[i] = -1
 	}
 	m.matchX, m.matchY = make([]int, t), make([]int, t)
-	m.cacheWrite, m.cacheLast, m.cacheN = 0, 0, 0
-	m.cachePixels, m.cachePixelGen = nil, nil
+	// The tile cache outlives a new size: a Mac whose display changed
+	// size goes on naming entries it cached before (macOS 26, 1920x1080
+	// to 2792x1810), which TigerVNC's decoder drops here.
 }
 
 func (m *MVS) put(x, y, w, h int) {

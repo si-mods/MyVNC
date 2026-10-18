@@ -179,8 +179,9 @@ func TestHighPerformanceSequence(t *testing.T) {
 		t.Fatal("no media stream after the ports")
 	}
 
-	// The ports again while the offer is out (a display change): no second
-	// offer until the answer, which then brings it.
+	// The ports again while the offer is out, as a Mac repeats them: no
+	// second offer, before the answer or after it; a second offer as the
+	// capture starts can fail it.
 	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
 	s.expect(ardAutoFBUpdate(true, 1, 1))
 	s.expect(framebufferUpdateRequest(true, 1, 1))
@@ -194,14 +195,6 @@ func TestHighPerformanceSequence(t *testing.T) {
 	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
 	s.expect(ardAutoFBUpdate(true, 1, 1))
 	s.expect(framebufferUpdateRequest(true, 1, 1)) // sent as the answer's update began
-	if hdr := s.recv(4); hdr[0] != 0x1c {
-		t.Fatalf("second offer header %x", hdr)
-	} else {
-		s.recv(int(binary.BigEndian.Uint16(hdr[2:])))
-	}
-	<-replies
-	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
-	s.expect(ardAutoFBUpdate(true, 1, 1))
 	<-replies
 	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
 	s.expect(ardAutoFBUpdate(true, 1, 1))
@@ -282,4 +275,98 @@ func TestHighPerformanceNoMedia(t *testing.T) {
 	if err := c.RetryHighPerformance(); err != nil {
 		t.Errorf("retry while on: %v", err)
 	}
+}
+
+// recvOffer reads one 0x1c offer, whole.
+func (s *fakeServer) recvOffer() []byte {
+	s.t.Helper()
+	hdr := s.recv(4)
+	if hdr[0] != 0x1c {
+		s.t.Fatalf("offer header %x", hdr)
+	}
+	return append(hdr, s.recv(int(binary.BigEndian.Uint16(hdr[2:])))...)
+}
+
+// portsBody is a kind 1 reply naming two free UDP ports.
+func portsBody(t *testing.T) []byte {
+	ports := make([]byte, 36)
+	ap, vp := freeUDPPort(t), freeUDPPort(t)
+	copy(ports, []byte{0, 1, 0, 1, 0, 0, 0, 0, byte(ap >> 8), byte(ap), 0, 0, 0, 1, byte(vp >> 8), byte(vp), 0, 0, 0, 1})
+	return ports
+}
+
+// TestHighPerformanceDisplayChange changes the display of a streaming
+// session as the Mac answers it, with a 1105 layout and its ports in one
+// update: the framebuffer takes the new size and one offer of that size
+// goes out.
+func TestHighPerformanceDisplayChange(t *testing.T) {
+	c, s := hpSession(t, &HighPerformance{})
+	ports := portsBody(t)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	if got := s.recvOffer(); !bytes.Equal(got, c.hp.secrets.Offer(media.Params{Width: 64, Height: 32})) {
+		t.Error("the first offer is not of the 64x32 desktop")
+	}
+	answer := append([]byte{0, 2, 0, 1, 0, 0, 0, 0}, make([]byte, 10)...)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+
+	// Streaming, the change goes at once.
+	call(t, s, func() error { return c.SetDisplayConfiguration(40, 20, 2) }, ardAutoFBUpdate(true, 1, 1))
+	if d := s.recv(4 + 8 + 0xb8)[4+8:]; binary.BigEndian.Uint32(d[0x9c:]) != 80 {
+		t.Errorf("mode %x", d[0x9c:0xac])
+	}
+	upd := append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(2)}, layout2(40, 20, 80, 40)[2:]...)
+	s.send(append(upd, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	if got := s.recvOffer(); !bytes.Equal(got, c.hp.secrets.Offer(media.Params{Width: 80, Height: 40})) {
+		t.Error("the offer after the change is not of the 80x40 display")
+	}
+
+	// Its answer brings no other offer.
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	call(t, s, func() error { return c.KeyEvent(0x61, true) }, []byte{msgKeyEvent, 1, 0, 0, 0, 0, 0, 0x61})
+}
+
+// TestHighPerformanceOfferNotHeld: a display change the Mac does not answer
+// holds the offer back for displayOfferHold only; the offer has the size asked,
+// and the layout that comes after it brings no other.
+func TestHighPerformanceOfferNotHeld(t *testing.T) {
+	hold, offerHold := displayHold, displayOfferHold
+	displayHold, displayOfferHold = 100*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { displayHold, displayOfferHold = hold, offerHold })
+	c, s := hpSession(t, &HighPerformance{})
+	call(t, s, func() error { return c.SetDisplayConfiguration(40, 20, 2) }, ardAutoFBUpdate(true, 1, 1))
+	s.recv(4 + 8 + 0xb8)
+	sent := time.Now()
+	ports := portsBody(t)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	if got := s.recvOffer(); !bytes.Equal(got, c.hp.secrets.Offer(media.Params{Width: 80, Height: 40})) {
+		t.Error("the offer is not of the 80x40 display asked")
+	}
+	if d := time.Since(sent); d < displayOfferHold || d > displayOfferHold+time.Second {
+		t.Errorf("offered %v after the change", d)
+	}
+
+	// The layout comes late, with the ports again, then the answer.
+	upd := append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(2)}, layout2(40, 20, 80, 40)[2:]...)
+	s.send(append(upd, mediaRect(ports)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	answer := append([]byte{0, 2, 0, 1, 0, 0, 0, 0}, make([]byte, 10)...)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(answer)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	call(t, s, func() error { return c.KeyEvent(0x61, true) }, []byte{msgKeyEvent, 1, 0, 0, 0, 0, 0, 0x61})
 }
