@@ -62,6 +62,7 @@
   "statsDecode": "解码 {ms} 毫秒",
   "statsBitrate": "{mbps} Mbit/s",
   "statsEncoding": "编码 {name}",
+  "statsDropped": "丢帧 {n}/秒",
   "statsResolution": "分辨率 {size}",
   "statsMode": "模式 {mode}",
   "modeStandard": "标准",
