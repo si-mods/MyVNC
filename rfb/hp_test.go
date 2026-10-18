@@ -43,7 +43,7 @@ func mediaRect(body []byte) []any {
 
 // hpSession runs an ARD session with hp against a fake Mac over TCP up to
 // the second SetEncodings, the one with 1010 first.
-func hpSession(t *testing.T, hp *HighPerformance) (*Client, *fakeServer) {
+func hpSession(t *testing.T, hp *HighPerformance, tweak ...func(*Options)) (*Client, *fakeServer) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -56,6 +56,9 @@ func hpSession(t *testing.T, hp *HighPerformance) (*Client, *fakeServer) {
 		Password:        func() (string, string, error) { return "", "pw", nil },
 		Decoders:        map[int32]pixel.Decoder{EncodingRaw: rawDecoder{}},
 		HighPerformance: hp,
+	}
+	for _, f := range tweak {
+		f(&opt)
 	}
 	type res struct {
 		c   *Client
