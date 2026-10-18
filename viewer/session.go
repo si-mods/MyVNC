@@ -236,6 +236,13 @@ func (s *Session) SendClipboard(text string) {
 	s.send(input{f: func(c *rfb.Client) error { return c.ClipboardText(text) }})
 }
 
+// RequestClipboard fetches the server's clipboard text, which then comes
+// through OnClipboard, if the server announced text that has not come
+// yet; else it does nothing.
+func (s *Session) RequestClipboard() {
+	s.send(input{f: func(c *rfb.Client) error { return c.RequestClipboard() }})
+}
+
 // SecurityType is the negotiated security type; see rfb.Client.
 func (s *Session) SecurityType() uint32 { return s.c.SecurityType() }
 
@@ -374,6 +381,10 @@ func (s *Session) Clipboard(text string) {
 		}
 	})
 }
+
+// ClipboardAnnounced is rfb.ClipboardAnnouncer, which makes rfb leave
+// the server's extended clipboard there until RequestClipboard.
+func (s *Session) ClipboardAnnounced(bool) {}
 
 func (s *Session) Name(name string) {
 	s.post(func() {

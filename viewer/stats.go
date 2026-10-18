@@ -15,7 +15,7 @@ import (
 // Stats are a session's running totals, for the statistics overlay.
 type Stats struct {
 	Updates  int64 // framebuffer updates finished
-	DecodeNs int64 // spent in decoders
+	DecodeNs int64 // spent in decoders, summed over the decoding goroutines
 	Bytes    int64 // read from the network
 	Encoding int32 // of the last rectangle decoded
 }
@@ -45,10 +45,32 @@ func (t timed) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *i
 	return err
 }
 
+// timedParallel is timed for a ParallelDecoder, which rfb then decodes
+// on worker goroutines.
+type timedParallel struct {
+	pixel.ParallelDecoder
+	t timed
+}
+
+func (t timedParallel) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *image.RGBA) error {
+	return t.t.Decode(r, rect, pf, fb)
+}
+
+func (t timedParallel) DecodeRect(data []byte, rect image.Rectangle, pf *pixel.Format, fb *image.RGBA) error {
+	start := time.Now()
+	err := t.ParallelDecoder.DecodeRect(data, rect, pf, fb)
+	t.t.n.decodeNs.Add(int64(time.Since(start)))
+	t.t.n.encoding.Store(t.t.enc)
+	return err
+}
+
 func timeDecoders(m map[int32]pixel.Decoder, n *counters) map[int32]pixel.Decoder {
 	out := make(map[int32]pixel.Decoder, len(m))
 	for e, d := range m {
 		out[e] = timed{e, d, n}
+		if pd, ok := d.(pixel.ParallelDecoder); ok {
+			out[e] = timedParallel{pd, timed{e, d, n}}
+		}
 	}
 	return out
 }

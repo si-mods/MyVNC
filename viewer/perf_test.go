@@ -62,7 +62,10 @@ func benchFrames(b *testing.B, w, h int, enc string) {
 		b.Fatal(err)
 	}
 	defer s.Close()
-	go s.Run()
+	ran := make(chan struct{})
+	go func() { s.Run(); close(ran) }()
+	// Run may still post; posts closes only once it has returned.
+	defer func() { s.Close(); <-ran }()
 	<-shown // the first, which allocates the bitmap
 	start := s.Stats()
 	for b.Loop() {

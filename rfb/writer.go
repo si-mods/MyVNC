@@ -8,8 +8,8 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
-	"strings"
 
+	"github.com/kyya/myvnc/internal/text"
 	"github.com/kyya/myvnc/rfb/ard"
 	"github.com/kyya/myvnc/rfb/pixel"
 )
@@ -236,9 +236,10 @@ func (c *Client) ClipboardText(s string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.localClip = &s
+	c.remoteClip = false // the server's text is older now
 
 	if c.clipSize > 0 && c.clipFlags&clipboardProvide != 0 {
-		if len(toCRLF(s))+1 > int(c.clipSize) {
+		if len(text.ConvertCRLF(s))+1 > int(c.clipSize) {
 			if c.clipFlags&clipboardNotify != 0 {
 				return c.writeLocked(clipboardMsg(clipboardNotify|clipboardUTF8, nil))
 			}
@@ -252,19 +253,29 @@ func (c *Client) ClipboardText(s string) error {
 	return c.sendClipboardLocked(s)
 }
 
+// RequestClipboard asks for the server's clipboard text announced with
+// ClipboardAnnounced(true), as TigerVNC's CConnection::requestClipboard;
+// it arrives as Clipboard. Without announced text that has not arrived
+// yet, it does nothing.
+func (c *Client) RequestClipboard() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.remoteClip || c.clipFlags&clipboardRequest == 0 {
+		return nil
+	}
+	return c.writeLocked(clipboardMsg(clipboardRequest|clipboardUTF8, nil))
+}
+
+// sendClipboardLocked converts s as TigerVNC's Viewport and
+// CConnection::sendClipboardData do: LF line endings, then CRLF for the
+// extended clipboard or Latin-1 for ClientCutText.
 func (c *Client) sendClipboardLocked(s string) error {
 	if c.clipFlags&clipboardProvide == 0 {
-		lat := []byte{}
-		for _, r := range toLF(s) {
-			if r > 0xff {
-				r = '?'
-			}
-			lat = append(lat, byte(r))
-		}
+		lat := text.UTF8ToLatin1(text.ConvertLF(s))
 		b := be.AppendUint32([]byte{msgClientCutText, 0, 0, 0}, uint32(len(lat)))
 		return c.writeLocked(append(b, lat...))
 	}
-	data := []byte(toCRLF(s) + "\x00")
+	data := []byte(text.ConvertCRLF(s) + "\x00")
 	var z bytes.Buffer
 	zw := zlib.NewWriter(&z)
 	zw.Write(be32(uint32(len(data))))
@@ -278,10 +289,3 @@ func clipboardMsg(flags uint32, payload []byte) []byte {
 	b = be.AppendUint32(b, flags)
 	return append(b, payload...)
 }
-
-func toLF(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.ReplaceAll(s, "\r", "\n")
-}
-
-func toCRLF(s string) string { return strings.ReplaceAll(toLF(s), "\n", "\r\n") }

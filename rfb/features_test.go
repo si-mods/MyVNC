@@ -27,12 +27,19 @@ import (
 // desktop, then starts Run and consumes the name and resize events.
 func dialNone(t *testing.T, opt Options, h *testHandler) (*Client, *fakeServer, []int32) {
 	t.Helper()
+	return dialNoneWith(t, opt, h, h, 4, 2)
+}
+
+// dialNoneWith is dialNone with handler, which wraps h, and a w x ht
+// desktop.
+func dialNoneWith(t *testing.T, opt Options, h *testHandler, handler Handler, w, ht uint16) (*Client, *fakeServer, []int32) {
+	t.Helper()
 	if opt.Decoders == nil {
 		opt.Decoders = map[int32]pixel.Decoder{EncodingRaw: rawDecoder{}}
 	}
 	var s *fakeServer
 	var encs []int32
-	c := dialPipe(t, opt, h, func(fs *fakeServer) {
+	c := dialPipe(t, opt, handler, func(fs *fakeServer) {
 		s = fs
 		s.send("RFB 003.008\n")
 		s.expect([]byte("RFB 003.008\n"))
@@ -40,9 +47,9 @@ func dialNone(t *testing.T, opt Options, h *testHandler) (*Client, *fakeServer, 
 		s.expect([]byte{byte(SecTypeNone)})
 		s.send(uint32(0))
 		s.expect([]byte{0})
-		s.send(serverInit(4, 2, []byte("d")))
+		s.send(serverInit(w, ht, []byte("d")))
 		encs = s.recvInit()
-		s.expect(framebufferUpdateRequest(false, 4, 2))
+		s.expect(framebufferUpdateRequest(false, int(w), int(ht)))
 	})
 	go c.Run()
 	h.next(t, "name")

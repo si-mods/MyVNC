@@ -25,7 +25,10 @@ const (
 )
 
 // Tight is the Tight encoding (7). It keeps four zlib streams.
-type Tight struct{ zs [4]zstream }
+type Tight struct {
+	plain
+	zs [4]zstream
+}
 
 func readCompact(r io.Reader) (int, error) {
 	b, err := readU8(r)
