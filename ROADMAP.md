@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.5 (2026-10-18). Open work is tracked in GitHub issues.
+Status as of v0.0.6 (2026-10-18). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -48,6 +48,15 @@ Status as of v0.0.5 (2026-10-18). Open work is tracked in GitHub issues.
   - ARD clipboard both ways, premultiplied ARD cursors, cached-cursor
     reselects, prompt failure on a refused Mac login (#6).
 
+- v0.0.6:
+  - Video decoding option Auto / Hardware / Software; D3D11 DXVA decodes
+    the Mac's HEVC 4:4:4 on the GPU at the source frame rate (#35).
+  - No more frozen picture after a dynamic-resolution change on a Mac: the
+    Mac's 1105 layout is read as the answer, pixel requests resume within
+    2 s, one media offer of the real display size.
+  - The title follows ARD session encryption (#36).
+  - Tests for the coverage gaps; CI lists skipped tests.
+
 ## Deferred by the owner
 
 - Partial / YUV texture upload (needs a mygo change).
@@ -55,8 +64,12 @@ Status as of v0.0.5 (2026-10-18). Open work is tracked in GitHub issues.
 
 ## Known limits and ideas (no open issues)
 
-- High Performance: software HEVC decoding has little headroom on heavy
-  content; D3D11 hardware decoding, and real loss in RCTL feedback.
+- High Performance: GPU readback is synchronous (pipelining would save a
+  few ms per frame); RCTL feedback does not report real loss; the first
+  picture comes ~4 s after connecting (asking the window size in the
+  opening display would save ~2 s).
+- CI has no HEVC decoder or GPU, so HEVC and hardware decode tests run
+  only locally.
 - The ARD 0x10 encrypted key event is unproven live: macOS drops the first
   key of a new session whichever path it takes.
 - Mac VncAuth success needs the Mac's separate VNC password (protocol path
