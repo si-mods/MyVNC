@@ -52,14 +52,6 @@ func TestH264Rects(t *testing.T) {
 		t.Errorf("outside the rectangle: %v", c)
 	}
 	decode(b, clip, 0)
-	for i, c := range h.contexts {
-		for _, l := range c.dec.Info().Debug {
-			t.Logf("DIAG context %d %v: %s", i, c.rect, l)
-		}
-	}
-	for _, p := range []image.Point{{150, 20}, {214, 56}, {277, 20}, {150, 91}, {277, 91}, {11, 11}, {137, 81}} {
-		t.Logf("DIAG pixel %v = %v", p, fb.RGBAAt(p.X, p.Y))
-	}
 	red(image.Pt(277, 91))
 	if len(h.contexts) != 2 {
 		t.Fatalf("%d contexts, want one per rectangle", len(h.contexts))

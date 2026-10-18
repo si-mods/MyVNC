@@ -39,7 +39,6 @@ type Info struct {
 	Output string
 	// Outputs are the subtypes the MFT offered for the current stream.
 	Outputs []string
-	Debug   []string // TEMP diagnostics
 }
 
 // Frame is a decoded picture.
