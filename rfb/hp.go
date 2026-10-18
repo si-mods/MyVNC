@@ -217,8 +217,9 @@ func (c *Client) hpStep() error {
 }
 
 // hpOffer makes the one offer for the ports named, unless one is out or a
-// display change holds it. Its size is the framebuffer's, which the Mac's
-// layout sets, or while a change is out past its hold the size asked:
+// display change holds it (displayOfferHold). Its size is the
+// framebuffer's, which the Mac's layout sets, or while a change is out
+// past that hold the size asked:
 // the Mac takes a while to lay a new display out (1.9 to 2.3 seconds on
 // a Mac mini) and answers with the display it has then. Any goroutine.
 func (c *Client) hpOffer() error {
@@ -227,7 +228,9 @@ func (c *Client) hpOffer() error {
 		return nil
 	}
 	c.mu.Lock()
-	if hp.failed || !hp.asked || !hp.invited || hp.pending || c.disp.holds() {
+	d := &c.disp
+	if hp.failed || !hp.asked || !hp.invited || hp.pending || d.holds() ||
+		!d.out.IsZero() && time.Since(d.out) < displayOfferHold {
 		// Offered mid-change, the stream would be torn down by the change.
 		c.mu.Unlock()
 		return nil
@@ -450,12 +453,16 @@ var ErrNoDisplayConfiguration = errors.New("rfb: server does not take SetDisplay
 // given up on (remotex HP_RESIZE_STUCK): the Mac reads nothing while it
 // writes an update, so a slow repaint leaves a change unread for long.
 // displayHold is how long the pixel requests stay held to one pixel for a
-// change, and the media offer waits for it: past it the screen and the
-// stream go on though the Mac has not answered. Both run on a clock; vars
-// for the tests.
+// change: past it the screen goes on though the Mac has not answered.
+// displayOfferHold is how long the media offer waits for a change's
+// layout: a Mac mini lays a new display out in 1.9 to 2.4 seconds, and
+// its ports come again with the layout, which an offer made before it
+// would have to follow with a second one. All run on a clock; vars for
+// the tests.
 var (
-	displayStuck = 30 * time.Second
-	displayHold  = 2 * time.Second
+	displayStuck     = 30 * time.Second
+	displayHold      = 2 * time.Second
+	displayOfferHold = 3 * time.Second
 )
 
 // displayChange is SetDisplayConfiguration's state, under c.mu.
@@ -572,6 +579,7 @@ func (c *Client) sendDisplayLocked() error {
 	time.AfterFunc(displayStuck, func() { c.displayStuckOver(n) })
 	c.holdLocked()
 	if c.hp != nil {
+		time.AfterFunc(displayOfferHold, func() { c.displayTimerDone(nil) })
 		c.hp.live = false // the change stops the stream until a new offer's answer
 	}
 	c.log.Info("rfb: asking for a virtual display", "width", d.mode[0], "height", d.mode[1], "density", d.mode[2])
