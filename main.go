@@ -79,6 +79,7 @@ type app struct {
 	screen     ui.Handle
 	buttons    uint16
 	ptrX, ptrY float32 // pointer in the screen box
+	ptrMove    bool    // a move to ptrX, ptrY waits for the next frame
 	scrollAcc  [2]float32
 	svc        ui.Services
 	menuOpen   bool
@@ -262,11 +263,18 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 			a.buttons &^= pointerMask[ev.Button]
 		}
 	case ui.InputPointerMove:
+		// At most one move a frame (RDP's cadence, TigerVNC's rate
+		// limit): flushMove sends it when the frame is drawn.
+		a.ptrMove = true
+		return true
 	case ui.InputScroll:
 		wheel = a.wheel(ev)
 	default:
 		return false
 	}
+	// Buttons and wheels go at once and carry the position, so that they
+	// replace the move waiting.
+	a.ptrMove = false
 	x, y := a.toFramebuffer(a.screen.Bounds(c), ev.X, ev.Y)
 	a.flushAltGr()
 	a.sendPointer(x, y, a.buttons)
@@ -275,6 +283,21 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 		a.sendPointer(x, y, a.buttons)
 	}
 	return true
+}
+
+// flushMove sends the move that waits, for the image placed at f in the
+// screen box.
+func (a *app) flushMove(f ui.Rect, w, h int) {
+	if !a.ptrMove {
+		return
+	}
+	a.ptrMove = false
+	if a.sess == nil || a.emb == nil || a.cfg.ViewOnly {
+		return
+	}
+	x, y := viewer.ToFramebuffer(a.ptrX, a.ptrY, f, w, h)
+	a.flushAltGr()
+	a.sendPointer(x, y, a.buttons)
 }
 
 // sendPointer passes a pointer event through the middle button emulation
@@ -750,6 +773,11 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.connecting, a.cancel = false, nil
 	a.authOpen, a.keyOpen, a.warnOpen, a.certOpen = false, false, false, false
 	if err != nil {
+		if c := a.cfg.Computers[server]; c.Last.IsZero() && c.Name == "" && !c.Never {
+			c.Never = true // it did not connect once
+			a.cfg.Computers[server] = c
+			a.saveConfig()
+		}
 		a.errText = errorText(err)
 		var ae *rfb.AuthError
 		if a.rc.active && !errors.As(err, &ae) {
@@ -767,10 +795,11 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.sess, a.addr, a.sessServer, a.sessPass, a.secType = s, addr, server, pass, s.SecurityType()
 	a.step = locales.StepFirstFrame
 	a.cfg.Computers[server] = viewer.Computer{Name: a.cfg.Computers[server].Name, Last: time.Now()}
+	// The desktop name is kept by setName when the server tells it.
 	a.saveConfig()
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
 	a.stats = statsSample{}
-	a.name, a.buttons, a.pass, a.errText = "", 0, "", ""
+	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
 	a.ungrabbed, a.menuOpen, a.srvLED, a.sentSize = false, false, keymap.LEDUnknown, image.Point{}
 	a.setTitle(s.Encrypted())
 	s.OnName = a.setName
