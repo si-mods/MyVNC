@@ -72,7 +72,7 @@ func TestDHAuthRejectsShortKey(t *testing.T) {
 func TestKeyBlocks(t *testing.T) {
 	var key [16]byte
 	copy(key[:], unhex(vecKey))
-	if got := KeyEventBlock(key, 0x61, true); hex.EncodeToString(got[:]) != "6776e05d3fdc078d4952306e93a00399" {
+	if got := KeyEventBlock(key, 0x61, true, 0); hex.EncodeToString(got[:]) != "6776e05d3fdc078d4952306e93a00399" {
 		t.Errorf("key event = %x", got)
 	}
 	var ek [16]byte

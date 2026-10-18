@@ -259,6 +259,31 @@ func TestAuthFailureReason(t *testing.T) {
 	}
 }
 
+// A Mac refuses a login with the result alone, no reason, and leaves
+// the connection open (seen live on macOS 27 with a wrong VNC password).
+func TestARDAuthFailureHasNoReason(t *testing.T) {
+	cli, srv := net.Pipe()
+	defer srv.Close()
+	s := &fakeServer{t: t, r: srv, w: srv}
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewClient(context.Background(), cli, "test", Options{
+			Password: func() (string, string, error) { return "", "x", nil },
+		}, &testHandler{})
+		done <- err
+	}()
+	s.send("RFB 003.889\n")
+	s.recv(12)
+	s.send([]byte{1, byte(SecTypeVncAuth)})
+	s.expect([]byte{byte(SecTypeVncAuth)})
+	s.send(make([]byte, 16))
+	s.recv(16)
+	s.send(uint32(1)) // and nothing more
+	if _, ok := (<-done).(*AuthError); !ok {
+		t.Fatal("no AuthError after the Mac's bare refusal")
+	}
+}
+
 const oakley2 = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381FFFFFFFFFFFFFFFF"
 
 func TestARDSession(t *testing.T) {
@@ -325,8 +350,14 @@ func TestARDSession(t *testing.T) {
 
 	keyErr := make(chan error, 1)
 	go func() { keyErr <- c.KeyEvent(0x61, true) }()
-	blk := ard.KeyEventBlock(key, 0x61, true)
-	s.expect(append([]byte{0x10, 0}, blk[:]...))
+	msg := s.recv(18)
+	if msg[0] != 0x10 || msg[1] != 0 {
+		t.Fatalf("encrypted key event header % x", msg[:2])
+	}
+	plain := ard.DecryptBlock(key, [16]byte(msg[2:]))
+	if plain[0] != 0xff || plain[1] != 1 || binary.BigEndian.Uint32(plain[2:]) != 0x61 || binary.BigEndian.Uint32(plain[6:]) == 0 {
+		t.Errorf("encrypted key event % x", plain)
+	}
 	if err := <-keyErr; err != nil {
 		t.Fatal(err)
 	}
