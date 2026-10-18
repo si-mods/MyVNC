@@ -89,6 +89,7 @@ type hpState struct {
 	failed   bool
 	answers  int // answers so far, so that a timeout knows its own
 	ports    [2]uint16
+	offered  image.Point // the size of the offer out or last made
 	waitLogs bool
 	stream   *media.Stream // under c.mu
 }
@@ -213,8 +214,19 @@ func (c *Client) hpStep() error {
 		c.log.Info("rfb: High Performance: asking for the media stream", "encodings", encs)
 		return c.write(setEncodings(encs))
 	}
+	return c.hpOffer()
+}
+
+// hpOffer makes the one offer for the ports named, unless one is out or a
+// display change holds it, with the size of the framebuffer, which the
+// Mac's layout has set. Any goroutine.
+func (c *Client) hpOffer() error {
+	hp := c.hp
+	if hp == nil {
+		return nil
+	}
 	c.mu.Lock()
-	if !hp.invited || hp.pending || c.disp.holds() {
+	if hp.failed || !hp.asked || !hp.invited || hp.pending || c.disp.holds() {
 		// Offered mid-change, the stream would be torn down by the change.
 		c.mu.Unlock()
 		return nil
@@ -222,6 +234,7 @@ func (c *Client) hpStep() error {
 	p := hp.cfg.Offer
 	p.Width, p.Height = c.width, c.height
 	hp.invited, hp.pending = false, true
+	hp.offered = image.Pt(p.Width, p.Height)
 	c.mu.Unlock()
 	offer := hp.secrets.Offer(p)
 	c.log.Info("rfb: High Performance: offering the media stream", "width", p.Width, "height", p.Height,
@@ -247,8 +260,13 @@ func (c *Client) hpReply(payload []byte) error {
 	switch r.Kind {
 	case media.ReplyPorts:
 		c.mu.Lock()
-		hp.invited = true
-		hp.live = false // a display change stops the stream until the next offer
+		// The Mac repeats its ports while an offer is out; a second offer
+		// as its capture starts can fail it (remotex: didStart error
+		// 32000). Only a display laid out anew since wants another.
+		if !hp.pending || hp.offered != image.Pt(c.width, c.height) || hp.ports != [2]uint16{r.AudioPort, r.VideoPort} {
+			hp.invited = true
+			hp.live = false // a display change stops the stream until the next offer
+		}
 		c.mu.Unlock()
 		if err := c.hpListen(r.AudioPort, r.VideoPort); err != nil {
 			return c.hpFallback(fmt.Errorf("rfb: binding the media ports failed: %w", err))
@@ -370,10 +388,7 @@ func (c *Client) hpFallback(reason error) error {
 	if err := c.writeLocked(setEncodings(c.encodingList())); err != nil {
 		return err
 	}
-	w, h := c.width, c.height
-	if c.disp.holds() {
-		w, h = 1, 1 // a display change is out; its answer asks for the rest
-	}
+	w, h := c.requestSizeLocked() // a display change's answer asks for the rest
 	if err := c.writeLocked(ardAutoFBUpdate(true, w, h)); err != nil {
 		return err
 	}
@@ -430,7 +445,14 @@ var ErrNoDisplayConfiguration = errors.New("rfb: server does not take SetDisplay
 // displayStuck is how long a display change may go unanswered before it is
 // given up on (remotex HP_RESIZE_STUCK): the Mac reads nothing while it
 // writes an update, so a slow repaint leaves a change unread for long.
-const displayStuck = 30 * time.Second
+// displayHold is how long the pixel requests stay held to one pixel for a
+// change, and the media offer waits for it: past it the screen and the
+// stream go on though the Mac has not answered. Both run on a clock; vars
+// for the tests.
+var (
+	displayStuck = 30 * time.Second
+	displayHold  = 2 * time.Second
+)
 
 // displayChange is SetDisplayConfiguration's state, under c.mu.
 type displayChange struct {
@@ -438,14 +460,46 @@ type displayChange struct {
 	dueMode  [3]int    // its width and height in pixels, and density
 	mode     [3]int    // of the change last sent
 	out      time.Time // when the change in flight went out; zero for none
+	sent     int       // changes sent, so that a stuck timer knows its own
+	hold     time.Time // when the pixel requests were last held
+	holdN    int       // holds begun, so that a hold's timer knows its own
+	resumed  bool      // the requests went back to the desktop after the hold
 	rearm    bool      // a change ended: ask for the whole desktop again
 	inUpdate bool      // between a FramebufferUpdate's start and end
+	heldReq  bool      // that update's request was for one pixel
 }
 
 // holds says the pixel requests are held to one pixel: while a change waits
-// or is out. The Mac's agent serves a region of the old size from the new,
-// smaller surface and dies (remotex HP_HOLD_REQUEST).
-func (d *displayChange) holds() bool { return d.due != nil || !d.out.IsZero() }
+// or is out, for at most displayHold. The Mac's agent serves a region of
+// the old size from the new, smaller surface and dies (remotex
+// HP_HOLD_REQUEST); past the hold requestSizeLocked asks for no more than
+// both sizes share.
+func (d *displayChange) holds() bool {
+	return (d.due != nil || !d.out.IsZero()) && time.Since(d.hold) < displayHold
+}
+
+// holdLocked starts a hold, whose end a timer acts on.
+func (c *Client) holdLocked() {
+	d := &c.disp
+	d.hold, d.resumed = time.Now(), false
+	d.holdN++
+	n := d.holdN
+	time.AfterFunc(displayHold, func() { c.displayHoldOver(n) })
+}
+
+// requestSizeLocked is the region the pixel requests ask for: one pixel
+// while a change holds them, then, while it is still out, the part of the
+// desktop that both the old size and the new have.
+func (c *Client) requestSizeLocked() (w, h int) {
+	d := &c.disp
+	switch {
+	case d.holds():
+		return 1, 1
+	case !d.out.IsZero():
+		return min(c.width, d.mode[0]), min(c.height, d.mode[1])
+	}
+	return c.width, c.height
+}
 
 func (c *Client) takesDisplayConfiguration() bool {
 	return c.appleARD && c.ardCommands[0x1d>>3]&(0x80>>(0x1d&7)) != 0 && (c.hp == nil || !c.hp.cfg.Mirror)
@@ -456,16 +510,17 @@ func (c *Client) takesDisplayConfiguration() bool {
 // Sharing does as its window is resized; the framebuffer becomes the
 // display's pixels, at most 3840 x 2160 (Screen Sharing's dynamic ceiling:
 // a larger request shrinks at the same density). The result arrives as a
-// Resize.
+// Resize, once the Mac's layout (1105, or 1101) names the new size.
 //
 // Only one change is out at a time, since an overlapping one has crashed
 // the Mac's agent: a size asked meanwhile replaces any not sent yet and
 // goes once the Mac's layout answers, or after 30 seconds without one. A
 // change goes out at the end of an update, which a one-pixel request
-// prompts, with the pixel requests held to that pixel until the answer.
-// Once the media stream carries the picture no update comes, so it goes at
-// once, unless an offer is out, whose answer's update then sends it. The
-// stream is offered again once the change is answered.
+// prompts, with the pixel requests held to that pixel until the answer,
+// for at most 2 seconds. Once the media stream carries the picture no
+// update comes, so it goes at once, unless an offer is out, whose answer's
+// update then sends it. The stream is offered again once the change is
+// answered, or once the hold ends.
 //
 // It returns ErrNoDisplayConfiguration when the server does not take it.
 func (c *Client) SetDisplayConfiguration(w, h, density int) error {
@@ -486,6 +541,9 @@ func (c *Client) SetDisplayConfiguration(w, h, density int) error {
 		d.due = nil // asked for already, or showing
 		return nil
 	}
+	if !d.holds() {
+		c.holdLocked()
+	}
 	d.due, d.dueMode = ardSetDisplayConfiguration(pw, ph, density), mode
 	if !d.out.IsZero() {
 		return nil
@@ -505,6 +563,10 @@ func (c *Client) sendDisplayLocked() error {
 	d := &c.disp
 	msg := d.due
 	d.due, d.mode, d.out = nil, d.dueMode, time.Now()
+	d.sent++
+	n := d.sent
+	time.AfterFunc(displayStuck, func() { c.displayStuckOver(n) })
+	c.holdLocked()
 	if c.hp != nil {
 		c.hp.live = false // the change stops the stream until a new offer's answer
 	}
@@ -513,6 +575,22 @@ func (c *Client) sendDisplayLocked() error {
 		return err
 	}
 	return c.writeLocked(msg)
+}
+
+// ardLayout2Size reads the desktop's size in pixels from an ARD layout
+// (1105) body. As a Mac on macOS 26 sends it: u16 version 5, the desktop
+// in points and in pixels (u16 width and height each), u32 0xffffffff,
+// u32, u16 display count, then 56 bytes a display (f64 scale, f64 1, u32
+// id, its rectangles in points and in pixels as u16 top, left, height,
+// width, u32, and an RFB pixel format). Asked for 1396 x 905 points at
+// density 2 it answered 0005 0574 0389 0ae8 0712: 2792 x 1810 pixels. It
+// sends no 1101 and no DesktopSize then.
+func ardLayout2Size(body []byte) (w, h int, ok bool) {
+	if len(body) < 10 {
+		return 0, 0, false
+	}
+	w, h = int(binary.BigEndian.Uint16(body[6:])), int(binary.BigEndian.Uint16(body[8:]))
+	return w, h, w > 0 && h > 0
 }
 
 // displayLaid takes an ARD layout of w x h pixels, before the framebuffer
@@ -524,6 +602,8 @@ func (c *Client) displayLaid(w, h int) {
 	defer c.mu.Unlock()
 	d := &c.disp
 	if !d.out.IsZero() && (w == d.mode[0] && h == d.mode[1] || w != c.width || h != c.height) {
+		c.log.Info("rfb: the Mac laid out the display", "width", w, "height", h,
+			"after", time.Since(d.out).Round(time.Millisecond))
 		d.out, d.rearm = time.Time{}, true
 	}
 }
@@ -535,19 +615,29 @@ func (c *Client) displayStep() error {
 	defer c.mu.Unlock()
 	d := &c.disp
 	d.inUpdate = false
-	if !d.out.IsZero() && time.Since(d.out) > displayStuck {
-		c.log.Warn("rfb: the Mac did not answer a display change; giving up on it", "after", displayStuck)
-		d.out, d.rearm = time.Time{}, true
-	}
+	return c.displayNextLocked(d.heldReq)
+}
+
+// displayNextLocked moves a display change on outside an update: boundary
+// says the update just read was asked for with one pixel, so that a
+// change can go.
+func (c *Client) displayNextLocked(boundary bool) error {
+	d := &c.disp
 	switch {
 	case !d.out.IsZero():
-		return nil
+		return c.displayResumeLocked()
 	case d.due != nil:
 		// High Performance waits for the layout of its opening display.
 		if c.hp != nil && (!c.ardLayout || c.hp.pending) {
-			return nil
+			return c.displayResumeLocked()
 		}
-		return c.sendDisplayLocked()
+		if c.hpHolding() || boundary {
+			return c.sendDisplayLocked()
+		}
+		// The requests went on past the hold: hold them again and prompt
+		// the update at whose end it goes.
+		c.holdLocked()
+		return c.writeLocked(framebufferUpdateRequest(false, 1, 1))
 	case d.rearm:
 		d.rearm = false
 		if c.hpHolding() {
@@ -559,4 +649,61 @@ func (c *Client) displayStep() error {
 		return c.writeLocked(framebufferUpdateRequest(false, c.width, c.height))
 	}
 	return nil
+}
+
+// displayResumeLocked ends a hold that ran out with a change still waiting
+// or out: the screen is asked for again, as much of it as both sizes
+// share, so that an unanswered change never freezes it.
+func (c *Client) displayResumeLocked() error {
+	d := &c.disp
+	if d.resumed || d.holds() || d.due == nil && d.out.IsZero() {
+		return nil
+	}
+	d.resumed = true
+	c.log.Info("rfb: the Mac has not answered a display change yet; the screen goes on", "after", displayHold)
+	if c.hpHolding() {
+		return nil // the picture is the stream's; hpOffer goes on
+	}
+	w, h := c.requestSizeLocked()
+	if err := c.writeLocked(ardAutoFBUpdate(true, w, h)); err != nil {
+		return err
+	}
+	return c.writeLocked(framebufferUpdateRequest(false, w, h))
+}
+
+// displayHoldOver runs once hold n has lasted displayHold; while an update
+// is read, its end ends the hold instead.
+func (c *Client) displayHoldOver(n int) {
+	c.mu.Lock()
+	var err error
+	if d := &c.disp; d.holdN == n && !d.inUpdate && !c.closed.Load() {
+		err = c.displayResumeLocked()
+	}
+	c.mu.Unlock()
+	c.displayTimerDone(err)
+}
+
+// displayStuckOver runs displayStuck after change n went out.
+func (c *Client) displayStuckOver(n int) {
+	c.mu.Lock()
+	var err error
+	if d := &c.disp; d.sent == n && !d.out.IsZero() && !c.closed.Load() {
+		c.log.Warn("rfb: the Mac did not answer a display change; giving up on it", "after", displayStuck)
+		d.out, d.rearm = time.Time{}, true
+		if !d.inUpdate {
+			err = c.displayNextLocked(false)
+		}
+	}
+	c.mu.Unlock()
+	c.displayTimerDone(err)
+}
+
+// displayTimerDone makes the offer a hold kept back.
+func (c *Client) displayTimerDone(err error) {
+	if err == nil && !c.closed.Load() {
+		err = c.hpOffer()
+	}
+	if err != nil {
+		c.log.Info("rfb: display change", "err", err) // Run sees the connection fail
+	}
 }
