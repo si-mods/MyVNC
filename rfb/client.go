@@ -18,19 +18,25 @@
 // first FramebufferUpdateRequest. Run then reads server messages and
 // requests an incremental update as each update starts.
 //
-// All Handler methods are called on the goroutine running Run, which is
-// also the only goroutine that writes into the framebuffer. Framebuffer
-// may only be used from Handler methods. To avoid tearing, collect the
-// rectangles passed to Updated and copy them out of the framebuffer (or
-// swap buffers) in UpdateDone; between UpdateDone and the next update
-// the framebuffer is stable but Run may resume writing once UpdateDone
-// returns. Resize means the framebuffer was reallocated.
+// All Handler methods are called on the goroutine running Run.
+// Rectangles whose decoder is a pixel.ParallelDecoder are decoded on
+// worker goroutines, as TigerVNC's DecodeManager does; Updated(r) is
+// called once r is in the framebuffer, in the order the rectangles
+// arrived, and always before the UpdateDone of its update, but possibly
+// after Cursor or other events that came later in the same update.
+// Framebuffer may only be used from Handler methods. To avoid tearing,
+// collect the rectangles passed to Updated and copy them out of the
+// framebuffer (or swap buffers) in UpdateDone; between UpdateDone and
+// the next update the framebuffer is stable but Run may resume writing
+// once UpdateDone returns. Resize means the framebuffer was reallocated.
 //
 // The input methods (KeyEvent, KeyEventCode, PointerEvent,
-// ClipboardText, SetDesktopSize) are safe for concurrent use.
+// ClipboardText, RequestClipboard, SetDesktopSize) are safe for
+// concurrent use.
 //
-// Besides Handler, a handler may implement LEDHandler, AudioHandler and
-// ARDMediaHandler; the matching pseudo-encodings are then advertised.
+// Besides Handler, a handler may implement LEDHandler, AudioHandler,
+// CursorPosHandler, ClipboardAnnouncer and ARDMediaHandler; the matching
+// pseudo-encodings are then advertised.
 package rfb
 
 import (
@@ -47,11 +53,12 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
+	"github.com/kyya/myvnc/internal/text"
 	"github.com/kyya/myvnc/rfb/ard"
 	"github.com/kyya/myvnc/rfb/auth"
 	"github.com/kyya/myvnc/rfb/pixel"
@@ -134,6 +141,25 @@ type ARDMediaHandler interface {
 	ARDMedia(encoding int32, payload []byte)
 }
 
+// CursorPosHandler may be implemented by a Handler to hear where the
+// server moved the pointer (VMware cursor position 0x574d5666, ARD
+// 1100), as TigerVNC's setCursorPos; VMware cursor position is only
+// advertised then.
+type CursorPosHandler interface {
+	CursorPos(p image.Point)
+}
+
+// ClipboardAnnouncer may be implemented by a Handler to pull the
+// server's extended clipboard lazily, as TigerVNC's
+// handleClipboardAnnounce: ClipboardAnnounced(true) says the server has
+// new text, which then only comes, as Clipboard, after RequestClipboard;
+// false says the server has none any more. Without this interface the
+// text is requested at once. Legacy ServerCutText always comes as
+// Clipboard straight away.
+type ClipboardAnnouncer interface {
+	ClipboardAnnounced(available bool)
+}
+
 // LEDHandler may be implemented by a Handler to receive the server's
 // keyboard LED state (LEDScrollLock, LEDNumLock, LEDCapsLock bits).
 type LEDHandler interface {
@@ -189,6 +215,8 @@ type Client struct {
 	fenceSeen    bool
 	serverAudio  bool
 	audioAsked   bool
+	dm           decodeManager
+	decoded      []image.Rectangle // decoded or queued, not yet passed to Updated
 
 	mu         sync.Mutex // serialises writes and guards the fields below
 	out        io.Writer
@@ -204,6 +232,7 @@ type Client struct {
 	clipFlags  uint32
 	clipSize   uint32 // server's UTF-8 auto-send limit
 	localClip  *string
+	remoteClip bool // announced by the server and not yet received
 }
 
 // Dial connects to addr and performs the handshake.
@@ -232,6 +261,7 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 		c.log = slog.New(slog.DiscardHandler)
 	}
 	c.rd.r = bufio.NewReader(conn)
+	c.dm.workers = decodeWorkers()
 	c.pf = opt.PixelFormat
 	if c.pf == (pixel.Format{}) {
 		c.pf = pixel.RGBA
@@ -278,6 +308,7 @@ func (c *Client) Encrypted() bool {
 // Run reads server messages until the connection fails or is closed.
 // It first reports the desktop name and size.
 func (c *Client) Run() error {
+	defer c.dm.shutdown()
 	c.h.Name(c.name)
 	b := c.fb.Bounds()
 	c.h.Resize(b.Dx(), b.Dy())
@@ -456,7 +487,10 @@ func (c *Client) encodingList() []int32 {
 	// Their position does not matter.
 	more := []int32{PseudoEncodingContinuousUpdates, PseudoEncodingFence}
 	if slices.Contains(list, PseudoEncodingCursor) {
-		more = append(more, PseudoEncodingXCursor)
+		more = append(more, PseudoEncodingVMwareCursor, PseudoEncodingXCursor)
+	}
+	if _, ok := c.h.(CursorPosHandler); ok {
+		more = append(more, PseudoEncodingVMwareCursorPosition)
 	}
 	if _, ok := c.h.(LEDHandler); ok {
 		more = append(more, PseudoEncodingLEDState, PseudoEncodingVMwareLEDState)
@@ -836,16 +870,14 @@ func newFramebuffer(w, h int) *image.RGBA {
 	return fb
 }
 
-// decodeText accepts UTF-8 and falls back to Latin-1.
+// decodeText is how TigerVNC reads the desktop name and failure
+// reasons: UTF-8 when valid, else Latin-1, up to the first NUL.
 func decodeText(b []byte) string {
-	if utf8.Valid(b) {
-		return string(b)
+	s, _, _ := strings.Cut(string(b), "\x00")
+	if text.IsValidUTF8(s) {
+		return s
 	}
-	r := make([]rune, len(b))
-	for i, c := range b {
-		r[i] = rune(c)
-	}
-	return string(r)
+	return text.Latin1ToUTF8(s)
 }
 
 // reader is a sticky-error big-endian reader.
