@@ -445,14 +445,34 @@ func (msgs Messages) FullScreen() string {
 	return Catalog.Format(msgs.locale, "fullScreen", nil)
 }
 
-// RemoteResize says "Resize the remote desktop to the window"
+// DynamicResolution says "Dynamic resolution"
 // in the language the app shows.
-func RemoteResize() string { return In(i18n.Locale()).RemoteResize() }
+//
+// Session panel and settings: the remote desktop's resolution follows the
+// window's size, as in macOS Screen Sharing.
+func DynamicResolution() string { return In(i18n.Locale()).DynamicResolution() }
 
-// RemoteResize says "Resize the remote desktop to the window"
+// DynamicResolution says "Dynamic resolution"
 // in the language of msgs.
-func (msgs Messages) RemoteResize() string {
-	return Catalog.Format(msgs.locale, "remoteResize", nil)
+//
+// Session panel and settings: the remote desktop's resolution follows the
+// window's size, as in macOS Screen Sharing.
+func (msgs Messages) DynamicResolution() string {
+	return Catalog.Format(msgs.locale, "dynamicResolution", nil)
+}
+
+// DynamicResolutionRefused says "This computer cannot change its resolution, so the picture is scaled to fit the window."
+// in the language the app shows.
+//
+// Session panel hint after the server refused dynamic resolution.
+func DynamicResolutionRefused() string { return In(i18n.Locale()).DynamicResolutionRefused() }
+
+// DynamicResolutionRefused says "This computer cannot change its resolution, so the picture is scaled to fit the window."
+// in the language of msgs.
+//
+// Session panel hint after the server refused dynamic resolution.
+func (msgs Messages) DynamicResolutionRefused() string {
+	return Catalog.Format(msgs.locale, "dynamicResolutionRefused", nil)
 }
 
 // FullScreenOn says "Full screen on"
@@ -663,6 +683,126 @@ func StatsEncoding(name string) string { return In(i18n.Locale()).StatsEncoding(
 // in the language of msgs.
 func (msgs Messages) StatsEncoding(name string) string {
 	return Catalog.Format(msgs.locale, "statsEncoding", map[string]any{"name": name})
+}
+
+// StatsResolution says "Resolution {size}"
+// in the language the app shows.
+func StatsResolution(size string) string { return In(i18n.Locale()).StatsResolution(size) }
+
+// StatsResolution says "Resolution {size}"
+// in the language of msgs.
+func (msgs Messages) StatsResolution(size string) string {
+	return Catalog.Format(msgs.locale, "statsResolution", map[string]any{"size": size})
+}
+
+// StatsMode says "Mode {mode}"
+// in the language the app shows.
+//
+// Stats HUD and session panel.
+func StatsMode(mode string) string { return In(i18n.Locale()).StatsMode(mode) }
+
+// StatsMode says "Mode {mode}"
+// in the language of msgs.
+//
+// Stats HUD and session panel.
+func (msgs Messages) StatsMode(mode string) string {
+	return Catalog.Format(msgs.locale, "statsMode", map[string]any{"mode": mode})
+}
+
+// ModeStandard says "Standard"
+// in the language the app shows.
+func ModeStandard() string { return In(i18n.Locale()).ModeStandard() }
+
+// ModeStandard says "Standard"
+// in the language of msgs.
+func (msgs Messages) ModeStandard() string {
+	return Catalog.Format(msgs.locale, "modeStandard", nil)
+}
+
+// ModeHighPerformance says "High Performance ({detail})"
+// in the language the app shows.
+func ModeHighPerformance(detail string) string { return In(i18n.Locale()).ModeHighPerformance(detail) }
+
+// ModeHighPerformance says "High Performance ({detail})"
+// in the language of msgs.
+func (msgs Messages) ModeHighPerformance(detail string) string {
+	return Catalog.Format(msgs.locale, "modeHighPerformance", map[string]any{"detail": detail})
+}
+
+// HighPerformance says "High Performance (macOS)"
+// in the language the app shows.
+//
+// Settings: ask a Mac for its HEVC/H.264 media stream; applies on
+// (re)connect.
+func HighPerformance() string { return In(i18n.Locale()).HighPerformance() }
+
+// HighPerformance says "High Performance (macOS)"
+// in the language of msgs.
+//
+// Settings: ask a Mac for its HEVC/H.264 media stream; applies on
+// (re)connect.
+func (msgs Messages) HighPerformance() string {
+	return Catalog.Format(msgs.locale, "highPerformance", nil)
+}
+
+// RetryHighPerformance says "Retry High Performance"
+// in the language the app shows.
+func RetryHighPerformance() string { return In(i18n.Locale()).RetryHighPerformance() }
+
+// RetryHighPerformance says "Retry High Performance"
+// in the language of msgs.
+func (msgs Messages) RetryHighPerformance() string {
+	return Catalog.Format(msgs.locale, "retryHighPerformance", nil)
+}
+
+// HpOtherViewer says "High Performance unavailable: another viewer is using this Mac's High Performance stream. Using Standard mode."
+// in the language the app shows.
+func HpOtherViewer() string { return In(i18n.Locale()).HpOtherViewer() }
+
+// HpOtherViewer says "High Performance unavailable: another viewer is using this Mac's High Performance stream. Using Standard mode."
+// in the language of msgs.
+func (msgs Messages) HpOtherViewer() string {
+	return Catalog.Format(msgs.locale, "hpOtherViewer", nil)
+}
+
+// HpNoMedia says "High Performance media did not arrive. A router with NAT between this PC and the Mac is likely blocking it (the Mac s…"
+// in the language the app shows.
+func HpNoMedia() string { return In(i18n.Locale()).HpNoMedia() }
+
+// HpNoMedia says "High Performance media did not arrive. A router with NAT between this PC and the Mac is likely blocking it (the Mac s…"
+// in the language of msgs.
+func (msgs Messages) HpNoMedia() string {
+	return Catalog.Format(msgs.locale, "hpNoMedia", nil)
+}
+
+// HpNoDecoder says "High Performance unavailable: this PC has no {codec} decoder (for HEVC, install the HEVC Video Extensions). Using Sta…"
+// in the language the app shows.
+func HpNoDecoder(codec string) string { return In(i18n.Locale()).HpNoDecoder(codec) }
+
+// HpNoDecoder says "High Performance unavailable: this PC has no {codec} decoder (for HEVC, install the HEVC Video Extensions). Using Sta…"
+// in the language of msgs.
+func (msgs Messages) HpNoDecoder(codec string) string {
+	return Catalog.Format(msgs.locale, "hpNoDecoder", map[string]any{"codec": codec})
+}
+
+// HpRefused says "High Performance unavailable: the Mac refused the media stream (error type {type}, sub-code {code}). Using Standard m…"
+// in the language the app shows.
+func HpRefused(type_ string, code string) string { return In(i18n.Locale()).HpRefused(type_, code) }
+
+// HpRefused says "High Performance unavailable: the Mac refused the media stream (error type {type}, sub-code {code}). Using Standard m…"
+// in the language of msgs.
+func (msgs Messages) HpRefused(type_ string, code string) string {
+	return Catalog.Format(msgs.locale, "hpRefused", map[string]any{"type": type_, "code": code})
+}
+
+// HpUnavailable says "High Performance unavailable: {reason}. Using Standard mode."
+// in the language the app shows.
+func HpUnavailable(reason string) string { return In(i18n.Locale()).HpUnavailable(reason) }
+
+// HpUnavailable says "High Performance unavailable: {reason}. Using Standard mode."
+// in the language of msgs.
+func (msgs Messages) HpUnavailable(reason string) string {
+	return Catalog.Format(msgs.locale, "hpUnavailable", map[string]any{"reason": reason})
 }
 
 // StatsEncrypted says "Encrypted {encrypted, select, yes {yes} other {no}}"

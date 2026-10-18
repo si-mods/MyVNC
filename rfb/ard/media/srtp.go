@@ -134,14 +134,22 @@ func parseRTP(data []byte, tagLen int) (RTPHeader, error) {
 	return h, nil
 }
 
+// replayWindow is how many packets behind the newest one a packet may
+// arrive and still be taken (RFC 3711 §3.3.2 asks for at least 64). The
+// Mac's pictures cross the network a few packets out of order now and then.
+const replayWindow = 1024
+
 // SRTPReceiver authenticates and decrypts one SRTP stream (server to
 // viewer). Not safe for concurrent use.
 type SRTPReceiver struct {
 	keys    *sessionKeys
 	have    bool
 	ssrc    uint32
-	lastSeq uint16
+	lastSeq uint16 // of the newest packet
 	roc     uint32
+	// seen has bit i%replayWindow set for each index i received within
+	// the window behind the newest.
+	seen [replayWindow / 64]uint64
 }
 
 // NewSRTPReceiver keys a receiver with the server-to-viewer master key.
@@ -165,8 +173,14 @@ func (r *SRTPReceiver) guessROC(ssrc uint32, seq uint16) uint32 {
 	return r.roc
 }
 
+func (r *SRTPReceiver) bit(index uint64) (*uint64, uint64) {
+	i := index % replayWindow
+	return &r.seen[i/64], 1 << (i % 64)
+}
+
 // Unprotect authenticates data and decrypts its payload in place. An
-// authentic packet no newer than the newest one received is ErrStale.
+// authentic packet already received, or older than the replay window, is
+// ErrStale.
 func (r *SRTPReceiver) Unprotect(data []byte) (RTPHeader, error) {
 	h, err := parseRTP(data, TagLen)
 	if err != nil {
@@ -178,11 +192,28 @@ func (r *SRTPReceiver) Unprotect(data []byte) (RTPHeader, error) {
 		return h, ErrForged
 	}
 	index := uint64(roc)<<16 | uint64(h.Sequence)
-	if r.have && r.ssrc == h.SSRC && index <= uint64(r.roc)<<16|uint64(r.lastSeq) {
-		return h, ErrStale
+	newest := uint64(r.roc)<<16 | uint64(r.lastSeq)
+	same := r.have && r.ssrc == h.SSRC
+	if same && index <= newest {
+		w, b := r.bit(index)
+		if newest-index >= replayWindow || *w&b != 0 {
+			return h, ErrStale
+		}
+		*w |= b
+	} else {
+		if !same || index-newest >= replayWindow {
+			r.seen = [replayWindow / 64]uint64{}
+		} else {
+			for i := newest + 1; i < index; i++ {
+				w, b := r.bit(i)
+				*w &^= b
+			}
+		}
+		w, b := r.bit(index)
+		*w |= b
+		r.have, r.ssrc, r.lastSeq, r.roc = true, h.SSRC, h.Sequence, roc
 	}
 	r.keys.xor(h.SSRC, index, data[h.Payload[0]:end])
-	r.have, r.ssrc, r.lastSeq, r.roc = true, h.SSRC, h.Sequence, roc
 	h.Payload = trimPadding(data, h)
 	return h, nil
 }
