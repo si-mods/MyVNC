@@ -108,3 +108,25 @@ func TestMVSVectors(t *testing.T) {
 		}
 	}
 }
+
+// TestMVSCacheOutlivesResize: a Mac goes on naming cached tiles after its
+// display changed size, so a larger framebuffer keeps the cache.
+func TestMVSCacheOutlivesResize(t *testing.T) {
+	steps := mvsVectors[0].steps
+	m := NewMVS()
+	fb := image.NewRGBA(image.Rect(0, 0, 32, 16))
+	for _, st := range steps[:5] {
+		if st.name == "F3 cache idx/next" {
+			fb = image.NewRGBA(image.Rect(0, 0, 64, 32))
+		}
+		wire, _ := hex.DecodeString(st.wire)
+		if err := m.Decode(bytes.NewReader(wire), st.rect, &pixel.RGBA, fb); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+	}
+	for _, p := range steps[4].pts[:2] {
+		if got := at(fb, p[0], p[1]); got[0] != byte(p[2]) || got[1] != byte(p[3]) || got[2] != byte(p[4]) {
+			t.Errorf("pixel (%d,%d) = %v, want %v", p[0], p[1], got[:3], p[2:])
+		}
+	}
+}
