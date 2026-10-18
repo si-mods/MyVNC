@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.4 (2026-10-18). Open work is tracked in GitHub issues.
+Status as of v0.0.5 (2026-10-18). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -41,17 +41,24 @@ Status as of v0.0.4 (2026-10-18). Open work is tracked in GitHub issues.
     #21, #22).
   - Media Foundation memory-safety fix for COM out-parameters (#30).
 
+- v0.0.5:
+  - Verified against real servers: macOS 27.2 (keyboard, mouse, clipboard,
+    session encryption, DH) and TigerVNC Xvnc 1.13 (all security types,
+    encodings pixel-exact, keyboard, mouse, clipboard, resize) (#4).
+  - ARD clipboard both ways, premultiplied ARD cursors, cached-cursor
+    reselects, prompt failure on a refused Mac login (#6).
+
 ## Deferred by the owner
 
 - Partial / YUV texture upload (needs a mygo change).
 - Code signing and auto-update (#15).
 
-## Open
+## Known limits and ideas (no open issues)
 
-| Issue | Remaining |
-|---|---|
-| #2 | High Performance: hardware (D3D11) decoding headroom, real loss in RCTL feedback |
-| #3 | Confirm the security type used against desktop from the log |
-| #4 | Checklist run against desktop and a Linux server |
-| #6 | ARD encryption timing, cursor 1104 alpha, ARD clipboard |
-| #16 | Remove `myvnc.exe` from git history |
+- High Performance: software HEVC decoding has little headroom on heavy
+  content; D3D11 hardware decoding, and real loss in RCTL feedback.
+- The ARD 0x10 encrypted key event is unproven live: macOS drops the first
+  key of a new session whichever path it takes.
+- Mac VncAuth success needs the Mac's separate VNC password (protocol path
+  verified up to the Mac's decision).
+- Touch was verified with injected input only (no touch screen here).
