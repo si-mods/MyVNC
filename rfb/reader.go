@@ -632,29 +632,39 @@ func (c *Client) readSetVMwareCursor(r image.Rectangle) error {
 	return nil
 }
 
+// ardCursor is a cached 1104 shape and its hotspot.
+type ardCursor struct {
+	img *image.RGBA
+	hot image.Point
+}
+
+// readARDCursorAlpha reads a cursor store (size > 0; the rectangle is
+// hotspot and size) or select (size 0, zero rectangle: the cache knows
+// the shape), as desktop sends them.
 func (c *Client) readARDCursorAlpha(r image.Rectangle) error {
 	id := c.rd.u32()
 	size := c.rd.u32()
 	if c.rd.err != nil {
 		return c.rd.err
 	}
+	if size == 0 {
+		if cur, ok := c.cursorCache[id]; ok {
+			c.h.Cursor(cur.img, cur.hot)
+		}
+		return nil
+	}
 	w, h := r.Dx(), r.Dy()
 	if size > 16<<20 || id < 1000 || w <= 0 || h <= 0 || w > maxCursorSize || h > maxCursorSize {
 		c.rd.skip(int64(size))
 		return c.rd.err
-	}
-	if size == 0 {
-		if img := c.cursorCache[id]; img != nil && img.Rect.Dx() == w && img.Rect.Dy() == h {
-			c.h.Cursor(img, r.Min)
-		}
-		return nil
 	}
 	compressed := c.rd.bytes(int(size))
 	if c.rd.err != nil {
 		return c.rd.err
 	}
 
-	// BGRX pixels followed by an alpha plane; zlib, or raw deflate.
+	// BGRX pixels followed by an alpha plane; zlib ending in a sync
+	// flush (no stream end), or raw deflate.
 	raw := make([]byte, w*h*5)
 	ok := false
 	if zr, err := zlib.NewReader(bytes.NewReader(compressed)); err == nil {
@@ -670,23 +680,17 @@ func (c *Client) readARDCursorAlpha(r image.Rectangle) error {
 		return nil
 	}
 
-	// Premultiplied here because the C++ hands these bytes to
-	// setCursor, which takes straight (unpremultiplied) RGBA, as the
-	// -314 path shows by unpremultiplying first. So the C++ reads the
-	// BGRX plane as straight colour, and premultiplying keeps that
-	// meaning for image.RGBA. If a Mac turns out to send premultiplied
-	// colour, both clients darken soft cursor edges; check on desktop.
+	// The colour is premultiplied, as image.RGBA wants: in desktop's
+	// arrow and I-beam no channel exceeds alpha and the soft white edges
+	// are c == a < 255 (#6). Clamp bad input.
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	alpha := raw[w*h*4:]
 	for i := 0; i < w*h; i++ {
-		a := uint32(alpha[i])
+		a := alpha[i]
 		p := img.Pix[i*4 : i*4+4]
-		p[0] = uint8(uint32(raw[i*4+2]) * a / 255)
-		p[1] = uint8(uint32(raw[i*4+1]) * a / 255)
-		p[2] = uint8(uint32(raw[i*4]) * a / 255)
-		p[3] = uint8(a)
+		p[0], p[1], p[2], p[3] = min(raw[i*4+2], a), min(raw[i*4+1], a), min(raw[i*4], a), a
 	}
-	c.cursorCache[id] = img
+	c.cursorCache[id] = ardCursor{img, r.Min}
 	c.h.Cursor(img, r.Min)
 	return nil
 }
@@ -738,12 +742,23 @@ func (c *Client) readARDSessionEncryption() error {
 func (c *Client) readARDServerMessage(t byte) error {
 	switch t {
 	case 0x14:
-		// ARD clipboard; the C++ skips it too, so there is nothing to port.
+		// MiscStatus: u16 version, u16 command; 2 says the Mac's
+		// pasteboard changed.
 		c.rd.skip(1)
-		c.rd.skip(int64(c.rd.u16()))
+		body := c.rd.bytes(int(c.rd.u16()))
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		if len(body) < 4 {
+			return nil
+		}
+		cmd := be.Uint16(body[2:])
+		c.log.Debug("rfb: ARD status", "command", cmd)
+		if cmd == 2 {
+			return c.clipboardNotify(clipboardUTF8)
+		}
 	case 0x1f:
-		c.rd.skip(1 + 2 + 4 + 4)
-		c.rd.skip(int64(c.rd.u32()))
+		return c.readARDPasteboard()
 	case 0x20:
 		c.rd.skip(4)
 		c.rd.skip(int64(c.rd.u32()))
@@ -751,6 +766,88 @@ func (c *Client) readARDServerMessage(t byte) error {
 		c.rd.skip(int64(c.rd.u16()))
 	}
 	return c.rd.err
+}
+
+// readARDPasteboard reads the Mac's pasteboard, the reply to
+// ardFetchPasteboard: 1f, 0, promises, pad, u32 id, u32 sizes
+// uncompressed and compressed, then zlib (ending in a sync flush) of
+// the archive described at ardPasteboard. Only the UTF-8 text flavor is
+// kept; the rest, often far larger, is inflated and dropped.
+func (c *Client) readARDPasteboard() error {
+	c.rd.skip(7)
+	size, zsize := c.rd.u32(), c.rd.u32()
+	if c.rd.err != nil {
+		return c.rd.err
+	}
+	if size > 100<<20 || zsize > 100<<20 {
+		return errors.New("rfb: ARD pasteboard is too large")
+	}
+	in := io.LimitReader(c.rd.r, int64(zsize))
+	data, found, err := ardPasteboardText(in, size, c.maxCutText())
+	if _, derr := io.Copy(io.Discard, in); derr != nil {
+		return derr
+	}
+	if err != nil {
+		c.log.Info("rfb: invalid ARD pasteboard", "err", err)
+		return nil
+	}
+	c.mu.Lock()
+	c.remoteClip = false
+	c.mu.Unlock()
+	if !found {
+		return nil
+	}
+	if !text.IsValidUTF8(string(data)) {
+		c.log.Info("rfb: invalid UTF-8 sequence in clipboard")
+		return nil
+	}
+	c.h.Clipboard(text.ConvertLF(string(data)))
+	return nil
+}
+
+const ardTextFlavor = "public.utf8-plain-text"
+
+// ardPasteboardText finds the first text flavor in a compressed archive
+// of size bytes. Text over limit is dropped (found is false).
+func ardPasteboardText(z io.Reader, size uint32, limit int) (data []byte, found bool, err error) {
+	if size == 0 {
+		return nil, true, nil // an empty pasteboard
+	}
+	zr, err := zlib.NewReader(z)
+	if err != nil {
+		return nil, false, err
+	}
+	rd := reader{r: io.LimitReader(zr, int64(size))}
+	for {
+		var n [4]byte
+		if _, err := io.ReadFull(rd.r, n[:]); err != nil {
+			if err == io.EOF {
+				err = nil // past the last item
+			}
+			return nil, false, err
+		}
+		for flavors := be.Uint32(n[:]); flavors > 0 && rd.err == nil; flavors-- {
+			nameLen := rd.u32()
+			if nameLen > 1024 {
+				return nil, false, errors.New("flavor name is too long")
+			}
+			name := string(rd.bytes(int(nameLen)))
+			rd.skip(4)
+			for tags := rd.u32(); tags > 0 && rd.err == nil; tags-- {
+				rd.skip(int64(rd.u32()))
+				rd.skip(int64(rd.u32()))
+			}
+			size := rd.u32()
+			if name == ardTextFlavor && rd.err == nil && int64(size) <= int64(limit) {
+				data = rd.bytes(int(size))
+				return data, rd.err == nil, rd.err
+			}
+			rd.skip(int64(size))
+		}
+		if rd.err != nil {
+			return nil, false, rd.err
+		}
+	}
 }
 
 // Clipboard

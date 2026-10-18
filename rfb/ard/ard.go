@@ -111,13 +111,16 @@ func DecryptBlock(key, in [16]byte) (out [16]byte) {
 }
 
 // KeyEventBlock returns the encrypted 16-byte payload of an ARD keyboard
-// event sent before session encryption is active.
-func KeyEventBlock(key [16]byte, keysym uint32, down bool) [16]byte {
+// event sent before session encryption is active: 0xff, down, keysym and
+// a timestamp in microseconds, big-endian. macOS 27 ignores events whose
+// timestamp is zero (the C++ branch sent zero and its keys were dropped).
+func KeyEventBlock(key [16]byte, keysym uint32, down bool, stamp uint32) [16]byte {
 	var plain [16]byte
 	plain[0] = 0xff
 	if down {
 		plain[1] = 1
 	}
 	binary.BigEndian.PutUint32(plain[2:], keysym)
+	binary.BigEndian.PutUint32(plain[6:], stamp)
 	return EncryptBlock(key, plain)
 }
