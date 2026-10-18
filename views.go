@@ -7,8 +7,10 @@ package main
 
 import (
 	"image"
+	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/i18n"
@@ -86,27 +88,57 @@ func card(c *ui.Context, label string, fn func()) ui.Element {
 func (a *app) card(c *ui.Context, server string) {
 	t := c.Theme()
 	info := a.cfg.Computers[server]
-	name := info.Name
-	if name == "" {
-		name = server
+	title := server
+	if info.Name != "" {
+		title = info.Name
 	}
 	card(c, server, func() {
 		if th := a.thumbnail(server); th != nil {
 			ui.Image(c, th).Height(110).Fit(ui.Contain).Radius(4)
 		} else {
-			ui.Box(c).Height(110).Center().Children(func() { ui.Avatar(c, name, nil) })
+			ui.Box(c).Height(110).Center().Children(func() { a.avatar(c, server, info.Name) })
 		}
-		ui.Text(c, name).Bold()
-		ui.Text(c, server).TextColor(t.TextMuted)
-		last := locales.NeverConnected()
-		if !info.Last.IsZero() {
+		ui.Text(c, title).Bold()
+		if title != server {
+			ui.Text(c, server).TextColor(t.TextMuted)
+		}
+		last := ""
+		switch {
+		case !info.Last.IsZero():
 			last = locales.LastConnected(info.Last.Local())
+		case info.Never:
+			last = locales.NeverConnected()
 		}
-		ui.Text(c, last).TextColor(t.TextMuted).FontSize(t.FontSize - 1)
+		if last != "" {
+			ui.Text(c, last).TextColor(t.TextMuted).FontSize(t.FontSize - 1)
+		}
 	}).OnClick(func() {
 		a.server = server
 		a.connect()
 	})
+}
+
+// monitor is the icon of a computer without a name (Lucide's "monitor",
+// ISC license).
+var monitor, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 21h8M12 17v4"/></svg>`))
+
+// avatar is the picture of a computer: the initials of the desktop name,
+// or of a host name, else a computer, for an IP address would give its
+// first digits.
+func (a *app) avatar(c *ui.Context, server, name string) {
+	if name == "" {
+		host, _, err := viewer.ParseHostPort(server)
+		host, _, _ = strings.Cut(host, "%") // an IPv6 zone
+		if _, ipErr := netip.ParseAddr(host); err != nil || ipErr == nil {
+			size := c.Theme().FontSize * 2.25
+			ui.Box(c).Size(size, size).Radius(size / 2).Center().Background(c.Theme().TextMuted).Label(server).Children(func() {
+				ui.Icon(c, monitor).TextColor(ui.RGB(255, 255, 255))
+			})
+			return
+		}
+		name = host
+	}
+	ui.Avatar(c, name, nil)
 }
 
 // thumbnail is the last frame saved for server, or nil.
@@ -443,11 +475,16 @@ func (a *app) screenView(c *ui.Context) {
 			box.Width(f.W).Height(f.H)
 		})
 	}
+	// The remote cursor is a sprite of its own, drawn over the screen at
+	// the latest local pointer position in every frame, so that it needs
+	// no framebuffer update to move. The system cursor is hidden only over
+	// the remote image.
 	showCursor := s.CursorImage != nil && !a.cfg.ViewOnly
-	if showCursor {
+	w, h := s.Screen.Size()
+	hovered := box.Hovered()
+	if showCursor && hovered && a.overImage(viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, a.screenRect.W, a.screenRect.H, w, h)) {
 		box.Cursor(ui.CursorNone)
 	}
-	hovered := box.Hovered()
 	box.HandleInput(func(ev ui.InputEvent) bool { return a.pointer(c, ev) })
 	box.Draw(func(p *ui.Painter, r ui.Rect) {
 		if p.Scale() != a.pxScale {
@@ -460,18 +497,32 @@ func (a *app) screenView(c *ui.Context) {
 		w, h := s.Screen.Size()
 		f := viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
 		p.Image(s.Screen, ui.Rect{X: r.X + f.X, Y: r.Y + f.Y, W: f.W, H: f.H}, ui.FillBox)
+		// The frame is the pointer's clock: the moves since the last one
+		// go out as one.
+		a.flushMove(f, w, h)
 		if a.perf != nil {
 			a.painted(s.Shown)
 		}
-		if showCursor && hovered {
-			k := f.W / float32(w)
-			cw, ch := s.CursorImage.Size()
-			p.Image(s.CursorImage, ui.Rect{
-				X: r.X + a.ptrX - float32(s.Hotspot.X)*k, Y: r.Y + a.ptrY - float32(s.Hotspot.Y)*k,
-				W: float32(cw) * k, H: float32(ch) * k,
-			}, ui.FillBox)
-		}
 	})
+	box.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		w, h := s.Screen.Size()
+		f := viewer.Place(a.cfg.Scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
+		if !showCursor || !hovered || !a.overImage(f) {
+			return
+		}
+		k := f.W / float32(w)
+		cw, ch := s.CursorImage.Size()
+		p.Image(s.CursorImage, ui.Rect{
+			X: r.X + a.ptrX - float32(s.Hotspot.X)*k, Y: r.Y + a.ptrY - float32(s.Hotspot.Y)*k,
+			W: float32(cw) * k, H: float32(ch) * k,
+		}, ui.FillBox)
+	})
+}
+
+// overImage reports whether the pointer is over the remote image shown at
+// f in the screen box, not the bars around it.
+func (a *app) overImage(f ui.Rect) bool {
+	return a.ptrX >= f.X && a.ptrY >= f.Y && a.ptrX < f.X+f.W && a.ptrY < f.Y+f.H
 }
 
 // selectLabeled is ui.Select choosing one of values into *v, each shown
