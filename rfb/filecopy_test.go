@@ -1,7 +1,9 @@
 package rfb
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"image"
 	"log/slog"
 	"os"
@@ -175,6 +177,94 @@ func TestMacFileCopyCapture(t *testing.T) {
 	// Surface the ARD message types seen (the debug log records them).
 	for _, line := range strings.Split(logsString(logs), "\n") {
 		if strings.Contains(line, "ARD server message") {
+			t.Log(line)
+		}
+	}
+}
+
+// TestMacFileCopyUpload uploads a file to the Mac with the real
+// FileCopyUpload path (issue #43): StartFileReceive, ItemInfo, NewItem,
+// file data and EndSession. It runs only with MYVNC_FILECOPY_UPLOAD=1 and
+// needs MYVNC_E2E_PASS. Standard mode only; verify the result on the Mac
+// (size and SHA-256 are logged).
+func TestMacFileCopyUpload(t *testing.T) {
+	if os.Getenv("MYVNC_FILECOPY_UPLOAD") != "1" {
+		t.Skip("MYVNC_FILECOPY_UPLOAD is not 1")
+	}
+	env := func(k, def string) string {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+		return def
+	}
+	addr := env("MYVNC_MAC_ADDR", "192.0.2.10:5900")
+	user := env("MYVNC_E2E_USER", "jdoe")
+	pass := os.Getenv("MYVNC_E2E_PASS")
+	dest := env("MYVNC_FC_DEST", "/Users/jdoe/myvnc-drag-test/myvnc-upload.bin")
+
+	// Deterministic, incompressible-ish content so a wrong offset or a
+	// chunking bug changes the hash.
+	data := make([]byte, 200000)
+	for i := range data {
+		data[i] = byte(i*7 + i/251 + 13)
+	}
+	sum := sha256.Sum256(data)
+	t.Logf("upload %d bytes to %s, sha256 %x", len(data), dest, sum)
+
+	logs := &logLines{t: t}
+	h := &macHandler{clip: make(chan string, 8)}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, addr, Options{
+		Username: user, Password: func() (string, string, error) { return user, pass, nil },
+		Shared: true, Decoders: decode.New(),
+		SecurityTypes: []uint32{SecTypeDH},
+		Logger:        slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.c = c
+	var fcMu sync.Mutex
+	c.fcServer = func(body []byte) {
+		fcMu.Lock()
+		defer fcMu.Unlock()
+		t.Logf("<- 0x22 file-copy body (%d bytes): %x", len(body), body)
+	}
+	defer c.Close()
+	runErr := make(chan error, 1)
+	go func() { runErr <- c.Run() }()
+
+	var base *image.RGBA
+	for i := 0; i < 25 && (base == nil || !c.Encrypted()); i++ {
+		base = h.settle(time.Second)
+		select {
+		case err := <-runErr:
+			t.Fatalf("connection ended before encryption: %v", err)
+		default:
+		}
+	}
+	if base == nil || !c.Encrypted() {
+		t.Fatalf("no update (%v) or encryption not active", base == nil)
+	}
+	h.settle(2 * time.Second)
+
+	if err := c.FileCopyUpload(dest, bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	// The receiver's EndSession status arrives as a 0x22 record; give the
+	// Mac time to move the item and report.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		h.settle(time.Second)
+		select {
+		case err := <-runErr:
+			t.Fatalf("connection ended during upload: %v", err)
+		default:
+		}
+	}
+	for _, line := range strings.Split(logsString(logs), "\n") {
+		if strings.Contains(line, "file-copy") || strings.Contains(line, "type=34") {
 			t.Log(line)
 		}
 	}
