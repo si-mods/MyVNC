@@ -236,7 +236,11 @@ func (d *Decoder) Close() { d.closeOnce.Do(func() { close(d.quit) }) }
 // Info describes the decoder.
 func (d *Decoder) Info() Info {
 	var i Info
-	d.do(func() { i = d.info; i.Outputs = append([]string(nil), d.info.Outputs...) })
+	d.do(func() {
+		i = d.info
+		i.Outputs = append([]string(nil), d.info.Outputs...)
+		i.Debug = append([]string(nil), d.info.Debug...)
+	})
 	return i
 }
 
@@ -405,6 +409,7 @@ func (d *Decoder) setOutput() error {
 	comCall(d.mft, mftGetOutputStreamInfo, 0, ptr(&si))
 	d.provides, d.outSize = si[0]&(outProvidesSamples|outCanProvideSample) != 0, si[1]
 	d.info.Output, d.haveOutput = d.sub.fourCC(), true
+	d.info.Debug = append(d.info.Debug, fmt.Sprintf("setOutput: sub %s size %dx%d visible %v (blob n %d area %v) stride %d range %v 709 %v streaminfo %v", d.sub.fourCC(), d.frameW, d.frameH, d.visible, n, area, d.stride, d.fullRange, d.bt709, si))
 	return nil
 }
 
@@ -503,9 +508,11 @@ func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
 		switch {
 		case uint32(hr) == mfENeedMoreInput:
 			release(mine)
+			d.info.Debug = append(d.info.Debug, fmt.Sprintf("NEED_MORE_INPUT after %d frames", len(frames)))
 			return frames, nil
 		case uint32(hr) == mfEStreamChange:
 			release(mine)
+			d.info.Debug = append(d.info.Debug, "STREAM_CHANGE")
 			if err := d.setOutput(); err != nil {
 				return frames, err
 			}
@@ -566,6 +573,7 @@ func (d *Decoder) frame(sample uintptr) (Frame, error) {
 		return f, errors.New("mf: empty output buffer")
 	}
 	data := unsafe.Slice((*byte)(native(base)), length)
+	d.info.Debug = append(d.info.Debug, fmt.Sprintf("frame t %d: 2d %v pitch %d length %d frame %dx%d visible %v", f.Time, b2d != 0, pitch, length, d.frameW, d.frameH, d.visible))
 	vis := d.visible.Intersect(image.Rect(0, 0, d.frameW, d.frameH))
 	f.RGBA = image.NewRGBA(image.Rect(0, 0, vis.Dx(), vis.Dy()))
 	m := newYUV(d.bt709, d.fullRange)

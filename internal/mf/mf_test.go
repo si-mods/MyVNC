@@ -49,7 +49,14 @@ func decodeClip(t *testing.T, c Codec, file string) (Info, []Frame, error) {
 		more, err = d.Flush()
 		frames = append(frames, more...)
 	}
-	return d.Info(), frames, err
+	info := d.Info()
+	for _, l := range info.Debug {
+		t.Logf("DIAG %s: %s", file, l)
+	}
+	for i, f := range frames {
+		t.Logf("DIAG %s: frame %d rect %v stride %d len %d", file, i, f.Rect, f.Stride, len(f.Pix))
+	}
+	return info, frames, err
 }
 
 func checkRed(t *testing.T, frames []Frame) {
@@ -162,6 +169,12 @@ func TestDecodeLive(t *testing.T) {
 			if err != nil || len(frames) != 1 {
 				t.Errorf("%s unit %d: %d pictures, %v", clip.file, i, len(frames), err)
 			}
+			for _, f := range frames {
+				t.Logf("DIAG live %s unit %d: rect %v", clip.file, i, f.Rect)
+			}
+		}
+		for _, l := range d.Info().Debug {
+			t.Logf("DIAG live %s: %s", clip.file, l)
 		}
 		d.Close()
 	}
