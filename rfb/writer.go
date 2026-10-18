@@ -8,6 +8,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
+	"time"
 
 	"github.com/kyya/myvnc/internal/text"
 	"github.com/kyya/myvnc/rfb/ard"
@@ -108,6 +109,35 @@ func ardAutoPasteboard(enable bool) []byte {
 	return []byte{0x15, 0, 0, bool8(enable), 0, 0, 0, 0}
 }
 
+// ardFetchPasteboard asks for the Mac's pasteboard (readARDPasteboard).
+// Bytes 4-7 are echoed; 0, as remotex and Apple's viewer.
+func ardFetchPasteboard() []byte { return []byte{0x0b, 0, 0, 0, 0, 0, 0, 0} }
+
+// ardPasteboard is the viewer's 0x1f: the header of readARDPasteboard
+// and zlib, sync-flushed and not ended as the Mac's own, of an archive
+// of items, each a u32 flavor count and its flavors: counted name, u32
+// reserved, u32 count of counted key/value tags, counted data, every
+// count a big-endian u32. One item with the UTF-8 text flavor; empty
+// text is an item without flavors, which clears the pasteboard.
+func ardPasteboard(s string) []byte {
+	archive := []byte{0, 0, 0, 0}
+	if s != "" {
+		archive = be.AppendUint32(nil, 1)
+		archive = be.AppendUint32(archive, uint32(len(ardTextFlavor)))
+		archive = append(archive, ardTextFlavor...)
+		archive = append(archive, 0, 0, 0, 0, 0, 0, 0, 0) // reserved, no tags
+		archive = be.AppendUint32(archive, uint32(len(s)))
+		archive = append(archive, s...)
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	zw.Write(archive)
+	zw.Flush()
+	b := be.AppendUint32([]byte{0x1f, 0, 0, 0, 0, 0, 0, 0}, uint32(len(archive)))
+	b = be.AppendUint32(b, uint32(z.Len()))
+	return append(b, z.Bytes()...)
+}
+
 func ardSessionCommand(user []byte) []byte {
 	b := []byte{0, 72, 0, 1, 0, 0, 0, 0, 1, 0}
 	var name [64]byte
@@ -141,6 +171,13 @@ const (
 
 // KeyEvent sends a key press or release. On ARD servers it uses the
 // encrypted keyboard message until session encryption is active.
+// keyClock times ARD encrypted key events; see ard.KeyEventBlock.
+var keyClock = time.Now()
+
+// keyStamp is microseconds since keyClock, never zero; it wraps after
+// about 71 minutes, like the noVNC-ARD client's.
+func keyStamp() uint32 { return uint32(time.Since(keyClock).Microseconds()) | 1 }
+
 func (c *Client) KeyEvent(keysym uint32, down bool) error {
 	return c.KeyEventCode(0, keysym, down)
 }
@@ -163,7 +200,7 @@ func (c *Client) KeyEventCode(code, keysym uint32, down bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.appleARD && !c.ardEnabled && c.ardKey != nil {
-		blk := ard.KeyEventBlock(*c.ardKey, keysym, down)
+		blk := ard.KeyEventBlock(*c.ardKey, keysym, down, keyStamp())
 		return c.writeLocked(append([]byte{0x10, 0}, blk[:]...))
 	}
 	if c.qemuKeys && code != 0 && !c.appleARD {
@@ -246,6 +283,9 @@ func (c *Client) ClipboardText(s string) error {
 	c.localClip = &s
 	c.remoteClip = false // the server's text is older now
 
+	if c.appleARD {
+		return c.writeLocked(ardPasteboard(text.ConvertLF(s)))
+	}
 	if c.clipSize > 0 && c.clipFlags&clipboardProvide != 0 {
 		if len(text.ConvertCRLF(s))+1 > int(c.clipSize) {
 			if c.clipFlags&clipboardNotify != 0 {
@@ -268,6 +308,9 @@ func (c *Client) ClipboardText(s string) error {
 func (c *Client) RequestClipboard() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.appleARD && c.remoteClip {
+		return c.writeLocked(ardFetchPasteboard())
+	}
 	if !c.remoteClip || c.clipFlags&clipboardRequest == 0 {
 		return nil
 	}
