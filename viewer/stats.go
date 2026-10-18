@@ -30,6 +30,10 @@ func (s *Session) Stats() Stats {
 	return Stats{s.n.updates.Load(), s.n.decodeNs.Load(), s.n.bytes.Load(), s.n.encoding.Load()}
 }
 
+// Link is what rfb measured of the line and asks the server for; any
+// goroutine.
+func (s *Session) Link() rfb.LinkStats { return s.c.LinkStats() }
+
 // timed measures a decoder.
 type timed struct {
 	enc int32
@@ -43,6 +47,14 @@ func (t timed) Decode(r io.Reader, rect image.Rectangle, pf *pixel.Format, fb *i
 	t.n.decodeNs.Add(int64(time.Since(start)))
 	t.n.encoding.Store(t.enc)
 	return err
+}
+
+// Close closes the decoder if it holds resources (H.264).
+func (t timed) Close() error {
+	if c, ok := t.d.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // timedParallel is timed for a ParallelDecoder, which rfb then decodes
@@ -116,6 +128,8 @@ func EncodingName(e int32) string {
 		return "Tight"
 	case rfb.EncodingZRLE:
 		return "ZRLE"
+	case rfb.EncodingH264:
+		return "H.264"
 	case rfb.EncodingARDHalftone, rfb.EncodingARDGray16, rfb.EncodingARDThousands:
 		return "ARD zlib"
 	case rfb.EncodingARDMVS:

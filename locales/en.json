@@ -77,6 +77,14 @@
   "statsEncoding": "Encoding {name}",
   "statsEncrypted": "Encrypted {encrypted, select, yes {yes} other {no}}",
   "@statsEncrypted": { "placeholders": { "encrypted": { "type": "String", "example": "yes" } } },
+  "statsLink": "Line {kbps} kbit/s, RTT {rtt} ms",
+  "@statsLink": { "description": "Throughput estimate and fence round trip; rtt is a dash before one is measured." },
+  "statsRequested": "Asked {name}{auto, select, yes { (auto)} other {}}, quality {quality}, {colour, select, full {full colour} other {256 colours}}",
+  "@statsRequested": {
+    "description": "What MyVNC asks the server for: preferred encoding, JPEG quality level (a dash for none), colour depth.",
+    "placeholders": { "auto": { "type": "String", "example": "yes" }, "colour": { "type": "String", "example": "full" } }
+  },
+  "encodingAuto": "Auto",
   "titleSession": "{name} - {app} ({kind}, {encrypted, select, yes {encrypted} other {unencrypted}})",
   "@titleSession": {
     "description": "The title bar during a session: desktop name, app, security type, encryption.",

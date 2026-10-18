@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kyya/myvnc/rfb"
+	"github.com/kyya/myvnc/rfb/decode"
 )
 
 // KnownHosts remembers the RSA-AES host keys and the X509 certificates
@@ -154,12 +155,21 @@ func writeJSON(path string, v any) error {
 	return os.Rename(tmp, path)
 }
 
-// Encodings that the user can prefer.
-var Encodings = []string{"Tight", "ZRLE", "Hextile", "Raw"}
+// Encodings are those the user can prefer. "Auto" is TigerVNC's
+// AutoSelect (rfb.Options.AutoSelect); "H.264" is there where it decodes.
+func Encodings() []string { return encodings(decode.H264Available()) }
+
+func encodings(h264 bool) []string {
+	l := []string{"Auto", "Tight", "ZRLE", "Hextile", "Raw"}
+	if h264 {
+		l = append(l, "H.264")
+	}
+	return l
+}
 
 var encodingNumbers = map[string]int32{
-	"Tight": rfb.EncodingTight, "ZRLE": rfb.EncodingZRLE,
-	"Hextile": rfb.EncodingHextile, "Raw": rfb.EncodingRaw,
+	"Auto": rfb.EncodingTight, "Tight": rfb.EncodingTight, "ZRLE": rfb.EncodingZRLE,
+	"Hextile": rfb.EncodingHextile, "Raw": rfb.EncodingRaw, "H.264": rfb.EncodingH264,
 }
 
 // Config is what MyVNC saves between runs.
@@ -212,7 +222,7 @@ var Scalings = []string{"Fit", "1:1", "Zoom"}
 
 // DefaultConfig has TigerVNC's defaults.
 func DefaultConfig() Config {
-	return Config{Encoding: "Tight", Quality: 8, Compress: 2, Scaling: "Fit", Zoom: 100,
+	return Config{Encoding: "Auto", Quality: 8, Compress: 2, Scaling: "Fit", Zoom: 100,
 		Reconnect: true, ClipboardKiB: 256, PillPos: 0.5, AcceptClipboard: true, SendClipboard: true}
 }
 
@@ -227,7 +237,7 @@ func LoadConfig(path string) (Config, error) {
 		err = json.Unmarshal(b, &c)
 	}
 	if _, ok := encodingNumbers[c.Encoding]; !ok {
-		c.Encoding = "Tight"
+		c.Encoding = "Auto"
 	}
 	c.Quality = min(max(c.Quality, 0), 9)
 	c.Compress = min(max(c.Compress, 0), 9)
@@ -252,13 +262,17 @@ func (c *Config) AddServer(server string) {
 	}
 }
 
+// AutoSelect reports whether the encoding is "Auto".
+func (c *Config) AutoSelect() bool { return c.Encoding == "Auto" }
+
 // EncodingList is the SetEncodings list: the preferred encoding, then
 // the other decoders' from the highest number down, as TigerVNC orders
-// them, and the pseudo-encodings MyVNC handles. rfb adds the ARD ones.
+// them, and the pseudo-encodings MyVNC handles. rfb adds the ARD ones
+// and leaves out those it has no decoder for (H.264 off Windows).
 func (c *Config) EncodingList() []int32 {
 	pref := encodingNumbers[c.Encoding]
 	list := []int32{pref, rfb.EncodingCopyRect}
-	for _, e := range []int32{rfb.EncodingZRLE, rfb.EncodingTight, rfb.EncodingHextile, rfb.EncodingRRE, rfb.EncodingRaw} {
+	for _, e := range []int32{rfb.EncodingH264, rfb.EncodingZRLE, rfb.EncodingTight, rfb.EncodingHextile, rfb.EncodingRRE, rfb.EncodingRaw} {
 		if e != pref {
 			list = append(list, e)
 		}
