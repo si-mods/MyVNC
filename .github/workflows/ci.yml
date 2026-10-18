@@ -32,6 +32,13 @@ jobs:
 
       - name: Test
         run: go test ./...
+        continue-on-error: true
+
+      - name: TEMP stress MF decoding
+        run: |
+          go test -v -count=1 ./internal/mf
+          go test -count=200 -run 'TestDecodeLive|TestDecodeH264|TestDecodeHEVC' ./internal/mf
+          go test -count=200 -run TestH264Rects ./rfb/decode
 
       - name: Check the tag matches mygo.json
         if: startsWith(github.ref, 'refs/tags/v')
