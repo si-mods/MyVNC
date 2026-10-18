@@ -632,29 +632,39 @@ func (c *Client) readSetVMwareCursor(r image.Rectangle) error {
 	return nil
 }
 
+// ardCursor is a cached 1104 shape and its hotspot.
+type ardCursor struct {
+	img *image.RGBA
+	hot image.Point
+}
+
+// readARDCursorAlpha reads a cursor store (size > 0; the rectangle is
+// hotspot and size) or select (size 0, zero rectangle: the cache knows
+// the shape), as macmini sends them.
 func (c *Client) readARDCursorAlpha(r image.Rectangle) error {
 	id := c.rd.u32()
 	size := c.rd.u32()
 	if c.rd.err != nil {
 		return c.rd.err
 	}
+	if size == 0 {
+		if cur, ok := c.cursorCache[id]; ok {
+			c.h.Cursor(cur.img, cur.hot)
+		}
+		return nil
+	}
 	w, h := r.Dx(), r.Dy()
 	if size > 16<<20 || id < 1000 || w <= 0 || h <= 0 || w > maxCursorSize || h > maxCursorSize {
 		c.rd.skip(int64(size))
 		return c.rd.err
-	}
-	if size == 0 {
-		if img := c.cursorCache[id]; img != nil && img.Rect.Dx() == w && img.Rect.Dy() == h {
-			c.h.Cursor(img, r.Min)
-		}
-		return nil
 	}
 	compressed := c.rd.bytes(int(size))
 	if c.rd.err != nil {
 		return c.rd.err
 	}
 
-	// BGRX pixels followed by an alpha plane; zlib, or raw deflate.
+	// BGRX pixels followed by an alpha plane; zlib ending in a sync
+	// flush (no stream end), or raw deflate.
 	raw := make([]byte, w*h*5)
 	ok := false
 	if zr, err := zlib.NewReader(bytes.NewReader(compressed)); err == nil {
@@ -670,23 +680,17 @@ func (c *Client) readARDCursorAlpha(r image.Rectangle) error {
 		return nil
 	}
 
-	// Premultiplied here because the C++ hands these bytes to
-	// setCursor, which takes straight (unpremultiplied) RGBA, as the
-	// -314 path shows by unpremultiplying first. So the C++ reads the
-	// BGRX plane as straight colour, and premultiplying keeps that
-	// meaning for image.RGBA. If a Mac turns out to send premultiplied
-	// colour, both clients darken soft cursor edges; check on macmini.
+	// The colour is premultiplied, as image.RGBA wants: in macmini's
+	// arrow and I-beam no channel exceeds alpha and the soft white edges
+	// are c == a < 255 (#6). Clamp bad input.
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	alpha := raw[w*h*4:]
 	for i := 0; i < w*h; i++ {
-		a := uint32(alpha[i])
+		a := alpha[i]
 		p := img.Pix[i*4 : i*4+4]
-		p[0] = uint8(uint32(raw[i*4+2]) * a / 255)
-		p[1] = uint8(uint32(raw[i*4+1]) * a / 255)
-		p[2] = uint8(uint32(raw[i*4]) * a / 255)
-		p[3] = uint8(a)
+		p[0], p[1], p[2], p[3] = min(raw[i*4+2], a), min(raw[i*4+1], a), min(raw[i*4], a), a
 	}
-	c.cursorCache[id] = img
+	c.cursorCache[id] = ardCursor{img, r.Min}
 	c.h.Cursor(img, r.Min)
 	return nil
 }
