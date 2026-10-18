@@ -684,7 +684,9 @@ func (c *Client) negotiateSecurity(ctx context.Context) error {
 	case 0:
 		return nil
 	case 1, 2:
-		if c.before(3, 8) {
+		// A Mac (RFB 3.889) sends the result alone and keeps the
+		// connection open: reading a reason would wait forever.
+		if c.before(3, 8) || c.appleARD {
 			return &AuthError{"Authentication failed"}
 		}
 		return c.readReason()

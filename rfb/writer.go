@@ -8,6 +8,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
+	"time"
 
 	"github.com/kyya/myvnc/internal/text"
 	"github.com/kyya/myvnc/rfb/ard"
@@ -170,6 +171,13 @@ const (
 
 // KeyEvent sends a key press or release. On ARD servers it uses the
 // encrypted keyboard message until session encryption is active.
+// keyClock times ARD encrypted key events; see ard.KeyEventBlock.
+var keyClock = time.Now()
+
+// keyStamp is microseconds since keyClock, never zero; it wraps after
+// about 71 minutes, like the noVNC-ARD client's.
+func keyStamp() uint32 { return uint32(time.Since(keyClock).Microseconds()) | 1 }
+
 func (c *Client) KeyEvent(keysym uint32, down bool) error {
 	return c.KeyEventCode(0, keysym, down)
 }
@@ -192,7 +200,7 @@ func (c *Client) KeyEventCode(code, keysym uint32, down bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.appleARD && !c.ardEnabled && c.ardKey != nil {
-		blk := ard.KeyEventBlock(*c.ardKey, keysym, down)
+		blk := ard.KeyEventBlock(*c.ardKey, keysym, down, keyStamp())
 		return c.writeLocked(append([]byte{0x10, 0}, blk[:]...))
 	}
 	if c.qemuKeys && code != 0 && !c.appleARD {
