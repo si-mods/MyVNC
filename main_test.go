@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/binary"
 	"errors"
+	"image"
 	"image/color"
 	"io"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
+	"github.com/kyya/myvnc/viewer/emulatemb"
 	"github.com/kyya/myvnc/viewer/keymap"
 	"github.com/kyya/myvnc/viewer/params"
 )
@@ -452,4 +454,119 @@ func TestParseArgs(t *testing.T) {
 	if !strings.Contains(usage(), "EmulateMiddleButton") {
 		t.Error(usage())
 	}
+}
+
+func TestHomeCards(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Servers = []string{"192.168.88.241", "macmini:1", "10.0.0.2", "legacy", "[fe80::1%eth0]"}
+	a.cfg.Computers["192.168.88.241"] = viewer.Computer{Name: "macmini", Last: time.Date(2026, 10, 1, 9, 30, 0, 0, time.Local)}
+	a.cfg.Computers["10.0.0.2"] = viewer.Computer{Never: true}
+	a.cfg.Computers["legacy"] = viewer.Computer{} // a v0.0.1 config: no time kept
+	a.tt.Frame()
+	has := func(s string) bool { return slices.Contains(a.tt.Texts(), s) }
+	// The remembered name leads, the address follows; its initial is the avatar's.
+	if !has("macmini") || !has("192.168.88.241") || !has("M") {
+		t.Errorf("named card: texts %q", a.tt.Texts())
+	}
+	for _, digits := range []string{"19", "12", "10", "FE"} {
+		if has(digits) {
+			t.Errorf("an IP address gave the avatar %q: texts %q", digits, a.tt.Texts())
+		}
+	}
+	// Only the host that failed every time is "Never connected".
+	n := 0
+	for _, s := range a.tt.Texts() {
+		if s == "Never connected" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d cards say never connected: texts %q", n, a.tt.Texts())
+	}
+	// A failed connection of a host with no past marks it, a canceled or
+	// successful one does not.
+	a.connected(nil, "new", "", "", errors.New("refused"))
+	if !a.cfg.Computers["new"].Never {
+		t.Error("a first failure not noted")
+	}
+	a.connected(nil, "legacy", "", "", nil)
+	if a.cfg.Computers["legacy"].Never {
+		t.Error("a canceled try marked a computer never connected")
+	}
+}
+
+func magenta(t *testing.T, a *testApp, x, y int) bool {
+	t.Helper()
+	c := color.RGBAModel.Convert(a.tt.Image().At(x, y)).(color.RGBA)
+	return c.R > 200 && c.G < 60 && c.B > 200
+}
+
+// The remote cursor follows the local pointer by itself: moving the mouse
+// with no framebuffer update moves the sprite, and the moves reach the
+// server at most once a frame.
+func TestLocalCursorAndPointerPacing(t *testing.T) {
+	server, _ := fakeServer(t, 1, 64, 32) // shown 12.5 times, 800×400 at y 100
+	a := newTestApp(t)
+	a.add(server)
+	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for i := 0; i < len(img.Pix); i += 4 {
+		copy(img.Pix[i:], []byte{255, 0, 255, 255})
+	}
+	a.sess.CursorImage, a.sess.Hotspot = ui.NewBitmap(img), image.Pt(0, 0) // 25×25 DIPs
+	type move struct {
+		x, y int
+		mask uint16
+	}
+	var sent []move
+	a.emb = emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, move{x, y, m}) })
+
+	a.tt.Move(100, 200)
+	if !magenta(t, a, 110, 210) || magenta(t, a, 30, 30) {
+		t.Fatal("the cursor is not at the pointer")
+	}
+	if a.tt.Cursor() != ui.CursorNone {
+		t.Errorf("system cursor %v over the remote image", a.tt.Cursor())
+	}
+	// No update from the server, the pointer moves: so does the sprite.
+	a.tt.Move(300, 350)
+	if !magenta(t, a, 310, 360) || magenta(t, a, 110, 210) {
+		t.Error("the cursor did not follow the pointer")
+	}
+	// Over the bars around the image there is none; the system one shows.
+	a.tt.Move(300, 50)
+	if magenta(t, a, 310, 60) || a.tt.Cursor() == ui.CursorNone {
+		t.Errorf("cursor over the bar: sprite %v, system %v", magenta(t, a, 310, 60), a.tt.Cursor())
+	}
+
+	// A burst of moves between two frames is one move, the last.
+	sent = nil
+	for i := range 20 {
+		a.pointer(nil, ui.InputEvent{Kind: ui.InputPointerMove, X: float32(100 + i*10), Y: 200})
+	}
+	if len(sent) != 0 {
+		t.Fatalf("moves sent before the frame: %v", sent)
+	}
+	a.tt.Frame()
+	if want := (move{23, 8, 0}); len(sent) != 1 || sent[0].x != want.x || sent[0].y != want.y {
+		t.Fatalf("sent %v, want one move to %v", sent, want)
+	}
+	a.tt.Frame()
+	if len(sent) != 1 {
+		t.Errorf("a frame without a move sent %v", sent)
+	}
+	// Buttons go at once, in order, and take the move waiting with them.
+	sent = nil
+	a.pointer(nil, ui.InputEvent{Kind: ui.InputPointerMove, X: 50, Y: 150})
+	a.tt.Press(60, 160)
+	a.tt.Move(70, 170)
+	a.tt.Release(70, 170)
+	var masks []uint16
+	for _, m := range sent {
+		masks = append(masks, m.mask)
+	}
+	if !slices.Equal(masks, []uint16{1, 1, 0}) || sent[0].x != 4 {
+		t.Errorf("press, drag, release sent %v", sent)
+	}
+	a.disconnect()
 }
