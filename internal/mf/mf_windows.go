@@ -123,6 +123,11 @@ func native(p uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer
 
 // comCall calls method i of the COM interface obj.
 //
+// Write pointer arguments as uintptr(unsafe.Pointer(&x)) in the call
+// itself: only then does uintptrescapes move x to the heap and keep it
+// alive. Converted elsewhere, x stays on the goroutine stack, which can
+// move while the callee still writes to the old address.
+//
 //go:uintptrescapes
 func comCall(obj uintptr, i int, args ...uintptr) uintptr {
 	vtbl := *(*uintptr)(native(obj))
@@ -145,8 +150,6 @@ func release(obj uintptr) {
 func hrError(what string, hr uintptr) error {
 	return fmt.Errorf("mf: %s failed (HRESULT %#08x)", what, uint32(hr))
 }
-
-func ptr[T any](p *T) uintptr { return uintptr(unsafe.Pointer(p)) }
 
 // Decoder is one MFT decoding one stream. Its methods run the MFT on a
 // thread of its own and may be called from any goroutine, one at a time.
@@ -253,7 +256,7 @@ func enum(c Codec) ([]uintptr, error) {
 	var acts uintptr
 	var n uint32
 	const flags = 0x1 | 0x10 | 0x40 // SYNCMFT | LOCALMFT | SORTANDFILTER
-	hr, _, _ := procMFTEnumEx.Call(ptr(&mftCategoryVideoDecoder), flags, ptr(&in), 0, ptr(&acts), ptr(&n))
+	hr, _, _ := procMFTEnumEx.Call(uintptr(unsafe.Pointer(&mftCategoryVideoDecoder)), flags, uintptr(unsafe.Pointer(&in)), 0, uintptr(unsafe.Pointer(&acts)), uintptr(unsafe.Pointer(&n)))
 	if failed(hr) {
 		return nil, hrError("MFTEnumEx", hr)
 	}
@@ -271,7 +274,7 @@ func enum(c Codec) ([]uintptr, error) {
 func allocString(obj uintptr, key guid) string {
 	var p uintptr
 	var n uint32
-	if failed(comCall(obj, attrGetAllocStr, ptr(&key), ptr(&p), ptr(&n))) || p == 0 {
+	if failed(comCall(obj, attrGetAllocStr, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(&n)))) || p == 0 {
 		return ""
 	}
 	defer procCoTaskMemFree.Call(p)
@@ -290,7 +293,7 @@ func (d *Decoder) open() error {
 	}()
 	for _, a := range acts {
 		var mft uintptr
-		if failed(comCall(a, activateActivate, ptr(&iidIMFTransform), ptr(&mft))) {
+		if failed(comCall(a, activateActivate, uintptr(unsafe.Pointer(&iidIMFTransform)), uintptr(unsafe.Pointer(&mft)))) {
 			continue
 		}
 		d.mft, d.info.Name = mft, allocString(a, mftFriendlyName)
@@ -308,25 +311,25 @@ func (d *Decoder) open() error {
 
 func newMediaType(sub guid, profile uint32) (uintptr, error) {
 	var t uintptr
-	if hr, _, _ := procMFCreateMediaType.Call(ptr(&t)); failed(hr) {
+	if hr, _, _ := procMFCreateMediaType.Call(uintptr(unsafe.Pointer(&t))); failed(hr) {
 		return 0, hrError("MFCreateMediaType", hr)
 	}
-	comCall(t, attrSetGUID, ptr(&mfMTMajorType), ptr(&mfMediaTypeVideo))
-	comCall(t, attrSetGUID, ptr(&mfMTSubtype), ptr(&sub))
-	comCall(t, attrSetUINT32, ptr(&mfMTInterlaceMode), 2) // progressive
+	comCall(t, attrSetGUID, uintptr(unsafe.Pointer(&mfMTMajorType)), uintptr(unsafe.Pointer(&mfMediaTypeVideo)))
+	comCall(t, attrSetGUID, uintptr(unsafe.Pointer(&mfMTSubtype)), uintptr(unsafe.Pointer(&sub)))
+	comCall(t, attrSetUINT32, uintptr(unsafe.Pointer(&mfMTInterlaceMode)), 2) // progressive
 	// A placeholder size: the HEVC MFT offers no settable output type
 	// without one, and reports the stream's own with STREAM_CHANGE.
-	comCall(t, attrSetUINT64, ptr(&mfMTFrameSize), uintptr(1920<<32|1080))
+	comCall(t, attrSetUINT64, uintptr(unsafe.Pointer(&mfMTFrameSize)), uintptr(1920<<32|1080))
 	if profile != 0 {
-		comCall(t, attrSetUINT32, ptr(&mfMTMpeg2Profile), uintptr(profile))
+		comCall(t, attrSetUINT32, uintptr(unsafe.Pointer(&mfMTMpeg2Profile)), uintptr(profile))
 	}
 	return t, nil
 }
 
 func (d *Decoder) configure() error {
 	var attrs uintptr
-	if !failed(comCall(d.mft, mftGetAttributes, ptr(&attrs))) && attrs != 0 {
-		comCall(attrs, attrSetUINT32, ptr(&codecAPILowLatency), 1)
+	if !failed(comCall(d.mft, mftGetAttributes, uintptr(unsafe.Pointer(&attrs)))) && attrs != 0 {
+		comCall(attrs, attrSetUINT32, uintptr(unsafe.Pointer(&codecAPILowLatency)), 1)
 		release(attrs)
 	}
 	t, err := newMediaType(subtypeOf(d.codec), 0)
@@ -349,12 +352,12 @@ func (d *Decoder) setOutput() error {
 	var chosen uintptr
 	for i := 0; ; i++ {
 		var t uintptr
-		hr := comCall(d.mft, mftGetOutputAvailable, 0, uintptr(i), ptr(&t))
+		hr := comCall(d.mft, mftGetOutputAvailable, 0, uintptr(i), uintptr(unsafe.Pointer(&t)))
 		if failed(hr) {
 			break
 		}
 		var sub guid
-		comCall(t, attrGetGUID, ptr(&mfMTSubtype), ptr(&sub))
+		comCall(t, attrGetGUID, uintptr(unsafe.Pointer(&mfMTSubtype)), uintptr(unsafe.Pointer(&sub)))
 		d.info.Outputs = append(d.info.Outputs, sub.fourCC())
 		if chosen == 0 && (sub == subtypeNV12 || sub == subtypeAYUV) {
 			chosen = t
@@ -371,19 +374,19 @@ func (d *Decoder) setOutput() error {
 		return hrError("SetOutputType", hr)
 	}
 	// The current type carries what the MFT filled in: the aperture, range.
-	if hr := comCall(d.mft, mftGetOutputCurrent, 0, ptr(&chosen)); failed(hr) {
+	if hr := comCall(d.mft, mftGetOutputCurrent, 0, uintptr(unsafe.Pointer(&chosen))); failed(hr) {
 		return hrError("GetOutputCurrentType", hr)
 	}
 	defer release(chosen)
-	comCall(chosen, attrGetGUID, ptr(&mfMTSubtype), ptr(&d.sub))
+	comCall(chosen, attrGetGUID, uintptr(unsafe.Pointer(&mfMTSubtype)), uintptr(unsafe.Pointer(&d.sub)))
 	var size uint64
-	comCall(chosen, attrGetUINT64, ptr(&mfMTFrameSize), ptr(&size))
+	comCall(chosen, attrGetUINT64, uintptr(unsafe.Pointer(&mfMTFrameSize)), uintptr(unsafe.Pointer(&size)))
 	d.frameW, d.frameH = int(size>>32), int(uint32(size))
 	d.visible = image.Rect(0, 0, d.frameW, d.frameH)
 	var area [4]int32 // MFVideoArea: OffsetX, OffsetY (MFOffset), cx, cy
 	var n uint32
 	for _, key := range []guid{mfMTDisplayAperture, mfMTGeometricAperture, mfMTPanScanAperture} {
-		if !failed(comCall(chosen, attrGetBlob, ptr(&key), ptr(&area), 16, ptr(&n))) && n == 16 {
+		if !failed(comCall(chosen, attrGetBlob, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&area)), 16, uintptr(unsafe.Pointer(&n)))) && n == 16 {
 			x, y := int(area[0]>>16), int(area[1]>>16)
 			d.visible = image.Rect(x, y, x+int(area[2]), y+int(area[3]))
 			break
@@ -391,18 +394,18 @@ func (d *Decoder) setOutput() error {
 	}
 	var stride, rng, matrix uint32
 	d.stride = 0
-	if !failed(comCall(chosen, attrGetUINT32, ptr(&mfMTDefaultStride), ptr(&stride))) {
+	if !failed(comCall(chosen, attrGetUINT32, uintptr(unsafe.Pointer(&mfMTDefaultStride)), uintptr(unsafe.Pointer(&stride)))) {
 		d.stride = int(int32(stride))
 	}
-	d.fullRange = !failed(comCall(chosen, attrGetUINT32, ptr(&mfMTNominalRange), ptr(&rng))) && rng == 1
+	d.fullRange = !failed(comCall(chosen, attrGetUINT32, uintptr(unsafe.Pointer(&mfMTNominalRange)), uintptr(unsafe.Pointer(&rng)))) && rng == 1
 	// Without a matrix from the MFT (the HEVC one sets none), BT.709: the
 	// Mac's streams are. ponytail: the SPS VUI matrix is not read.
 	d.bt709 = true
-	if !failed(comCall(chosen, attrGetUINT32, ptr(&mfMTYUVMatrix), ptr(&matrix))) {
+	if !failed(comCall(chosen, attrGetUINT32, uintptr(unsafe.Pointer(&mfMTYUVMatrix)), uintptr(unsafe.Pointer(&matrix)))) {
 		d.bt709 = matrix == 1
 	}
 	var si [3]uint32 // MFT_OUTPUT_STREAM_INFO: flags, cbSize, cbAlignment
-	comCall(d.mft, mftGetOutputStreamInfo, 0, ptr(&si))
+	comCall(d.mft, mftGetOutputStreamInfo, 0, uintptr(unsafe.Pointer(&si)))
 	d.provides, d.outSize = si[0]&(outProvidesSamples|outCanProvideSample) != 0, si[1]
 	d.info.Output, d.haveOutput = d.sub.fourCC(), true
 	return nil
@@ -433,10 +436,10 @@ func (d *Decoder) Flush() ([]Frame, error) {
 }
 
 func newSample(n int) (sample, buf uintptr, err error) {
-	if hr, _, _ := procMFCreateMemBuffer.Call(uintptr(n), ptr(&buf)); failed(hr) {
+	if hr, _, _ := procMFCreateMemBuffer.Call(uintptr(n), uintptr(unsafe.Pointer(&buf))); failed(hr) {
 		return 0, 0, hrError("MFCreateMemoryBuffer", hr)
 	}
-	if hr, _, _ := procMFCreateSample.Call(ptr(&sample)); failed(hr) {
+	if hr, _, _ := procMFCreateSample.Call(uintptr(unsafe.Pointer(&sample))); failed(hr) {
 		release(buf)
 		return 0, 0, hrError("MFCreateSample", hr)
 	}
@@ -457,7 +460,7 @@ func (d *Decoder) decode(au []byte, t int64) ([]Frame, error) {
 	}
 	defer release(sample)
 	var p uintptr
-	comCall(buf, bufLock, ptr(&p), 0, 0)
+	comCall(buf, bufLock, uintptr(unsafe.Pointer(&p)), 0, 0)
 	copy(unsafe.Slice((*byte)(native(p)), len(au)), au)
 	comCall(buf, bufUnlock)
 	comCall(buf, bufSetCurLen, uintptr(len(au)))
@@ -498,7 +501,7 @@ func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
 			mine, ob.sample = s, s
 		}
 		var status uint32
-		hr := comCall(d.mft, mftProcessOutput, 0, 1, ptr(&ob), ptr(&status))
+		hr := comCall(d.mft, mftProcessOutput, 0, 1, uintptr(unsafe.Pointer(&ob)), uintptr(unsafe.Pointer(&status)))
 		release(ob.events)
 		switch {
 		case uint32(hr) == mfENeedMoreInput:
@@ -528,39 +531,42 @@ func (d *Decoder) drain(frames []Frame) ([]Frame, error) {
 
 func (d *Decoder) frame(sample uintptr) (Frame, error) {
 	var f Frame
-	comCall(sample, 35, ptr(&f.Time)) // GetSampleTime
+	comCall(sample, 35, uintptr(unsafe.Pointer(&f.Time))) // GetSampleTime
 	var buf uintptr
-	if hr := comCall(sample, sampleToContig, ptr(&buf)); failed(hr) {
+	if hr := comCall(sample, sampleToContig, uintptr(unsafe.Pointer(&buf))); failed(hr) {
 		return f, hrError("ConvertToContiguousBuffer", hr)
 	}
 	defer release(buf)
 	var b2d uintptr
-	comCall(buf, 0, ptr(&iidIMF2DBuffer), ptr(&b2d))
+	comCall(buf, 0, uintptr(unsafe.Pointer(&iidIMF2DBuffer)), uintptr(unsafe.Pointer(&b2d)))
 	var base uintptr
 	var pitch, length int
 	if b2d != 0 {
 		defer release(b2d)
 		var p int32
 		var n uint32
-		if hr := comCall(b2d, buf2DLock, ptr(&base), ptr(&p)); failed(hr) {
+		if hr := comCall(b2d, buf2DLock, uintptr(unsafe.Pointer(&base)), uintptr(unsafe.Pointer(&p))); failed(hr) {
 			return f, hrError("Lock2D", hr)
 		}
 		defer comCall(b2d, buf2DUnlock)
-		comCall(b2d, buf2DContigLen, ptr(&n))
+		comCall(b2d, buf2DContigLen, uintptr(unsafe.Pointer(&n)))
 		pitch, length = int(p), int(n)
 	} else {
 		var maxLen, cur uint32
-		if hr := comCall(buf, bufLock, ptr(&base), ptr(&maxLen), ptr(&cur)); failed(hr) {
+		if hr := comCall(buf, bufLock, uintptr(unsafe.Pointer(&base)), uintptr(unsafe.Pointer(&maxLen)), uintptr(unsafe.Pointer(&cur))); failed(hr) {
 			return f, hrError("Lock", hr)
 		}
 		defer comCall(buf, bufUnlock)
 		pitch, length = d.stride, int(cur)
 	}
-	if pitch <= 0 {
-		pitch = d.frameW
-		if d.sub == subtypeAYUV {
-			pitch *= 4
-		}
+	// A row is at least this long; the HEVC MFT reports AYUV's default
+	// stride in pixels.
+	row := d.frameW
+	if d.sub == subtypeAYUV {
+		row *= 4
+	}
+	if pitch < row {
+		pitch = row
 	}
 	if base == 0 || length <= 0 {
 		return f, errors.New("mf: empty output buffer")
@@ -614,7 +620,7 @@ func probeInput(c Codec, profile uint32) (string, error) {
 			}
 		}()
 		var mft uintptr
-		if hr := comCall(acts[0], activateActivate, ptr(&iidIMFTransform), ptr(&mft)); failed(hr) {
+		if hr := comCall(acts[0], activateActivate, uintptr(unsafe.Pointer(&iidIMFTransform)), uintptr(unsafe.Pointer(&mft))); failed(hr) {
 			err = hrError("ActivateObject", hr)
 			return
 		}
