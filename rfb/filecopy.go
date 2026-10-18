@@ -129,6 +129,8 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 	if !c.appleARD || !c.Encrypted() {
 		return ErrFileCopyUnsupported
 	}
+	c.fcMu.Lock()
+	defer c.fcMu.Unlock()
 	if size < 0 {
 		return errors.New("rfb: file copy needs a known size")
 	}

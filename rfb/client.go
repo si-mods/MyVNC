@@ -212,6 +212,7 @@ type Client struct {
 	ardLayout    bool              // a display layout (1101/1105) has arrived
 	rawTap       io.Writer         // test-only: tee of the decrypted ARD stream (#43)
 	fcServer     func(body []byte) // test/impl hook: an inbound 0x22 file-copy record body (#43)
+	fcMu         sync.Mutex        // serialises FileCopyUpload; sessionID is fixed (#43)
 	hp           *hpState
 	name         string
 	pf           pixel.Format
