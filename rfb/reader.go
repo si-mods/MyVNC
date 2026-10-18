@@ -742,12 +742,23 @@ func (c *Client) readARDSessionEncryption() error {
 func (c *Client) readARDServerMessage(t byte) error {
 	switch t {
 	case 0x14:
-		// ARD clipboard; the C++ skips it too, so there is nothing to port.
+		// MiscStatus: u16 version, u16 command; 2 says the Mac's
+		// pasteboard changed.
 		c.rd.skip(1)
-		c.rd.skip(int64(c.rd.u16()))
+		body := c.rd.bytes(int(c.rd.u16()))
+		if c.rd.err != nil {
+			return c.rd.err
+		}
+		if len(body) < 4 {
+			return nil
+		}
+		cmd := be.Uint16(body[2:])
+		c.log.Debug("rfb: ARD status", "command", cmd)
+		if cmd == 2 {
+			return c.clipboardNotify(clipboardUTF8)
+		}
 	case 0x1f:
-		c.rd.skip(1 + 2 + 4 + 4)
-		c.rd.skip(int64(c.rd.u32()))
+		return c.readARDPasteboard()
 	case 0x20:
 		c.rd.skip(4)
 		c.rd.skip(int64(c.rd.u32()))
@@ -755,6 +766,88 @@ func (c *Client) readARDServerMessage(t byte) error {
 		c.rd.skip(int64(c.rd.u16()))
 	}
 	return c.rd.err
+}
+
+// readARDPasteboard reads the Mac's pasteboard, the reply to
+// ardFetchPasteboard: 1f, 0, promises, pad, u32 id, u32 sizes
+// uncompressed and compressed, then zlib (ending in a sync flush) of
+// the archive described at ardPasteboard. Only the UTF-8 text flavor is
+// kept; the rest, often far larger, is inflated and dropped.
+func (c *Client) readARDPasteboard() error {
+	c.rd.skip(7)
+	size, zsize := c.rd.u32(), c.rd.u32()
+	if c.rd.err != nil {
+		return c.rd.err
+	}
+	if size > 100<<20 || zsize > 100<<20 {
+		return errors.New("rfb: ARD pasteboard is too large")
+	}
+	in := io.LimitReader(c.rd.r, int64(zsize))
+	data, found, err := ardPasteboardText(in, size, c.maxCutText())
+	if _, derr := io.Copy(io.Discard, in); derr != nil {
+		return derr
+	}
+	if err != nil {
+		c.log.Info("rfb: invalid ARD pasteboard", "err", err)
+		return nil
+	}
+	c.mu.Lock()
+	c.remoteClip = false
+	c.mu.Unlock()
+	if !found {
+		return nil
+	}
+	if !text.IsValidUTF8(string(data)) {
+		c.log.Info("rfb: invalid UTF-8 sequence in clipboard")
+		return nil
+	}
+	c.h.Clipboard(text.ConvertLF(string(data)))
+	return nil
+}
+
+const ardTextFlavor = "public.utf8-plain-text"
+
+// ardPasteboardText finds the first text flavor in a compressed archive
+// of size bytes. Text over limit is dropped (found is false).
+func ardPasteboardText(z io.Reader, size uint32, limit int) (data []byte, found bool, err error) {
+	if size == 0 {
+		return nil, true, nil // an empty pasteboard
+	}
+	zr, err := zlib.NewReader(z)
+	if err != nil {
+		return nil, false, err
+	}
+	rd := reader{r: io.LimitReader(zr, int64(size))}
+	for {
+		var n [4]byte
+		if _, err := io.ReadFull(rd.r, n[:]); err != nil {
+			if err == io.EOF {
+				err = nil // past the last item
+			}
+			return nil, false, err
+		}
+		for flavors := be.Uint32(n[:]); flavors > 0 && rd.err == nil; flavors-- {
+			nameLen := rd.u32()
+			if nameLen > 1024 {
+				return nil, false, errors.New("flavor name is too long")
+			}
+			name := string(rd.bytes(int(nameLen)))
+			rd.skip(4)
+			for tags := rd.u32(); tags > 0 && rd.err == nil; tags-- {
+				rd.skip(int64(rd.u32()))
+				rd.skip(int64(rd.u32()))
+			}
+			size := rd.u32()
+			if name == ardTextFlavor && rd.err == nil && int64(size) <= int64(limit) {
+				data = rd.bytes(int(size))
+				return data, rd.err == nil, rd.err
+			}
+			rd.skip(int64(size))
+		}
+		if rd.err != nil {
+			return nil, false, rd.err
+		}
+	}
 }
 
 // Clipboard
