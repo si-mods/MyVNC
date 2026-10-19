@@ -45,6 +45,23 @@
   "sendClipboard": "Send the local clipboard",
   "fetchClipboard": "Copy the server's clipboard here",
   "@fetchClipboard": { "description": "Session menu button: fetches the clipboard text the server announced into the local clipboard." },
+  "downloadFile": "Download a file…",
+  "@downloadFile": { "description": "Session menu button: opens the remote-path form for an ARD file download." },
+  "downloadTitle": "Download from the remote computer",
+  "@downloadTitle": { "description": "Title of the form asking for a path on the Mac and of its result alert." },
+  "remotePath": "Remote path",
+  "@remotePath": { "description": "Text field label: absolute path of the file or folder to download." },
+  "download": "Download",
+  "downloadDone": "Saved {path}",
+  "@downloadDone": {
+    "description": "Result alert after a file download.",
+    "placeholders": { "path": { "type": "String", "example": "C:\\Users\\yibo\\Downloads\\report.pdf" } }
+  },
+  "downloadFailed": "Download failed: {err}",
+  "@downloadFailed": {
+    "description": "Result alert when a file download fails.",
+    "placeholders": { "err": { "type": "String", "example": "rfb: file copy ended with error 5" } }
+  },
   "input": "Input",
   "viewOnly": "View only",
   "emulateMiddleButton": "Emulate middle button (left + right)",

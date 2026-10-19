@@ -359,6 +359,86 @@ func (msgs Messages) FetchClipboard() string {
 	return Catalog.Format(msgs.locale, "fetchClipboard", nil)
 }
 
+// DownloadFile says "Download a file…"
+// in the language the app shows.
+//
+// Session menu button: opens the remote-path form for an ARD file download.
+func DownloadFile() string { return In(i18n.Locale()).DownloadFile() }
+
+// DownloadFile says "Download a file…"
+// in the language of msgs.
+//
+// Session menu button: opens the remote-path form for an ARD file download.
+func (msgs Messages) DownloadFile() string {
+	return Catalog.Format(msgs.locale, "downloadFile", nil)
+}
+
+// DownloadTitle says "Download from the remote computer"
+// in the language the app shows.
+//
+// Title of the form asking for a path on the Mac and of its result alert.
+func DownloadTitle() string { return In(i18n.Locale()).DownloadTitle() }
+
+// DownloadTitle says "Download from the remote computer"
+// in the language of msgs.
+//
+// Title of the form asking for a path on the Mac and of its result alert.
+func (msgs Messages) DownloadTitle() string {
+	return Catalog.Format(msgs.locale, "downloadTitle", nil)
+}
+
+// RemotePath says "Remote path"
+// in the language the app shows.
+//
+// Text field label: absolute path of the file or folder to download.
+func RemotePath() string { return In(i18n.Locale()).RemotePath() }
+
+// RemotePath says "Remote path"
+// in the language of msgs.
+//
+// Text field label: absolute path of the file or folder to download.
+func (msgs Messages) RemotePath() string {
+	return Catalog.Format(msgs.locale, "remotePath", nil)
+}
+
+// Download says "Download"
+// in the language the app shows.
+func Download() string { return In(i18n.Locale()).Download() }
+
+// Download says "Download"
+// in the language of msgs.
+func (msgs Messages) Download() string {
+	return Catalog.Format(msgs.locale, "download", nil)
+}
+
+// DownloadDone says "Saved {path}"
+// in the language the app shows.
+//
+// Result alert after a file download.
+func DownloadDone(path string) string { return In(i18n.Locale()).DownloadDone(path) }
+
+// DownloadDone says "Saved {path}"
+// in the language of msgs.
+//
+// Result alert after a file download.
+func (msgs Messages) DownloadDone(path string) string {
+	return Catalog.Format(msgs.locale, "downloadDone", map[string]any{"path": path})
+}
+
+// DownloadFailed says "Download failed: {err}"
+// in the language the app shows.
+//
+// Result alert when a file download fails.
+func DownloadFailed(err string) string { return In(i18n.Locale()).DownloadFailed(err) }
+
+// DownloadFailed says "Download failed: {err}"
+// in the language of msgs.
+//
+// Result alert when a file download fails.
+func (msgs Messages) DownloadFailed(err string) string {
+	return Catalog.Format(msgs.locale, "downloadFailed", map[string]any{"err": err})
+}
+
 // Input says "Input"
 // in the language the app shows.
 func Input() string { return In(i18n.Locale()).Input() }

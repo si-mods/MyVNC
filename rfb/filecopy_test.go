@@ -183,6 +183,88 @@ func TestMacFileCopyCapture(t *testing.T) {
 	}
 }
 
+// TestMacFileCopyDownload pulls a file or folder from the Mac with the
+// real FileCopyDownload path (issue #43): StartFileSend with the
+// start-sending flag, then the ItemInfo/NewItem/data/EndSession records
+// the Mac streams back. It runs only with MYVNC_FILECOPY_DOWNLOAD=1 and
+// needs MYVNC_E2E_PASS. The local tree's sizes and SHA-256 are logged for
+// comparison with the Mac.
+func TestMacFileCopyDownload(t *testing.T) {
+	if os.Getenv("MYVNC_FILECOPY_DOWNLOAD") != "1" {
+		t.Skip("MYVNC_FILECOPY_DOWNLOAD is not 1")
+	}
+	env := func(k, def string) string {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+		return def
+	}
+	addr := env("MYVNC_MAC_ADDR", "192.168.88.241:5900")
+	user := env("MYVNC_E2E_USER", "yibo")
+	pass := os.Getenv("MYVNC_E2E_PASS")
+	remote := env("MYVNC_FC_PATH", "/Users/yibo/myvnc-drag-test/dl_dir")
+	local := t.TempDir()
+
+	logs := &logLines{t: t}
+	h := &macHandler{clip: make(chan string, 8)}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	c, err := Dial(ctx, addr, Options{
+		Username: user, Password: func() (string, string, error) { return user, pass, nil },
+		Shared: true, Decoders: decode.New(),
+		SecurityTypes: []uint32{SecTypeDH},
+		Logger:        slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.c = c
+	defer c.Close()
+	runErr := make(chan error, 1)
+	go func() { runErr <- c.Run() }()
+	var base *image.RGBA
+	for i := 0; i < 25 && (base == nil || !c.Encrypted()); i++ {
+		base = h.settle(time.Second)
+		select {
+		case err := <-runErr:
+			t.Fatalf("connection ended before encryption: %v", err)
+		default:
+		}
+	}
+	if base == nil || !c.Encrypted() {
+		t.Fatalf("no update (%v) or encryption not active", base == nil)
+	}
+
+	var last time.Time
+	paths, err := c.FileCopyDownload(ctx, remote, local, func(p FileCopyProgress) {
+		if time.Since(last) >= time.Second || p.Done == p.Total {
+			last = time.Now()
+			t.Logf("progress %s: %d/%d", p.Name, p.Done, p.Total)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range paths {
+		err := filepath.WalkDir(root, func(p string, e os.DirEntry, err error) error {
+			if err != nil || e.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			sum := sha256.Sum256(data)
+			rel, _ := filepath.Rel(local, p)
+			t.Logf("%s %d %x", filepath.ToSlash(rel), len(data), sum)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestMacFileCopyUpload uploads a file to the Mac with the real
 // FileCopyUpload path (issue #43): StartFileReceive, ItemInfo, NewItem,
 // file data and EndSession. It runs only with MYVNC_FILECOPY_UPLOAD=1 and

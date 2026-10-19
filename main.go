@@ -116,6 +116,12 @@ type app struct {
 	certMsg            string
 	certReply          chan int
 
+	// ARD file download (#43).
+	dlOpen bool
+	dlPath string
+	dlDone bool
+	dlMsg  string
+
 	// Platform hooks; nil in tests but post.
 	post          func(func())
 	win           *mygo.Window
@@ -484,7 +490,7 @@ func (a *app) flushAltGr() {
 
 // modal reports whether a dialog takes the keyboard from the session.
 func (a *app) modal() bool {
-	return a.menuOpen || a.authOpen || a.keyOpen || a.warnOpen || a.certOpen
+	return a.menuOpen || a.authOpen || a.keyOpen || a.warnOpen || a.certOpen || a.dlOpen || a.dlDone
 }
 
 // updateGrab grabs the system keys while a session has the keyboard.
@@ -538,6 +544,34 @@ func (a *app) sendFiles(files []string) {
 			return
 		}
 		a.log.Info("file clipboard: uploaded", "files", len(remote), "dir", dir)
+	})
+}
+
+// startDownload fetches the remote path in the download form into the
+// local Downloads folder. It is the viewer-initiated half of the ARD file
+// transfer; the Mac streams the records over the session (#43).
+func (a *app) startDownload() {
+	p := strings.TrimSpace(a.dlPath)
+	a.dlOpen = false
+	if p == "" || a.sess == nil {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		a.dlMsg, a.dlDone = locales.DownloadFailed(err.Error()), true
+		return
+	}
+	dir := filepath.Join(home, "Downloads")
+	a.log.Info("download", "path", p, "dir", dir)
+	a.sess.DownloadFile(p, dir, func(paths []string, err error) {
+		if err != nil {
+			a.dlMsg = locales.DownloadFailed(err.Error())
+		} else if len(paths) == 1 {
+			a.dlMsg = locales.DownloadDone(paths[0])
+		} else {
+			a.dlMsg = locales.DownloadDone(strings.Join(paths, ", "))
+		}
+		a.dlDone = true
 	})
 }
 
@@ -894,6 +928,29 @@ func (a *app) prompts(c *ui.Context) {
 		})
 	}).Dismissed() {
 		answerAuth(creds{})
+	}
+	if ui.Modal(c, &a.dlOpen, func() {
+		ui.Text(c, locales.DownloadTitle()).Bold()
+		submit := false
+		ui.Field(c, locales.RemotePath(), func() {
+			submit = ui.TextInput(c, &a.dlPath).AutoFocus().Submitted()
+		})
+		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			if ui.Button(c, locales.Cancel()).Clicked() {
+				a.dlOpen = false
+			}
+			if ui.PrimaryButton(c, locales.Download()).Clicked() || submit {
+				a.startDownload()
+			}
+		})
+	}).Dismissed() {
+		a.dlOpen = false
+	}
+	if a.dlDone {
+		ui.AlertDialog(c, &a.dlDone, locales.DownloadTitle(), a.dlMsg, locales.Ok())
+		if !a.dlDone {
+			a.dlMsg = ""
+		}
 	}
 	answer(c, &a.keyOpen, &a.keyReply, locales.HostKeyTitle(), a.keyMsg, locales.Reject(), locales.Accept())
 	answer(c, &a.warnOpen, &a.warnReply, locales.UnencryptedTitle(), a.warnMsg,
