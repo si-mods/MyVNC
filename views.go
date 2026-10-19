@@ -49,6 +49,8 @@ func (a *app) rdpView(c *ui.Context) {
 		w, h := win32.ClientRect(a.win.NativeHandle())
 		a.rdp.Fit(0, 0, w, h)
 		a.rdp.Show(true)
+		a.rdp.Raise()
+		a.scheduleRDPResize(w, h)
 	}
 }
 
