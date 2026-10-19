@@ -27,12 +27,22 @@ const (
 // reports through RCTL, plus packet loss.
 type rateControl struct {
 	target      int // kbit/s
+	max         int // kbit/s, the user's cap or rateMax
 	lastAt      time.Time
 	lastBytes   uint64
 	lastMissing uint64
 }
 
-func newRateControl() *rateControl { return &rateControl{target: rateStart} }
+// newRateControl starts at rateStart (or the cap, if lower). maxKbps 0
+// means the Mac's 60 Mbit/s ceiling.
+func newRateControl(maxKbps int) *rateControl {
+	limit := rateMax
+	if maxKbps > 0 && maxKbps < limit {
+		limit = maxKbps
+	}
+	limit = max(limit, rateMin)
+	return &rateControl{target: min(rateStart, limit), max: limit}
+}
 
 // step folds one window of RTP statistics into the target and returns it.
 // bytes and missing are cumulative counters; owrd is the receiver's
@@ -56,7 +66,7 @@ func (r *rateControl) step(now time.Time, bytes, missing uint64, owrd float64) i
 	case owrd > rateHold:
 		// Queue building without crossing the cut threshold: hold.
 	case delivered*10 >= r.target*7: // the sender used 70% of the budget
-		r.target = min(int(float64(r.target)*rateGain)+rateStep, rateMax)
+		r.target = min(int(float64(r.target)*rateGain)+rateStep, r.max)
 	}
 	return r.target
 }

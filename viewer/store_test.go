@@ -59,3 +59,22 @@ func TestConfig(t *testing.T) {
 		t.Errorf("encodings %v", l)
 	}
 }
+
+func TestVideoMode(t *testing.T) {
+	c := DefaultConfig()
+	if c.VideoMode() != 0 {
+		t.Errorf("default mode %d, want High Performance", c.VideoMode())
+	}
+	c.SetVideoMode(1)
+	if c.HighPerformance || c.Encoding != "H.264" || c.VideoMode() != 1 {
+		t.Errorf("direct H.264: hp %v encoding %q mode %d", c.HighPerformance, c.Encoding, c.VideoMode())
+	}
+	c.SetVideoMode(2)
+	if c.HighPerformance || c.Encoding != "Tight" || c.VideoMode() != 2 {
+		t.Errorf("legacy: hp %v encoding %q mode %d", c.HighPerformance, c.Encoding, c.VideoMode())
+	}
+	c.SetVideoMode(0)
+	if !c.HighPerformance || c.Encoding != "Auto" || c.VideoMode() != 0 {
+		t.Errorf("WebRTC: hp %v encoding %q mode %d", c.HighPerformance, c.Encoding, c.VideoMode())
+	}
+}

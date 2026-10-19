@@ -233,6 +233,116 @@ func (msgs Messages) PreferredEncoding() string {
 	return Catalog.Format(msgs.locale, "preferredEncoding", nil)
 }
 
+// VideoMode says "Video mode"
+// in the language the app shows.
+func VideoMode() string { return In(i18n.Locale()).VideoMode() }
+
+// VideoMode says "Video mode"
+// in the language of msgs.
+func (msgs Messages) VideoMode() string {
+	return Catalog.Format(msgs.locale, "videoMode", nil)
+}
+
+// ModeWebRTC says "WebRTC H.264"
+// in the language the app shows.
+func ModeWebRTC() string { return In(i18n.Locale()).ModeWebRTC() }
+
+// ModeWebRTC says "WebRTC H.264"
+// in the language of msgs.
+func (msgs Messages) ModeWebRTC() string {
+	return Catalog.Format(msgs.locale, "modeWebRTC", nil)
+}
+
+// ModeDirect says "Direct H.264"
+// in the language the app shows.
+func ModeDirect() string { return In(i18n.Locale()).ModeDirect() }
+
+// ModeDirect says "Direct H.264"
+// in the language of msgs.
+func (msgs Messages) ModeDirect() string {
+	return Catalog.Format(msgs.locale, "modeDirect", nil)
+}
+
+// ModeLegacy says "Legacy MJPEG"
+// in the language the app shows.
+func ModeLegacy() string { return In(i18n.Locale()).ModeLegacy() }
+
+// ModeLegacy says "Legacy MJPEG"
+// in the language of msgs.
+func (msgs Messages) ModeLegacy() string {
+	return Catalog.Format(msgs.locale, "modeLegacy", nil)
+}
+
+// MaxFPS says "Max fps"
+// in the language the app shows.
+func MaxFPS() string { return In(i18n.Locale()).MaxFPS() }
+
+// MaxFPS says "Max fps"
+// in the language of msgs.
+func (msgs Messages) MaxFPS() string {
+	return Catalog.Format(msgs.locale, "maxFPS", nil)
+}
+
+// H264Kbps says "H.264 kbps"
+// in the language the app shows.
+func H264Kbps() string { return In(i18n.Locale()).H264Kbps() }
+
+// H264Kbps says "H.264 kbps"
+// in the language of msgs.
+func (msgs Messages) H264Kbps() string {
+	return Catalog.Format(msgs.locale, "h264Kbps", nil)
+}
+
+// H264GOP says "H.264 GOP"
+// in the language the app shows.
+func H264GOP() string { return In(i18n.Locale()).H264GOP() }
+
+// H264GOP says "H.264 GOP"
+// in the language of msgs.
+func (msgs Messages) H264GOP() string {
+	return Catalog.Format(msgs.locale, "h264GOP", nil)
+}
+
+// Orientation says "Orientation"
+// in the language the app shows.
+func Orientation() string { return In(i18n.Locale()).Orientation() }
+
+// Orientation says "Orientation"
+// in the language of msgs.
+func (msgs Messages) Orientation() string {
+	return Catalog.Format(msgs.locale, "orientation", nil)
+}
+
+// Default says "Default"
+// in the language the app shows.
+func Default() string { return In(i18n.Locale()).Default() }
+
+// Default says "Default"
+// in the language of msgs.
+func (msgs Messages) Default() string {
+	return Catalog.Format(msgs.locale, "default", nil)
+}
+
+// Unlimited says "Unlimited"
+// in the language the app shows.
+func Unlimited() string { return In(i18n.Locale()).Unlimited() }
+
+// Unlimited says "Unlimited"
+// in the language of msgs.
+func (msgs Messages) Unlimited() string {
+	return Catalog.Format(msgs.locale, "unlimited", nil)
+}
+
+// Auto says "Auto"
+// in the language the app shows.
+func Auto() string { return In(i18n.Locale()).Auto() }
+
+// Auto says "Auto"
+// in the language of msgs.
+func (msgs Messages) Auto() string {
+	return Catalog.Format(msgs.locale, "auto", nil)
+}
+
 // JpegQuality says "JPEG quality"
 // in the language the app shows.
 func JpegQuality() string { return In(i18n.Locale()).JpegQuality() }
