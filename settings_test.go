@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// TestSettingsVideoControls checks the PiKVM-style rows are in the
-// settings form and that the video mode sets the HP/encoding pair.
+// TestSettingsVideoControls checks the WinUI-style settings navigation and
+// that the video mode sets the HP/encoding pair.
 func TestSettingsVideoControls(t *testing.T) {
 	a := newTestApp(t)
 	if err := a.tt.Click("Settings"); err != nil {
@@ -14,10 +14,20 @@ func TestSettingsVideoControls(t *testing.T) {
 	}
 	a.tt.Frame()
 	texts := strings.Join(a.tt.Texts(), "|")
+	for _, want := range []string{"Interface", "Video", "Clipboard", "Input", "Connection", "Window"} {
+		if !strings.Contains(texts, want) {
+			t.Errorf("settings lack the %q page; texts %q", want, texts)
+		}
+	}
+	if err := a.tt.Click("Video"); err != nil {
+		t.Fatal(err)
+	}
+	a.tt.Frame()
+	texts = strings.Join(a.tt.Texts(), "|")
 	for _, want := range []string{"Video mode", "WebRTC H.264", "Direct H.264", "Legacy MJPEG",
 		"Max fps", "H.264 kbps", "H.264 GOP", "Orientation", "Default", "90°", "180°", "270°"} {
 		if !strings.Contains(texts, want) {
-			t.Errorf("settings lack %q; texts %q", want, texts)
+			t.Errorf("video page lacks %q; texts %q", want, texts)
 		}
 	}
 	if err := a.tt.Click("Legacy MJPEG"); err != nil {
@@ -32,6 +42,10 @@ func TestSettingsVideoControls(t *testing.T) {
 		t.Errorf("legacy mode: hp %v encoding %q", a.cfg.HighPerformance, a.cfg.Encoding)
 	}
 	if err := a.tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	a.tt.Frame()
+	if err := a.tt.Click("Video"); err != nil {
 		t.Fatal(err)
 	}
 	a.tt.Frame()
