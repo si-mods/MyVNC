@@ -3,9 +3,10 @@
 What is known about Apple Remote Desktop / Screen Sharing drag-and-drop and
 file copy over the RFB 003.889 session, and where MyVNC stands.
 
-Status: **upload and download complete and verified live end to end; only the
-drag UI remains.** On 2026-10-18 a live session against macmini (macOS 27.2,
-build 26B5101f, standard mode) drove the `0x22` FileCopy command and then the
+Status: **upload and download complete and verified live end to end; Windows
+drops upload, the Mac-to-Windows drag remains.** On 2026-10-18 a live session
+against macmini (macOS 27.2, build 26B5101f, standard mode) drove the `0x22`
+FileCopy command and then the
 content records decoded from the Mac's own `SSFileCopyReceiver` /
 `SSFileCopySender` binaries. A 200000-byte file arrived with the same SHA-256
 and mode 0644. `screensharingd` and the receiver logged every phase. On
@@ -334,6 +335,28 @@ umask mode (0644 here).
 Drag is a UI signal only. The actual bytes move through the FileCopy subsystem
 (`0x22` plus the content sub-protocol above), which is why `screensharingd`
 ships separate `SSFileCopySender` / `SSFileCopyReceiver` helper tools.
+
+### Windows -> Mac drop
+
+The session window calls `DragAcceptFiles` and subclasses its window
+procedure. Explorer drops arrive as `WM_DROPFILES`; the subclass reads the
+`HDROP` with `DragQueryFileW`, calls `DragFinish`, and hands the paths to the
+same upload path as copied files (`UploadFiles` to `~/Downloads`, then the URL
+on the Mac pasteboard). `internal/win32.RegisterFileDrop` installs it; a
+synthetic `WM_DROPFILES` posted to the real window reaches `dropFiles`
+(verified on Windows 11).
+
+The subclass forwards every other message through `CallWindowProc`, so the
+toolkit's own window handling is untouched.
+
+### Mac -> Windows drop
+
+Still open. The Mac sends `0x20` when a drag starts inside its screen. The
+payload is a zlib drag pasteboard with file promises; decoding it gives the
+remote paths and the drag image, after which the viewer can either start a
+local OLE drag with lazily downloaded files or download them immediately with
+`StartFileSend(flags 1)`. No live `0x20` capture exists yet (it needs a real
+drag on the Mac), so this half is unimplemented.
 
 ## Clipboard files
 
