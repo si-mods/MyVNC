@@ -86,6 +86,11 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - Mouse wheel and touchpad scrolling send one click per scroll line, so
     a Windows notch (three lines by default) scrolls three steps on the
     Mac instead of one (#51).
+- v0.0.13:
+  - ARD file download: StartFileSend with the start-sending flag makes
+    the Mac run SSFileCopySender and stream files, folders and symlinks
+    back. The session menu's Download a file… asks for the remote path
+    and saves into the local Downloads folder (#43).
 
 ## Deferred by the owner
 
