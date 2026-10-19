@@ -989,7 +989,11 @@ func (a *app) connectRDP(server string) {
 	w, h := win32.ClientRect(a.win.NativeHandle())
 	r.Fit(0, 0, w, h)
 	r.Show(true)
-	if err := r.Connect(host, port, a.user, a.pass, ""); err != nil {
+	user, domain := a.user, ""
+	if i := strings.LastIndex(user, `\`); i >= 0 {
+		domain, user = user[:i], user[i+1:]
+	}
+	if err := r.Connect(host, port, user, a.pass, domain); err != nil {
 		a.log.Warn("RDP connect", "err", err)
 		a.errText = err.Error()
 		a.disconnectRDP()
@@ -999,7 +1003,8 @@ func (a *app) connectRDP(server string) {
 	time.AfterFunc(5*time.Second, func() {
 		mygo.RunOnMain(func() {
 			if a.rdp == r {
-				a.log.Info("RDP state", "connected", r.Connected())
+				w, h := r.RemoteSize()
+				a.log.Info("RDP state", "connected", r.Connected(), "width", w, "height", h)
 			}
 		})
 	})
