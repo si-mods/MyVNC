@@ -26,13 +26,14 @@ contains.
 |---|---|---|
 | [TigerVNC](https://github.com/TigerVNC/tigervnc) (incl. TightVNC/RealVNC code it contains) | GPL-2.0-or-later | The viewer this is a port of: RFB protocol, security types, decoders, keyboard mapping, shortcut handler, gesture and touch handling, middle-button emulation, parameters, and its unit tests; the ARD work on its `ard-auth-support` branch |
 | [remotex](https://github.com/aleonnet/remotex) | MIT ([LICENSES/remotex-MIT.txt](LICENSES/remotex-MIT.txt)) | ARD High Performance: media offer, reply parsing, SRTP/SRTCP, RTP depacketizer, RTCP feedback, display configuration (`rfb/ard/media`, `rfb/hp.go`) |
-| [Lucide](https://lucide.dev) | ISC ([LICENSES/lucide-ISC.txt](LICENSES/lucide-ISC.txt)) | The settings, computer and session icons |
+| [Lucide](https://lucide.dev) | ISC ([LICENSES/lucide-ISC.txt](LICENSES/lucide-ISC.txt)) | The settings, computer and session icons, through Onevra |
 
 ### Libraries linked into the app
 
 | Project | License |
 |---|---|
 | [MyGo](https://github.com/egoist/mygo) | MIT |
+| [Onevra](https://github.com/oneo-me/onevra) | MIT | Lucide icon set and native UI component library |
 | [purego](https://github.com/ebitengine/purego) | Apache-2.0 |
 | [go-text/typesetting](https://github.com/go-text/typesetting) | Unlicense or BSD-3-Clause |
 | [golang.org/x/image](https://pkg.go.dev/golang.org/x/image), [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | BSD-3-Clause |
