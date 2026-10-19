@@ -74,6 +74,8 @@
     "placeholders": { "err": { "type": "String", "example": "rfb: file copy ended with error 5" } }
   },
   "input": "Input",
+  "video": "Video",
+  "interface": "Interface",
   "viewOnly": "View only",
   "emulateMiddleButton": "Emulate middle button (left + right)",
   "connection": "Connection",

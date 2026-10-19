@@ -559,6 +559,26 @@ func (msgs Messages) Input() string {
 	return Catalog.Format(msgs.locale, "input", nil)
 }
 
+// Video says "Video"
+// in the language the app shows.
+func Video() string { return In(i18n.Locale()).Video() }
+
+// Video says "Video"
+// in the language of msgs.
+func (msgs Messages) Video() string {
+	return Catalog.Format(msgs.locale, "video", nil)
+}
+
+// Interface says "Interface"
+// in the language the app shows.
+func Interface() string { return In(i18n.Locale()).Interface() }
+
+// Interface says "Interface"
+// in the language of msgs.
+func (msgs Messages) Interface() string {
+	return Catalog.Format(msgs.locale, "interface", nil)
+}
+
 // ViewOnly says "View only"
 // in the language the app shows.
 func ViewOnly() string { return In(i18n.Locale()).ViewOnly() }
