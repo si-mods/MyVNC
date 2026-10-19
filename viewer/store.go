@@ -158,12 +158,15 @@ func writeJSON(path string, v any) error {
 
 // Encodings are those the user can prefer. "Auto" is TigerVNC's
 // AutoSelect (rfb.Options.AutoSelect); "H.264" is there where it decodes.
-func Encodings() []string { return encodings(decode.H264Available()) }
+func Encodings() []string { return encodings(decode.H264Available(), decode.AV1Available()) }
 
-func encodings(h264 bool) []string {
+func encodings(h264, av1 bool) []string {
 	l := []string{"Auto", "Tight", "ZRLE", "Hextile", "Raw"}
 	if h264 {
 		l = append(l, "H.264")
+	}
+	if av1 {
+		l = append(l, "AV1")
 	}
 	return l
 }
@@ -171,6 +174,7 @@ func encodings(h264 bool) []string {
 var encodingNumbers = map[string]int32{
 	"Auto": rfb.EncodingTight, "Tight": rfb.EncodingTight, "ZRLE": rfb.EncodingZRLE,
 	"Hextile": rfb.EncodingHextile, "Raw": rfb.EncodingRaw, "H.264": rfb.EncodingH264,
+	"AV1": rfb.EncodingAV1,
 }
 
 // Config is what MyVNC saves between runs.
@@ -181,6 +185,7 @@ type Config struct {
 	ViewOnly   bool
 	Shared     bool
 	Encoding   string // one of Encodings
+	Profile    string // LAN, WAN or Mobile; a preset, not enforced
 	Quality    int    // JPEG quality level 0-9
 	Compress   int    // compression level 0-9
 	FullScreen bool
@@ -240,9 +245,34 @@ func (c *Config) DecoderMode() mf.Mode {
 // Scalings are the ways the remote screen fits the window.
 var Scalings = []string{"Fit", "1:1", "Zoom"}
 
+// Profiles are the bandwidth presets. A profile is applied once, when
+// chosen; later manual changes are not tracked as a custom profile.
+var Profiles = []string{"LAN", "WAN", "Mobile"}
+
+// ApplyProfile sets the settings a profile bundles. High Performance is
+// left on so an ARD server can use it; non-ARD servers ignore it.
+func (c *Config) ApplyProfile(profile string) {
+	c.Profile = profile
+	switch profile {
+	case "WAN":
+		c.HighPerformance, c.Encoding = true, "Auto"
+		c.Quality, c.Compress = 6, 4
+		c.MaxFPS, c.MaxKbps, c.GOP = 30, 15000, 60
+	case "Mobile":
+		c.HighPerformance, c.Encoding = true, "Auto"
+		c.Quality, c.Compress = 4, 6
+		c.MaxFPS, c.MaxKbps, c.GOP = 30, 8000, 120
+	default:
+		c.Profile = "LAN"
+		c.HighPerformance, c.Encoding = true, "Auto"
+		c.Quality, c.Compress = 8, 2
+		c.MaxFPS, c.MaxKbps, c.GOP = 0, 0, 0
+	}
+}
+
 // DefaultConfig has TigerVNC's defaults.
 func DefaultConfig() Config {
-	return Config{Encoding: "Auto", Quality: 8, Compress: 2, Scaling: "Fit", Zoom: 100,
+	return Config{Encoding: "Auto", Profile: "LAN", Quality: 8, Compress: 2, Scaling: "Fit", Zoom: 100,
 		DynamicResolution: true, HighPerformance: true, VideoDecoding: "Auto", Reconnect: true, ClipboardKiB: 256, PillPos: 0.5, AcceptClipboard: true, SendClipboard: true}
 }
 
@@ -256,8 +286,11 @@ func LoadConfig(path string) (Config, error) {
 	if err == nil {
 		err = json.Unmarshal(b, &c)
 	}
-	if _, ok := encodingNumbers[c.Encoding]; !ok {
+	if _, ok := encodingNumbers[c.Encoding]; !ok || c.Encoding == "AV1" && !decode.AV1Available() {
 		c.Encoding = "Auto"
+	}
+	if !slices.Contains(Profiles, c.Profile) {
+		c.Profile = "LAN"
 	}
 	c.Quality = min(max(c.Quality, 0), 9)
 	c.Compress = min(max(c.Compress, 0), 9)
@@ -338,6 +371,9 @@ func (c *Config) EncodingList() []int32 {
 		if e != pref {
 			list = append(list, e)
 		}
+	}
+	if decode.AV1Available() && pref != rfb.EncodingAV1 {
+		list = append(list, rfb.EncodingAV1)
 	}
 	return append(list,
 		rfb.PseudoEncodingCursorWithAlpha, rfb.PseudoEncodingCursor,

@@ -79,6 +79,12 @@ func setBPS(c *Client, bps uint64) {
 	c.mu.Unlock()
 }
 
+func setRTT(c *Client, rtt, jitter time.Duration) {
+	c.mu.Lock()
+	c.rtt, c.jitter = rtt, jitter
+	c.mu.Unlock()
+}
+
 func TestAutoSelectResendsEncodings(t *testing.T) {
 	defer func(old time.Duration) { qualityHold = old }(qualityHold)
 	qualityHold = 0
@@ -128,6 +134,15 @@ func TestAutoSelectResendsEncodings(t *testing.T) {
 	if c.pf != pixel.RGBA {
 		t.Errorf("format %v, want RGBA", c.pf)
 	}
+
+	// A fast but high-latency link: the RTT cap drops the tier to 6 even
+	// though throughput alone says 8.
+	setRTT(c, 200*time.Millisecond, 90*time.Millisecond)
+	update(req)
+	update(withQuality(6), req)
+	if l := c.LinkStats(); l.State != LinkOK || l.Quality != 6 {
+		t.Errorf("RTT-capped LinkStats %+v", l)
+	}
 }
 
 func TestAutoSelectContinuousUpdatesAndPing(t *testing.T) {
@@ -175,5 +190,32 @@ func TestAutoSelectContinuousUpdatesAndPing(t *testing.T) {
 	}
 	if l := c.LinkStats(); l.RTT <= 0 || l.FullColour || l.Quality != 3 {
 		t.Errorf("LinkStats %+v", l)
+	}
+}
+
+func TestAutoQualityForLink(t *testing.T) {
+	const fast = uint64(100000000)
+	for _, c := range []struct {
+		rtt, jitter time.Duration
+		q           int
+		state       LinkState
+	}{
+		{0, 0, 8, LinkGood},
+		{119 * time.Millisecond, 79 * time.Millisecond, 8, LinkGood},
+		{120 * time.Millisecond, 0, 6, LinkOK},
+		{0, 80 * time.Millisecond, 6, LinkOK},
+		{400 * time.Millisecond, 0, 3, LinkPoor},
+		{0, 250 * time.Millisecond, 3, LinkPoor},
+	} {
+		if q := autoQualityFor(fast, c.rtt, c.jitter); q != c.q {
+			t.Errorf("rtt %v jitter %v: quality %d, want %d", c.rtt, c.jitter, q, c.q)
+		}
+		if s := linkStateFor(c.rtt, c.jitter); s != c.state {
+			t.Errorf("rtt %v jitter %v: state %v, want %v", c.rtt, c.jitter, s, c.state)
+		}
+	}
+	// The RTT cap never raises a slow line's tier.
+	if q := autoQualityFor(600000, 0, 0); q != 4 {
+		t.Errorf("slow line quality %d, want 4", q)
 	}
 }

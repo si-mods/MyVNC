@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kyya/myvnc/rfb/pixel"
 )
@@ -29,6 +30,10 @@ type decodeManager struct {
 	stop    bool
 	running bool
 	wg      sync.WaitGroup
+
+	cache       *tileCache
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
 }
 
 type decodeEntry struct {
@@ -40,6 +45,8 @@ type decodeEntry struct {
 	pf     *pixel.Format
 	fb     *image.RGBA
 	active bool
+	key    tileKey
+	cached bool
 }
 
 // ponytail: TigerVNC stops at 4 threads to avoid lock fights; Go's
@@ -75,6 +82,9 @@ func (m *decodeManager) submit(c *Client, dec pixel.ParallelDecoder, enc int32, 
 	}
 	e := &decodeEntry{dec: dec, enc: enc, rect: rect, data: data,
 		region: dec.AffectedRegion(rect, data), pf: &c.pf, fb: c.fb}
+	if m.cache != nil {
+		e.key, e.cached = m.cache.key(enc, rect, &c.pf, data)
+	}
 	m.mu.Lock()
 	m.queue = append(m.queue, e)
 	m.work.Signal()
@@ -126,7 +136,16 @@ func (m *decodeManager) worker() {
 		}
 		e.active = true
 		m.mu.Unlock()
-		err := e.dec.DecodeRect(e.data, e.rect, e.pf, e.fb)
+		var err error
+		if e.cached && m.cache.get(e.key, e.fb, e.rect) {
+			m.cacheHits.Add(1)
+		} else {
+			err = e.dec.DecodeRect(e.data, e.rect, e.pf, e.fb)
+			if e.cached && err == nil {
+				m.cache.put(e.key, e.fb, e.rect)
+				m.cacheMisses.Add(1)
+			}
+		}
 		m.mu.Lock()
 		if err != nil && m.err == nil {
 			m.err = err

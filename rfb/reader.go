@@ -112,7 +112,12 @@ func (c *Client) readFramebufferUpdate() error {
 			return c.rd.err
 		}
 		c.log.Debug("rfb: rect", "x", x, "y", y, "w", w, "h", h, "encoding", enc)
-		last, err := c.readRect(image.Rect(x, y, x+w, y+h), enc)
+		rect := image.Rect(x, y, x+w, y+h)
+		start := c.inPos()
+		last, err := c.readRect(rect, enc)
+		if enc >= 0 {
+			c.countRect(enc, c.inPos()-start, rect)
+		}
 		if err != nil {
 			return err
 		}
@@ -669,6 +674,7 @@ func (c *Client) readARDCursorAlpha(r image.Rectangle) error {
 	}
 	if size == 0 {
 		if cur, ok := c.cursorCache[id]; ok {
+			c.cursorHits.Add(1)
 			c.h.Cursor(cur.img, cur.hot)
 		}
 		return nil
@@ -1117,4 +1123,25 @@ func rgbFromPixel(pf *pixel.Format, b []byte) (r, g, bl uint8) {
 		return uint8((v*255 + uint32(max)/2) / uint32(max))
 	}
 	return conv(pf.RedShift, pf.RedMax), conv(pf.GreenShift, pf.GreenMax), conv(pf.BlueShift, pf.BlueMax)
+}
+
+// countRect notes a real encoding's wire bytes and rectangles. The read
+// loop is the only writer; LinkStats reads the map under encMu.
+func (c *Client) countRect(enc int32, bytes int64, r image.Rectangle) {
+	if bytes < 0 {
+		bytes = 0
+	}
+	c.encMu.Lock()
+	n := c.encStats[enc]
+	if n == nil {
+		n = new(encodingStat)
+		c.encStats[enc] = n
+	}
+	n.bytes += bytes
+	n.rects++
+	c.encMu.Unlock()
+	if enc == EncodingCopyRect {
+		c.copyRects.Add(1)
+		c.copyPixels.Add(int64(r.Dx() * r.Dy()))
+	}
 }

@@ -220,6 +220,8 @@ type Client struct {
 	pf           pixel.Format
 	fb           *image.RGBA
 	cursorCache  map[uint32]ardCursor
+	encMu        sync.Mutex
+	encStats     map[int32]*encodingStat
 	haveCreds    bool
 	user, pass   string
 	updates      int  // FramebufferUpdates finished
@@ -262,6 +264,10 @@ type Client struct {
 	qualityAt   time.Time
 	fullColour  bool
 	rtt         time.Duration
+	jitter      time.Duration
+	copyRects   atomic.Int64
+	copyPixels  atomic.Int64
+	cursorHits  atomic.Int64
 
 	disp displayChange // SetDisplayConfiguration's, also under mu; see hp.go
 }
@@ -287,9 +293,10 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 	conn = in
 	c := &Client{
 		conn: conn, opt: opt, h: h, serverName: serverName,
-		out: conn, cursorCache: make(map[uint32]ardCursor),
+		out: conn, cursorCache: make(map[uint32]ardCursor), encStats: make(map[int32]*encodingStat),
 		log: opt.Logger, in: in, bps: initialBPS, fullColour: true,
 	}
+	c.dm.cache = newTileCache()
 	if c.log == nil {
 		c.log = slog.New(slog.DiscardHandler)
 	}

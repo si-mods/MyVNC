@@ -24,11 +24,15 @@ type Codec int
 const (
 	H264 Codec = iota
 	HEVC
+	AV1
 )
 
 func (c Codec) String() string {
-	if c == HEVC {
+	switch c {
+	case HEVC:
 		return "HEVC"
+	case AV1:
+		return "AV1"
 	}
 	return "H.264"
 }
@@ -81,6 +85,7 @@ const (
 	ProfileHEVCMain10    = "HEVC Main10"
 	ProfileHEVCMain444   = "HEVC Main 4:4:4"
 	ProfileHEVCMain10444 = "HEVC Main10 4:4:4"
+	ProfileHEVCSCC       = "HEVC SCC"
 )
 
 // GPU is a graphics adapter with a hardware video decoder.

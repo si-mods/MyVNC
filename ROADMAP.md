@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
+Status as of v0.0.22 (2026-10-19). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -125,6 +125,17 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - Onevra components: Settings, Dialog, Slider, Select, Switch, Tabs,
     TextBox, IconButton and Lucide icons replace the hand-built
     settings, add-computer dialog and session-panel controls.
+- v0.0.22:
+  - Bandwidth: AutoSelect caps the JPEG tier by RTT and jitter as well as
+    throughput (#62); LAN/WAN/Mobile presets, a Legacy MJPEG warning and
+    clarified video-mode labels (#63).
+  - Bandwidth: decoded Raw/RRE/Hextile tile cache, CopyRect and cursor
+    reuse counters, per-encoding traffic in the HUD (#64, #67).
+  - Bandwidth: keyframe bytes and pictures-since-key stats, profiles set
+    GOP, and docs/bandwidth.md records the server-side parts (#65, #67).
+  - Bandwidth: AV1 decode through a Media Foundation MFT when installed,
+    a private AV1 rectangle framing, and HEVC SCC profile detection
+    (#66). No stock server sends either yet.
 
 ## Deferred by the owner
 

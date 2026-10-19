@@ -78,3 +78,34 @@ func TestVideoMode(t *testing.T) {
 		t.Errorf("WebRTC: hp %v encoding %q mode %d", c.HighPerformance, c.Encoding, c.VideoMode())
 	}
 }
+
+func TestApplyProfile(t *testing.T) {
+	for _, c := range []struct {
+		profile                 string
+		q, comp, fps, kbps, gop int
+	}{
+		{"LAN", 8, 2, 0, 0, 0},
+		{"WAN", 6, 4, 30, 15000, 60},
+		{"Mobile", 4, 6, 30, 8000, 120},
+	} {
+		cfg := DefaultConfig()
+		cfg.ApplyProfile(c.profile)
+		if cfg.Profile != c.profile || cfg.Quality != c.q || cfg.Compress != c.comp ||
+			cfg.MaxFPS != c.fps || cfg.MaxKbps != c.kbps || cfg.GOP != c.gop ||
+			!cfg.HighPerformance || cfg.Encoding != "Auto" {
+			t.Errorf("%s: %+v", c.profile, cfg)
+		}
+	}
+	// An unknown profile on disk falls back to LAN without touching the
+	// other settings.
+	cfg := DefaultConfig()
+	cfg.Profile = "bogus"
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadConfig(path)
+	if err != nil || got.Profile != "LAN" {
+		t.Errorf("loaded profile %q, %v", got.Profile, err)
+	}
+}
