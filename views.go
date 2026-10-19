@@ -27,6 +27,7 @@ import (
 var gear, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`))
 
 func (a *app) view(c *ui.Context) {
+	c.SetTheme(appTheme)
 	a.svc = c.Services()
 	switch {
 	case a.rdp != nil:
@@ -59,28 +60,30 @@ func (a *app) rdpView(c *ui.Context) {
 
 func (a *app) homeView(c *ui.Context) {
 	t := c.Theme()
-	ui.Scroll(c).Fill().Padding(24).Gap(16).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, appName).FontSize(24).Bold().Grow(1)
-			if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
-				a.openSettings()
+	ui.Scroll(c).Fill().Children(func() {
+		ui.Column(c).MaxWidth(1100).WidthPercent(100).AlignSelf(ui.Center).Padding(28).Gap(20).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, appName).FontSize(26).Bold().LetterSpacing(-0.4).Grow(1)
+				if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
+					a.openSettings()
+				}
+			})
+			if a.rc.active {
+				banner(c, t.Warning, locales.Reconnecting(a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts),
+					locales.Cancel(), a.cancelReconnect)
 			}
-		})
-		if a.rc.active {
-			banner(c, t.Warning, locales.Reconnecting(a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts),
-				locales.Cancel(), a.cancelReconnect)
-		}
-		if a.errText != "" {
-			banner(c, t.Danger, a.errText, locales.Dismiss(), func() { a.errText = "" })
-		}
-		ui.Grid(c).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1)).Gap(12).Children(func() {
-			for _, s := range a.cfg.Servers {
-				a.card(c.Key(s), s)
+			if a.errText != "" {
+				banner(c, t.Danger, a.errText, locales.Dismiss(), func() { a.errText = "" })
 			}
-			card(c, "+ "+locales.AddComputer(), func() {
-				ui.Text(c, "+").FontSize(40).TextColor(t.TextMuted)
-				ui.Text(c, locales.AddComputer()).Bold()
-			}).OnClick(func() { a.server, a.pass, a.addOpen = "", "", true })
+			ui.Grid(c).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1)).Gap(16).Children(func() {
+				for _, s := range a.cfg.Servers {
+					a.card(c.Key(s), s)
+				}
+				card(c, "+ "+locales.AddComputer(), func() {
+					ui.Text(c, "+").FontSize(40).TextColor(t.TextMuted)
+					ui.Text(c, locales.AddComputer()).Bold()
+				}).OnClick(func() { a.server, a.pass, a.addOpen = "", "", true })
+			})
 		})
 	})
 	a.addView(c)
@@ -98,8 +101,13 @@ func banner(c *ui.Context, color ui.Color, text, button string, act func()) {
 // card is a clickable tile of the home grid.
 func card(c *ui.Context, label string, fn func()) ui.Element {
 	t := c.Theme()
-	return ui.ButtonBase(c).Label(label).Padding(12).Radius(8).Background(t.Surface).Children(func() {
-		ui.Column(c).Gap(4).Grow(1).AlignItems(ui.Center).Children(fn)
+	el := ui.ButtonBase(c).Label(label).Padding(16).Radius(12).Background(t.Surface).
+		Border(1, t.Border).Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.22))
+	if el.Hovered() {
+		el.Background(t.SurfaceHover).BorderColor(t.Accent.Alpha(0.55))
+	}
+	return el.Children(func() {
+		ui.Column(c).Gap(6).Grow(1).AlignItems(ui.Center).Children(fn)
 	})
 }
 
@@ -112,9 +120,9 @@ func (a *app) card(c *ui.Context, server string) {
 	}
 	card(c, server, func() {
 		if th := a.thumbnail(server); th != nil {
-			ui.Image(c, th).Height(110).Fit(ui.Contain).Radius(4)
+			ui.Image(c, th).Height(120).Fit(ui.Contain).Radius(6)
 		} else {
-			ui.Box(c).Height(110).Center().Children(func() { a.avatar(c, server, info.Name) })
+			ui.Box(c).Height(120).Center().Children(func() { a.avatar(c, server, info.Name) })
 		}
 		ui.Text(c, title).Bold()
 		if title != server {
@@ -264,81 +272,97 @@ func (a *app) settingsView(c *ui.Context) {
 		a.settingsOpen = false
 	}
 	if ui.Modal(c, &a.settingsOpen, func() {
-		ui.Text(c, locales.Settings()).Bold()
-		ui.Scroll(c).MaxHeight(480).Children(func() {
-			ui.Form(c, func() {
-				ui.Field(c, locales.Language(), func() {
-					if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
-						a.saveConfig()
-						if a.setLocale != nil {
-							a.setLocale(a.cfg.Language)
-						}
-					}
-				})
-				ui.Field(c, locales.VideoMode(), func() {
-					ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
-				})
-				ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
-				ui.Field(c, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
-					ui.Slider(c, &a.quality, 0, 9)
-				})
-				ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
-				ui.Field(c, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() { ui.Slider(c, &a.maxFPS, 0, 60) })
-				ui.Field(c, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() { ui.Slider(c, &a.maxKbps, 0, 60000) })
-				ui.Field(c, locales.H264GOP()+": "+gopText(a.gop), func() { ui.Slider(c, &a.gop, 0, 300) })
-				ui.Field(c, locales.Orientation(), func() {
-					ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°")
-				})
-				ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
-				ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
-				ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
-				ui.Field(c, locales.Clipboard(), func() {
-					ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard())
-					ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard())
-				})
-				ui.Field(c, locales.Input(), func() {
-					ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly())
-					ui.Checkbox(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton())
-				})
-				ui.Field(c, locales.Connection(), func() {
-					ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
-					ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
-					ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
-				})
-				ui.Field(c, locales.VideoDecoding(), func() { selectLabeled(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName) })
-				ui.Field(c, locales.Security(), func() {
-					ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
-				})
-				ui.Field(c, locales.Window(), func() {
-					ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
-					ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution())
-				})
-				if a.displays != nil {
-					if ds := a.displays(); len(ds) > 1 {
-						ui.Field(c, locales.FullScreenOn(), func() {
-							selectLabeled(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
-								if d == "" {
-									return locales.DisplayCurrent()
+		ui.Column(c).Width(460).Gap(14).Children(func() {
+			ui.Text(c, locales.Settings()).Bold().FontSize(17)
+			ui.Scroll(c).MaxHeight(400).Children(func() {
+				ui.Form(c, func() {
+					ui.Fieldset(c, locales.Interface(), func() {
+						ui.Field(c, locales.Language(), func() {
+							if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
+								a.saveConfig()
+								if a.setLocale != nil {
+									a.setLocale(a.cfg.Language)
 								}
-								return d
-							})
+							}
 						})
-					}
+						ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
+						ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
+					})
+					ui.Fieldset(c, locales.Video(), func() {
+						ui.Field(c, locales.VideoMode(), func() {
+							ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
+						})
+						ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
+						ui.Field(c, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
+							ui.Slider(c, &a.quality, 0, 9)
+						})
+						ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
+						ui.Field(c, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() { ui.Slider(c, &a.maxFPS, 0, 60) })
+						ui.Field(c, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() { ui.Slider(c, &a.maxKbps, 0, 60000) })
+						ui.Field(c, locales.H264GOP()+": "+gopText(a.gop), func() { ui.Slider(c, &a.gop, 0, 300) })
+						ui.Field(c, locales.Orientation(), func() {
+							ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°")
+						})
+						ui.Field(c, locales.VideoDecoding(), func() {
+							selectLabeled(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
+						})
+					})
+					ui.Fieldset(c, locales.Clipboard(), func() {
+						ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
+						ui.Field(c, locales.Clipboard(), func() {
+							ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard())
+							ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard())
+						})
+					})
+					ui.Fieldset(c, locales.Input(), func() {
+						ui.Field(c, locales.Input(), func() {
+							ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly())
+							ui.Checkbox(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton())
+						})
+					})
+					ui.Fieldset(c, locales.Connection(), func() {
+						ui.Field(c, locales.Connection(), func() {
+							ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
+							ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
+							ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
+						})
+						ui.Field(c, locales.Security(), func() {
+							ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
+						})
+					})
+					ui.Fieldset(c, locales.Window(), func() {
+						ui.Field(c, locales.Window(), func() {
+							ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
+							ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution())
+						})
+						if a.displays != nil {
+							if ds := a.displays(); len(ds) > 1 {
+								ui.Field(c, locales.FullScreenOn(), func() {
+									selectLabeled(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
+										if d == "" {
+											return locales.DisplayCurrent()
+										}
+										return d
+									})
+								})
+							}
+						}
+					})
+				})
+			})
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if a.importFile != nil && ui.Button(c, locales.ImportTiger()).Clicked() {
+					apply()
+					a.importFile()
+				}
+				if a.exportFile != nil && ui.Button(c, locales.ExportTiger()).Clicked() {
+					apply()
+					a.exportFile()
+				}
+				if ui.PrimaryButton(c, locales.Ok()).Clicked() {
+					apply()
 				}
 			})
-		})
-		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if a.importFile != nil && ui.Button(c, locales.ImportTiger()).Clicked() {
-				apply()
-				a.importFile()
-			}
-			if a.exportFile != nil && ui.Button(c, locales.ExportTiger()).Clicked() {
-				apply()
-				a.exportFile()
-			}
-			if ui.PrimaryButton(c, locales.Ok()).Clicked() {
-				apply()
-			}
 		})
 	}).Dismissed() {
 		apply()

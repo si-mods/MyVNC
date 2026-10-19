@@ -49,6 +49,8 @@
   "downloadDone": "已保存到 {path}",
   "downloadFailed": "下载失败：{err}",
   "input": "输入",
+  "video": "视频",
+  "interface": "界面",
   "viewOnly": "仅查看",
   "emulateMiddleButton": "模拟鼠标中键（左键 + 右键）",
   "connection": "连接",

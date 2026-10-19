@@ -23,9 +23,11 @@ func TestSettingsVideoControls(t *testing.T) {
 	if err := a.tt.Click("Legacy MJPEG"); err != nil {
 		t.Fatal(err)
 	}
+	a.tt.Frame()
 	if err := a.tt.Click("OK"); err != nil {
 		t.Fatal(err)
 	}
+	a.tt.Frame()
 	if a.cfg.HighPerformance || a.cfg.Encoding != "Tight" {
 		t.Errorf("legacy mode: hp %v encoding %q", a.cfg.HighPerformance, a.cfg.Encoding)
 	}
