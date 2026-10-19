@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.7 (2026-10-18). Open work is tracked in GitHub issues.
+Status as of v0.0.8 (2026-10-19). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -60,6 +60,13 @@ Status as of v0.0.7 (2026-10-18). Open work is tracked in GitHub issues.
 - v0.0.7:
   - The stats HUD counts High Performance pictures: FPS shown, decode ms,
     media Mbit/s and dropped pictures (#40).
+- v0.0.8:
+  - ARD file-copy upload end to end: ItemInfo/NewItem/data/EndSession,
+    200000-byte file verified with matching SHA-256 and mode 0644 (#43).
+  - Compressed 0x67 uploads: level-9 zlib, one continuous stream, 3%
+    threshold; text uploads shrink by orders of magnitude.
+  - Clipboard files from Windows to a Mac: copied files upload to
+    ~/Downloads and their file URL goes on the Mac pasteboard.
 
 ## Deferred by the owner
 
