@@ -109,6 +109,10 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
     H.264 / Legacy MJPEG), JPEG quality, max fps, H.264 kbps, H.264
     GOP and display orientation (0/90/180/270), with sliders and a
     segmented control.
+- v0.0.18:
+  - A custom dark theme (near-black surfaces, blue accent, 8 px
+    radius) and a restyled home and settings: a centered card grid
+    with bordered, hover-lit cards, and grouped fieldsets.
 
 ## Deferred by the owner
 
