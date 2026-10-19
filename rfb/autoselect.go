@@ -69,16 +69,79 @@ func autoQuality(bps uint64) int {
 
 func autoFullColour(bps uint64) bool { return bps > fullColourBPS }
 
+// LinkState is how the line looks for interactive use: throughput alone
+// cannot tell a clean LAN from a high-latency or jittery link.
+type LinkState int
+
+const (
+	LinkGood LinkState = iota
+	LinkOK
+	LinkPoor
+)
+
+func (s LinkState) String() string {
+	switch s {
+	case LinkOK:
+		return "ok"
+	case LinkPoor:
+		return "poor"
+	}
+	return "good"
+}
+
+// linkStateFor grades a fence round trip and its variation. RTT is what
+// interactive input feels; jitter is what makes a picture stall.
+func linkStateFor(rtt, jitter time.Duration) LinkState {
+	switch {
+	case rtt >= 400*time.Millisecond || jitter >= 250*time.Millisecond:
+		return LinkPoor
+	case rtt >= 120*time.Millisecond || jitter >= 80*time.Millisecond:
+		return LinkOK
+	}
+	return LinkGood
+}
+
+// autoQualityFor caps the throughput tier by the link state: a fast but
+// high-latency or jittery link should not be sent LAN-quality JPEG,
+// because the bytes arrive too late to help.
+func autoQualityFor(bps uint64, rtt, jitter time.Duration) int {
+	q := autoQuality(bps)
+	switch linkStateFor(rtt, jitter) {
+	case LinkPoor:
+		q = min(q, 3)
+	case LinkOK:
+		q = min(q, 6)
+	}
+	return q
+}
+
 // LinkStats is what AutoSelect measured and chose.
 type LinkStats struct {
-	Kbps int64         // line speed estimate, kbit/s
-	RTT  time.Duration // last fence round trip; 0 before one (AutoSelect only)
-	Auto bool          // AutoSelect is on
+	Kbps   int64         // line speed estimate, kbit/s
+	RTT    time.Duration // smoothed fence round trip; 0 before one
+	Jitter time.Duration // smoothed RTT variation
+	State  LinkState     // good, ok or poor, from RTT and jitter
+	Auto   bool          // AutoSelect is on
 	// Encoding is the preferred encoding asked for; Quality the JPEG
 	// quality level, -1 for none; FullColour false means 256 colours.
 	Encoding   int32
 	Quality    int
 	FullColour bool
+
+	CacheHits, CacheMisses int64
+	CopyRects, CopyPixels  int64
+	CursorHits             int64
+	Encodings              []EncodingStat
+}
+
+// EncodingStat is one real encoding's traffic in this connection.
+type EncodingStat struct {
+	Encoding     int32
+	Bytes, Rects int64
+}
+
+type encodingStat struct {
+	bytes, rects int64
 }
 
 // LinkStats reports the line speed estimate and the AutoSelect choices;
@@ -90,8 +153,19 @@ func (c *Client) LinkStats() LinkStats {
 	if i := slices.IndexFunc(c.encs, func(e int32) bool { return e >= 0 && e <= 255 }); i >= 0 {
 		enc = c.encs[i]
 	}
-	return LinkStats{Kbps: int64(c.bps / 1000), RTT: c.rtt, Auto: c.auto, Encoding: enc,
-		Quality: c.quality, FullColour: c.fullColour}
+	c.encMu.Lock()
+	stats := make([]EncodingStat, 0, len(c.encStats))
+	for e, n := range c.encStats {
+		stats = append(stats, EncodingStat{Encoding: e, Bytes: n.bytes, Rects: n.rects})
+	}
+	c.encMu.Unlock()
+	slices.SortFunc(stats, func(a, b EncodingStat) int { return int(a.Encoding - b.Encoding) })
+	return LinkStats{Kbps: int64(c.bps / 1000), RTT: c.rtt, Jitter: c.jitter,
+		State: linkStateFor(c.rtt, c.jitter), Auto: c.auto, Encoding: enc,
+		Quality: c.quality, FullColour: c.fullColour,
+		CacheHits: c.dm.cacheHits.Load(), CacheMisses: c.dm.cacheMisses.Load(),
+		CopyRects: c.copyRects.Load(), CopyPixels: c.copyPixels.Load(),
+		CursorHits: c.cursorHits.Load(), Encodings: stats}
 }
 
 // countConn counts the bytes read from the socket.
@@ -196,7 +270,7 @@ func (c *Client) autoSelectLocked() error {
 		return nil
 	}
 	kbps := c.bps / 1000
-	if q := autoQuality(c.bps); q != c.quality {
+	if q := autoQualityFor(c.bps, c.rtt, c.jitter); q != c.quality {
 		if q != c.qualityNext {
 			c.qualityNext, c.qualityAt = q, time.Now()
 		}
@@ -224,8 +298,6 @@ func (c *Client) autoSelectLocked() error {
 			c.nextPF = &pf
 		}
 	}
-	// ponytail: the round trip is shown, not used; TigerVNC's viewer
-	// sends no fences of its own and chooses by throughput alone.
 	if c.fenceSeen && c.pingAt.IsZero() && time.Since(c.lastPing) >= time.Second {
 		c.pingAt, c.lastPing = time.Now(), time.Now()
 		return c.writeLocked(fenceMsg(fenceRequest, []byte(pingData)))
@@ -239,7 +311,17 @@ func (c *Client) fenceReply(data []byte) {
 		return
 	}
 	c.mu.Lock()
-	c.rtt = time.Since(c.pingAt)
+	sample := time.Since(c.pingAt)
+	if c.rtt == 0 {
+		c.rtt, c.jitter = sample, 0
+	} else {
+		diff := sample - c.rtt
+		if diff < 0 {
+			diff = -diff
+		}
+		c.jitter = (c.jitter*3 + diff) / 4
+		c.rtt = (c.rtt*3 + sample) / 4
+	}
 	c.mu.Unlock()
 	c.pingAt = time.Time{}
 }

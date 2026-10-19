@@ -243,34 +243,84 @@ func (msgs Messages) VideoMode() string {
 	return Catalog.Format(msgs.locale, "videoMode", nil)
 }
 
-// ModeWebRTC says "WebRTC H.264"
+// ModeWebRTC says "ARD High Performance"
 // in the language the app shows.
 func ModeWebRTC() string { return In(i18n.Locale()).ModeWebRTC() }
 
-// ModeWebRTC says "WebRTC H.264"
+// ModeWebRTC says "ARD High Performance"
 // in the language of msgs.
 func (msgs Messages) ModeWebRTC() string {
 	return Catalog.Format(msgs.locale, "modeWebRTC", nil)
 }
 
-// ModeDirect says "Direct H.264"
+// ModeDirect says "H.264 over RFB"
 // in the language the app shows.
 func ModeDirect() string { return In(i18n.Locale()).ModeDirect() }
 
-// ModeDirect says "Direct H.264"
+// ModeDirect says "H.264 over RFB"
 // in the language of msgs.
 func (msgs Messages) ModeDirect() string {
 	return Catalog.Format(msgs.locale, "modeDirect", nil)
 }
 
-// ModeLegacy says "Legacy MJPEG"
+// ModeLegacy says "JPEG (Tight)"
 // in the language the app shows.
 func ModeLegacy() string { return In(i18n.Locale()).ModeLegacy() }
 
-// ModeLegacy says "Legacy MJPEG"
+// ModeLegacy says "JPEG (Tight)"
 // in the language of msgs.
 func (msgs Messages) ModeLegacy() string {
 	return Catalog.Format(msgs.locale, "modeLegacy", nil)
+}
+
+// Profile says "Preset"
+// in the language the app shows.
+func Profile() string { return In(i18n.Locale()).Profile() }
+
+// Profile says "Preset"
+// in the language of msgs.
+func (msgs Messages) Profile() string {
+	return Catalog.Format(msgs.locale, "profile", nil)
+}
+
+// ProfileLAN says "LAN"
+// in the language the app shows.
+func ProfileLAN() string { return In(i18n.Locale()).ProfileLAN() }
+
+// ProfileLAN says "LAN"
+// in the language of msgs.
+func (msgs Messages) ProfileLAN() string {
+	return Catalog.Format(msgs.locale, "profileLAN", nil)
+}
+
+// ProfileWAN says "WAN"
+// in the language the app shows.
+func ProfileWAN() string { return In(i18n.Locale()).ProfileWAN() }
+
+// ProfileWAN says "WAN"
+// in the language of msgs.
+func (msgs Messages) ProfileWAN() string {
+	return Catalog.Format(msgs.locale, "profileWAN", nil)
+}
+
+// ProfileMobile says "Mobile"
+// in the language the app shows.
+func ProfileMobile() string { return In(i18n.Locale()).ProfileMobile() }
+
+// ProfileMobile says "Mobile"
+// in the language of msgs.
+func (msgs Messages) ProfileMobile() string {
+	return Catalog.Format(msgs.locale, "profileMobile", nil)
+}
+
+// LegacyBandwidthWarning says "Legacy MJPEG can use 5–20× the bandwidth of H.264 at similar quality. Prefer ARD High Performance or H.264 over RF…"
+// in the language the app shows.
+func LegacyBandwidthWarning() string { return In(i18n.Locale()).LegacyBandwidthWarning() }
+
+// LegacyBandwidthWarning says "Legacy MJPEG can use 5–20× the bandwidth of H.264 at similar quality. Prefer ARD High Performance or H.264 over RF…"
+// in the language of msgs.
+func (msgs Messages) LegacyBandwidthWarning() string {
+	return Catalog.Format(msgs.locale, "legacyBandwidthWarning", nil)
 }
 
 // MaxFPS says "Max fps"
@@ -1195,6 +1245,58 @@ func StatsLink(kbps string, rtt string) string { return In(i18n.Locale()).StatsL
 // measured.
 func (msgs Messages) StatsLink(kbps string, rtt string) string {
 	return Catalog.Format(msgs.locale, "statsLink", map[string]any{"kbps": kbps, "rtt": rtt})
+}
+
+// StatsLinkState says "Link state: {state}"
+// in the language the app shows.
+func StatsLinkState(state string) string { return In(i18n.Locale()).StatsLinkState(state) }
+
+// StatsLinkState says "Link state: {state}"
+// in the language of msgs.
+func (msgs Messages) StatsLinkState(state string) string {
+	return Catalog.Format(msgs.locale, "statsLinkState", map[string]any{"state": state})
+}
+
+// StatsKeys says "Keyframes {keys}, {mb} MB"
+// in the language the app shows.
+func StatsKeys(keys string, mb string) string { return In(i18n.Locale()).StatsKeys(keys, mb) }
+
+// StatsKeys says "Keyframes {keys}, {mb} MB"
+// in the language of msgs.
+func (msgs Messages) StatsKeys(keys string, mb string) string {
+	return Catalog.Format(msgs.locale, "statsKeys", map[string]any{"keys": keys, "mb": mb})
+}
+
+// StatsRecovery says "recovered in {ms} ms"
+// in the language the app shows.
+func StatsRecovery(ms string) string { return In(i18n.Locale()).StatsRecovery(ms) }
+
+// StatsRecovery says "recovered in {ms} ms"
+// in the language of msgs.
+func (msgs Messages) StatsRecovery(ms string) string {
+	return Catalog.Format(msgs.locale, "statsRecovery", map[string]any{"ms": ms})
+}
+
+// StatsCache says "Tile cache {hits} hit/{misses} miss, CopyRect {copy}, cursor {cursor}"
+// in the language the app shows.
+func StatsCache(hits string, misses string, copy string, cursor string) string {
+	return In(i18n.Locale()).StatsCache(hits, misses, copy, cursor)
+}
+
+// StatsCache says "Tile cache {hits} hit/{misses} miss, CopyRect {copy}, cursor {cursor}"
+// in the language of msgs.
+func (msgs Messages) StatsCache(hits string, misses string, copy string, cursor string) string {
+	return Catalog.Format(msgs.locale, "statsCache", map[string]any{"hits": hits, "misses": misses, "copy": copy, "cursor": cursor})
+}
+
+// StatsEncodings says "Encodings: {summary}"
+// in the language the app shows.
+func StatsEncodings(summary string) string { return In(i18n.Locale()).StatsEncodings(summary) }
+
+// StatsEncodings says "Encodings: {summary}"
+// in the language of msgs.
+func (msgs Messages) StatsEncodings(summary string) string {
+	return Catalog.Format(msgs.locale, "statsEncodings", map[string]any{"summary": summary})
 }
 
 // StatsRequested says "Asked {name}{auto, select, yes { (auto)} other {}}, quality {quality}, {colour, select, full {full colour} other {256…"

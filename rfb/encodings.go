@@ -15,6 +15,9 @@ const (
 	EncodingZRLE     int32 = 16
 	EncodingJPEG     int32 = 21
 	EncodingH264     int32 = 50
+	// EncodingAV1 is a private extension for future screen-content
+	// transports; no stock RFB server sends it.
+	EncodingAV1 int32 = 51
 
 	// Apple Remote Desktop encodings; advertised to ARD servers only.
 	EncodingARDHalftone  int32 = 1000

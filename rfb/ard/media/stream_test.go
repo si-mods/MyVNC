@@ -85,4 +85,8 @@ func TestStreamLoopback(t *testing.T) {
 	if st.Video.SRTPOK != 2 || st.Units != 1 || st.Keys != 1 || st.Video.PayloadType != 100 {
 		t.Errorf("stats %+v", st)
 	}
+	wantKey := uint64(len(hevcNAL(32, 1)) + len(hevcNAL(33, 2)) + len(hevcNAL(34, 3)) + len(hevcNAL(19, 4, 5, 6)))
+	if st.KeyBytes != wantKey || st.SinceKey != 0 {
+		t.Errorf("key bytes %d, since key %d; want %d, 0", st.KeyBytes, st.SinceKey, wantKey)
+	}
 }

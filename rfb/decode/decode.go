@@ -48,6 +48,9 @@ func NewMode(mode mf.Mode) map[int32]pixel.Decoder {
 	if H264Available() {
 		m[EncH264] = &H264{Mode: mode}
 	}
+	if AV1Available() {
+		m[EncAV1] = &AV1{Mode: mode}
+	}
 	return m
 }
 
