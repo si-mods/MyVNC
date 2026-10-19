@@ -155,6 +155,7 @@
   "statsLink": "Line {kbps} kbit/s, RTT {rtt} ms",
   "statsLinkState": "Link state: {state}",
   "statsKeys": "Keyframes {keys}, {mb} MB",
+  "statsRecovery": "recovered in {ms} ms",
   "statsCache": "Tile cache {hits} hit/{misses} miss, CopyRect {copy}, cursor {cursor}",
   "statsEncodings": "Encodings: {summary}",
   "@statsLink": { "description": "Throughput estimate and fence round trip; rtt is a dash before one is measured." },

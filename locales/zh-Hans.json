@@ -115,6 +115,7 @@
   "statsLink": "线路 {kbps} kbit/s，往返 {rtt} 毫秒",
   "statsLinkState": "链路状态：{state}",
   "statsKeys": "关键帧 {keys}，{mb} MB",
+  "statsRecovery": "恢复耗时 {ms} 毫秒",
   "statsCache": "Tile 缓存命中 {hits}/未中 {misses}，CopyRect {copy}，光标 {cursor}",
   "statsEncodings": "编码用量：{summary}",
   "statsRequested": "请求 {name}{auto, select, yes {（自动）} other {}}，画质 {quality}，{colour, select, full {全彩} other {256 色}}",

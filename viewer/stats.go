@@ -20,13 +20,15 @@ type Stats struct {
 	Encoding int32 // of the last rectangle decoded
 
 	// High Performance's media stream, which the counters above do not see.
-	MediaDecoded  int64 // pictures decoded, shown or not
-	MediaDecodeNs int64 // spent decoding them
-	MediaShown    int64 // pictures handed to the UI
-	MediaBytes    int64 // video access units received
-	MediaKeys     int64 // key pictures among them
-	MediaKeyBytes int64 // wire bytes in key pictures
-	MediaSinceKey int   // pictures since the last key picture
+	MediaDecoded    int64 // pictures decoded, shown or not
+	MediaDecodeNs   int64 // spent decoding them
+	MediaShown      int64 // pictures handed to the UI
+	MediaBytes      int64 // video access units received
+	MediaKeys       int64 // key pictures among them
+	MediaKeyBytes   int64 // wire bytes in key pictures
+	MediaSinceKey   int   // pictures since the last key picture
+	MediaRecoveries int64 // loss episodes ended by a key picture
+	MediaRecoveryMs int64 // the last recovery, in milliseconds
 }
 
 type counters struct {
@@ -45,6 +47,7 @@ func (s *Session) Stats() Stats {
 	if m := s.c.MediaStream(); m != nil {
 		ms := m.Stats()
 		st.MediaKeys, st.MediaKeyBytes, st.MediaSinceKey = int64(ms.Keys), int64(ms.KeyBytes), ms.SinceKey
+		st.MediaRecoveries, st.MediaRecoveryMs = int64(ms.Recoveries), ms.RecoveryMs
 	}
 	return st
 }
