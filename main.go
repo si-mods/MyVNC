@@ -158,6 +158,18 @@ type reconnect struct {
 	timer   *time.Timer
 }
 
+// setThemeSource applies the saved appearance: system, light or dark.
+func setThemeSource(s string) {
+	switch s {
+	case "light":
+		mygo.Theme.SetSource(mygo.ThemeLight)
+	case "dark":
+		mygo.Theme.SetSource(mygo.ThemeDark)
+	default:
+		mygo.Theme.SetSource(mygo.ThemeSystem)
+	}
+}
+
 func newApp(dir string) *app {
 	a := &app{
 		dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")},
@@ -1323,7 +1335,7 @@ func main() {
 		fmt.Print(usage())
 		return
 	}
-	mygo.Theme.SetSource(mygo.ThemeDark)
+	setThemeSource(a.cfg.Theme)
 	mygo.App.SetLocale(a.cfg.Language) // the setting is the config's
 	mygo.App.WhenReady(func() {
 		if argErr != nil {

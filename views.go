@@ -27,7 +27,7 @@ import (
 var gear, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`))
 
 func (a *app) view(c *ui.Context) {
-	c.SetTheme(appTheme)
+	c.SetTheme(appTheme(c))
 	a.svc = c.Services()
 	switch {
 	case a.rdp != nil:
@@ -61,9 +61,9 @@ func (a *app) rdpView(c *ui.Context) {
 func (a *app) homeView(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).MaxWidth(1100).WidthPercent(100).AlignSelf(ui.Center).Padding(28).Gap(20).Children(func() {
+		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32).Gap(24).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, appName).FontSize(26).Bold().LetterSpacing(-0.4).Grow(1)
+				ui.Text(c, appName).FontSize(28).FontWeight(600).Grow(1)
 				if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
 					a.openSettings()
 				}
@@ -101,10 +101,10 @@ func banner(c *ui.Context, color ui.Color, text, button string, act func()) {
 // card is a clickable tile of the home grid.
 func card(c *ui.Context, label string, fn func()) ui.Element {
 	t := c.Theme()
-	el := ui.ButtonBase(c).Label(label).Padding(16).Radius(12).Background(t.Surface).
-		Border(1, t.Border).Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.22))
+	el := ui.ButtonBase(c).Label(label).Padding(16).Radius(8).Background(t.Surface).
+		Border(1, t.Border)
 	if el.Hovered() {
-		el.Background(t.SurfaceHover).BorderColor(t.Accent.Alpha(0.55))
+		el.Background(t.SurfaceHover)
 	}
 	return el.Children(func() {
 		ui.Column(c).Gap(6).Grow(1).AlignItems(ui.Center).Children(fn)
@@ -120,7 +120,7 @@ func (a *app) card(c *ui.Context, server string) {
 	}
 	card(c, server, func() {
 		if th := a.thumbnail(server); th != nil {
-			ui.Image(c, th).Height(120).Fit(ui.Contain).Radius(6)
+			ui.Image(c, th).Height(120).Fit(ui.Contain).Radius(4)
 		} else {
 			ui.Box(c).Height(120).Center().Children(func() { a.avatar(c, server, info.Name) })
 		}
@@ -272,11 +272,17 @@ func (a *app) settingsView(c *ui.Context) {
 		a.settingsOpen = false
 	}
 	if ui.Modal(c, &a.settingsOpen, func() {
-		ui.Column(c).Width(460).Gap(14).Children(func() {
-			ui.Text(c, locales.Settings()).Bold().FontSize(17)
+		ui.Column(c).Width(520).Gap(16).Children(func() {
+			ui.Text(c, locales.Settings()).FontSize(20).FontWeight(600)
 			ui.Scroll(c).MaxHeight(400).Children(func() {
 				ui.Form(c, func() {
 					ui.Fieldset(c, locales.Interface(), func() {
+						ui.Field(c, locales.Appearance(), func() {
+							if selectLabeled(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName).Changed() {
+								setThemeSource(a.cfg.Theme)
+								a.saveConfig()
+							}
+						})
 						ui.Field(c, locales.Language(), func() {
 							if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
 								a.saveConfig()
@@ -780,4 +786,16 @@ func gopText(v float64) string {
 		return locales.Auto()
 	}
 	return strconv.Itoa(int(v))
+}
+
+// themeName is an appearance choice in the language shown.
+func themeName(s string) string {
+	switch s {
+	case "light":
+		return locales.ThemeLight()
+	case "dark":
+		return locales.ThemeDark()
+	default:
+		return locales.ThemeSystem()
+	}
 }
