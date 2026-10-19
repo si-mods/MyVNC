@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -404,8 +405,13 @@ func (a *app) sendPointer(x, y int, mask uint16) {
 	}
 }
 
-// wheel turns a scroll into clicks of buttons 4-7: one a notch of a
-// wheel, one each 40 DIPs of a touchpad.
+// wheel turns a scroll into clicks of buttons 4-7. mygo reports a wheel
+// notch as wheelLines*33 DIPs (Windows' default is three lines), while
+// macOS advances one line per button click, so one click per 33 DIPs keeps
+// the two systems' scroll speed aligned. Touchpads accumulate the same
+// distance.
+const scrollLineDIP = 33
+
 func (a *app) wheel(ev ui.InputEvent) []uint16 {
 	var out []uint16
 	for i, d := range [2]float32{ev.DY, ev.DX} {
@@ -414,19 +420,22 @@ func (a *app) wheel(ev ui.InputEvent) []uint16 {
 			neg, pos = 32, 64 // left, right
 		}
 		if !ev.Precise {
-			switch {
-			case d < 0:
-				out = append(out, neg)
-			case d > 0:
-				out = append(out, pos)
+			n := int(math.Round(math.Abs(float64(d)) / scrollLineDIP))
+			n = min(max(n, 1), 16)
+			bit := neg
+			if d > 0 {
+				bit = pos
+			}
+			for range n {
+				out = append(out, bit)
 			}
 			continue
 		}
 		a.scrollAcc[i] += d
-		for ; a.scrollAcc[i] <= -40; a.scrollAcc[i] += 40 {
+		for ; a.scrollAcc[i] <= -scrollLineDIP; a.scrollAcc[i] += scrollLineDIP {
 			out = append(out, neg)
 		}
-		for ; a.scrollAcc[i] >= 40; a.scrollAcc[i] -= 40 {
+		for ; a.scrollAcc[i] >= scrollLineDIP; a.scrollAcc[i] -= scrollLineDIP {
 			out = append(out, pos)
 		}
 	}
