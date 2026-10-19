@@ -104,6 +104,11 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
     estimate between 200 kbit/s and 60 Mbit/s from the delivered rate,
     one-way delay and loss; Standard mode chooses one of six JPEG
     quality tiers (3-8) with a 750 ms hold instead of only 6/8.
+- v0.0.17:
+  - PiKVM-style video settings: Video mode (WebRTC H.264 / Direct
+    H.264 / Legacy MJPEG), JPEG quality, max fps, H.264 kbps, H.264
+    GOP and display orientation (0/90/180/270), with sliders and a
+    segmented control.
 
 ## Deferred by the owner
 
