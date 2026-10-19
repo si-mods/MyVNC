@@ -21,10 +21,8 @@ import (
 	"github.com/kyya/myvnc/locales"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 )
-
-// gear is the settings icon (Lucide's "settings", ISC license).
-var gear, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`))
 
 func (a *app) view(c *ui.Context) {
 	c.SetTheme(appTheme(c))
@@ -64,7 +62,7 @@ func (a *app) homeView(c *ui.Context) {
 		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32, 32, 32+scrollGutter(t), 32).Gap(24).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, appName).FontSize(28).FontWeight(600).Grow(1)
-				if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
+				if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, lucide.Settings()) }).Clicked() {
 					a.openSettings()
 				}
 			})
@@ -161,10 +159,6 @@ func (a *app) removeServer(server string) {
 	}
 }
 
-// monitor is the icon of a computer without a name (Lucide's "monitor",
-// ISC license).
-var monitor, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 21h8M12 17v4"/></svg>`))
-
 // avatar is the picture of a computer: the initials of the desktop name,
 // or of a host name, else a computer, for an IP address would give its
 // first digits.
@@ -175,7 +169,7 @@ func (a *app) avatar(c *ui.Context, server, name string) {
 		if _, ipErr := netip.ParseAddr(host); err != nil || ipErr == nil {
 			size := c.Theme().FontSize * 2.25
 			ui.Box(c).Size(size, size).Radius(size / 2).Center().Background(c.Theme().TextMuted).Label(server).Children(func() {
-				ui.Icon(c, monitor).TextColor(ui.RGB(255, 255, 255))
+				ui.Icon(c, lucide.Monitor()).TextColor(ui.RGB(255, 255, 255))
 			})
 			return
 		}
@@ -284,12 +278,12 @@ func (a *app) settingsView(c *ui.Context) {
 				ui.Column(c).Width(200).PaddingY(8).Background(t.Surface).
 					BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 					ui.Sidebar(c, &a.settingsTab, func() {
-						ui.SidebarItem(c, "interface", iconInterface, locales.Interface())
-						ui.SidebarItem(c, "video", iconVideo, locales.Video())
-						ui.SidebarItem(c, "clipboard", iconClipboard, locales.Clipboard())
-						ui.SidebarItem(c, "input", iconInput, locales.Input())
-						ui.SidebarItem(c, "connection", iconConnection, locales.Connection())
-						ui.SidebarItem(c, "window", iconWindow, locales.Window())
+						ui.SidebarItem(c, "interface", lucide.SlidersHorizontal(), locales.Interface())
+						ui.SidebarItem(c, "video", lucide.MonitorPlay(), locales.Video())
+						ui.SidebarItem(c, "clipboard", lucide.Clipboard(), locales.Clipboard())
+						ui.SidebarItem(c, "input", lucide.Keyboard(), locales.Input())
+						ui.SidebarItem(c, "connection", lucide.Plug(), locales.Connection())
+						ui.SidebarItem(c, "window", lucide.AppWindow(), locales.Window())
 					}).Grow(1)
 				})
 				ui.Scroll(c).Grow(1).Children(func() {
@@ -329,16 +323,6 @@ func (a *app) settingsView(c *ui.Context) {
 		apply()
 	}
 }
-
-// Settings page icons (Lucide, ISC license).
-var (
-	iconInterface  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>`))
-	iconVideo      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M10 9.5l4.5 2.5-4.5 2.5z"/></svg>`))
-	iconClipboard  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>`))
-	iconInput      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/></svg>`))
-	iconConnection = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>`))
-	iconWindow     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg>`))
-)
 
 // scrollGutter is the room a scroll's bar takes at its right edge, so
 // that content does not run under it.
