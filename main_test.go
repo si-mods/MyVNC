@@ -737,3 +737,42 @@ func TestRemoveServer(t *testing.T) {
 		t.Errorf("card still shown: %q", a.tt.Texts())
 	}
 }
+
+func TestWheelSteps(t *testing.T) {
+	a := &app{}
+	count := func(ev ui.InputEvent, bit uint16) int {
+		n := 0
+		for _, b := range a.wheel(ev) {
+			if b == bit {
+				n++
+			}
+		}
+		return n
+	}
+	cases := []struct {
+		ev   ui.InputEvent
+		bit  uint16
+		want int
+	}{
+		{ui.InputEvent{DY: -99}, 8, 3},  // one Windows notch up -> three clicks
+		{ui.InputEvent{DY: 99}, 16, 3},  // and down
+		{ui.InputEvent{DY: -33}, 8, 1},  // one line
+		{ui.InputEvent{DY: -198}, 8, 6}, // fast wheel
+		{ui.InputEvent{DX: 66}, 64, 2},  // horizontal
+	}
+	for _, c := range cases {
+		if got := count(c.ev, c.bit); got != c.want {
+			t.Errorf("wheel(%+v) bit %d = %d, want %d", c.ev, c.bit, got, c.want)
+		}
+	}
+	// A touchpad accumulates the same distance across small events: four
+	// 8-DIP steps are 32, one more reaches the 33-DIP line.
+	for range 4 {
+		if n := count(ui.InputEvent{DY: -8, Precise: true}, 8); n != 0 {
+			t.Fatalf("precise partial step sent %d", n)
+		}
+	}
+	if n := count(ui.InputEvent{DY: -1, Precise: true}, 8); n != 1 {
+		t.Errorf("precise accumulator did not reach one click: %d", n)
+	}
+}
