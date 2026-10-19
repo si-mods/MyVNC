@@ -67,6 +67,7 @@ type Stats struct {
 	Late, Missing uint64
 	RR, RCTL      uint64 // feedback sent
 	PLI, Refresh  uint64
+	TargetKbps    int // adaptive RCTL bandwidth estimate
 	Acks          uint64
 	SendErrors    uint64
 	LastSendError string
@@ -219,6 +220,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		dep        = Depacketizer{DONL: s.cfg.DONL}
 		order      reorder
 		feedback   = NewRateFeedback(time.Now())
+		rateCtl    = newRateControl()
 		mediaSSRC  uint32
 		owed       ask
 		asked      time.Time
@@ -230,6 +232,9 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 	)
 	defer report.Stop()
 	defer rate.Stop()
+	s.mu.Lock()
+	s.stats.TargetKbps = rateCtl.target
+	s.mu.Unlock()
 	send := func(c *net.UDPConn, b []byte, counter *uint64) {
 		_, err := c.Write(b)
 		s.mu.Lock()
@@ -248,6 +253,14 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			send(s.audio, audioOut.Protect(ReceiverReport(sec.AudioSSRC)), &s.stats.RR)
 			send(s.video, videoOut.Protect(ReceiverReport(sec.VideoSSRC)), &s.stats.RR)
 		case now := <-rate.C:
+			s.mu.Lock()
+			bytes, missing := s.stats.Video.Bytes, s.stats.Missing
+			s.mu.Unlock()
+			target := rateCtl.step(now, bytes, missing, feedback.Delay())
+			feedback.SetBandwidth(target)
+			s.mu.Lock()
+			s.stats.TargetKbps = target
+			s.mu.Unlock()
 			if r := feedback.Report(sec.VideoSSRC, now); r != nil {
 				send(s.video, videoOut.Protect(r), &s.stats.RCTL)
 			}
