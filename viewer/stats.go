@@ -20,10 +20,15 @@ type Stats struct {
 	Encoding int32 // of the last rectangle decoded
 
 	// High Performance's media stream, which the counters above do not see.
-	MediaDecoded  int64 // pictures decoded, shown or not
-	MediaDecodeNs int64 // spent decoding them
-	MediaShown    int64 // pictures handed to the UI
-	MediaBytes    int64 // video access units received
+	MediaDecoded    int64 // pictures decoded, shown or not
+	MediaDecodeNs   int64 // spent decoding them
+	MediaShown      int64 // pictures handed to the UI
+	MediaBytes      int64 // video access units received
+	MediaKeys       int64 // key pictures among them
+	MediaKeyBytes   int64 // wire bytes in key pictures
+	MediaSinceKey   int   // pictures since the last key picture
+	MediaRecoveries int64 // loss episodes ended by a key picture
+	MediaRecoveryMs int64 // the last recovery, in milliseconds
 }
 
 type counters struct {
@@ -35,8 +40,16 @@ type counters struct {
 
 // Stats returns the totals so far; any goroutine.
 func (s *Session) Stats() Stats {
-	return Stats{s.n.updates.Load(), s.n.decodeNs.Load(), s.n.bytes.Load(), s.n.encoding.Load(),
-		s.n.mediaDecoded.Load(), s.n.mediaDecodeNs.Load(), s.n.mediaShown.Load(), s.n.mediaBytes.Load()}
+	st := Stats{Updates: s.n.updates.Load(), DecodeNs: s.n.decodeNs.Load(),
+		Bytes: s.n.bytes.Load(), Encoding: s.n.encoding.Load(),
+		MediaDecoded: s.n.mediaDecoded.Load(), MediaDecodeNs: s.n.mediaDecodeNs.Load(),
+		MediaShown: s.n.mediaShown.Load(), MediaBytes: s.n.mediaBytes.Load()}
+	if m := s.c.MediaStream(); m != nil {
+		ms := m.Stats()
+		st.MediaKeys, st.MediaKeyBytes, st.MediaSinceKey = int64(ms.Keys), int64(ms.KeyBytes), ms.SinceKey
+		st.MediaRecoveries, st.MediaRecoveryMs = int64(ms.Recoveries), ms.RecoveryMs
+	}
+	return st
 }
 
 // Link is what rfb measured of the line and asks the server for; any
@@ -139,6 +152,8 @@ func EncodingName(e int32) string {
 		return "ZRLE"
 	case rfb.EncodingH264:
 		return "H.264"
+	case rfb.EncodingAV1:
+		return "AV1"
 	case rfb.EncodingARDHalftone, rfb.EncodingARDGray16, rfb.EncodingARDThousands:
 		return "ARD zlib"
 	case rfb.EncodingARDMVS:

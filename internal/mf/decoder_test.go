@@ -218,3 +218,13 @@ func TestStallFallsBack(t *testing.T) {
 		t.Errorf("%d decodes on the GPU, want %d: %v", n, stallUnits, *log)
 	}
 }
+
+// TestHEVCSCCProfile checks the profile-idc path even on machines without
+// an SCC encoder: the SPS below is a minimal Main 4:4:4 SCC header.
+func TestHEVCSCCProfile(t *testing.T) {
+	nal := []byte{33 << 1, 1, 0x01, 0x09}
+	nal = append(nal, make([]byte, 11+24)...)
+	if got := hevcProfile(nal); got != ProfileHEVCSCC {
+		t.Fatalf("profile %q, want %q", got, ProfileHEVCSCC)
+	}
+}

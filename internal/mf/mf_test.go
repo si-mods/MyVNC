@@ -199,3 +199,25 @@ func TestDecodeHidden(t *testing.T) {
 		t.Errorf("center pixel %v, want red", p)
 	}
 }
+
+// TestDecodeAV1 decodes one AV1 OBU when the AV1 Video Extension is
+// installed; otherwise it skips.
+func TestDecodeAV1(t *testing.T) {
+	data, err := os.ReadFile("testdata/red.av1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDecoder(AV1, Software)
+	if err != nil {
+		t.Skipf("no AV1 decoder: %v", err)
+	}
+	defer d.Close()
+	frames, err := d.Decode(data, 1)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(frames) == 0 {
+		t.Fatal("no frames")
+	}
+	t.Logf("AV1 %dx%d, %s", frames[0].Rect.Dx(), frames[0].Rect.Dy(), d.Info().Decoding())
+}
