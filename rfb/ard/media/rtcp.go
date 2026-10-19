@@ -53,11 +53,11 @@ const (
 // RateFeedback builds the RCTL report Apple's viewer sends every 50 ms on
 // the picture's leg, from the picture packets that arrived.
 type RateFeedback struct {
-	epoch    time.Time
-	ssrc     uint32
-	have     bool
-	lastTS   uint32
-	lastAt   time.Time
+	epoch     time.Time
+	ssrc      uint32
+	have      bool
+	lastTS    uint32
+	lastAt    time.Time
 	received  uint32
 	delay     oneWayDelay
 	bandwidth uint16 // kbit/s; 0 means defaultBandwidth
