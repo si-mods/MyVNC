@@ -214,6 +214,7 @@ type Config struct {
 	AcceptClipboard     bool   // take the server's clipboard
 	SendClipboard       bool   // give the server the local clipboard
 	Language            string // of the UI, as "zh-Hans"; "" follows the system
+	Theme               string // "", "light" or "dark"; "" follows the system
 }
 
 // Computer is what the home view knows of a server.
@@ -268,6 +269,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if !slices.Contains(VideoDecodings, c.VideoDecoding) {
 		c.VideoDecoding = "Auto"
+	}
+	if c.Theme != "" && c.Theme != "light" && c.Theme != "dark" {
+		c.Theme = ""
 	}
 	if !slices.Contains(Scalings, c.Scaling) {
 		c.Scaling = "Fit"
