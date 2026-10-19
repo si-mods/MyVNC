@@ -35,7 +35,13 @@ all input. Press **Ctrl+Alt+Shift+Q** to leave the session.
 4. In-place activation through a minimal `IOleClientSite` / `IOleInPlaceSite`
    implemented with `syscall.NewCallback`, then `DoVerb(OLEIVERB_INPLACEACTIVATE)`.
 5. The control's window is parented to a `STATIC` child of the main window and
-   resized with `IOleInPlaceObject::SetObjectRects`.
+   resized with `IOleInPlaceObject::SetObjectRects`. The host is raised above
+   mygo's drawing surface every frame; without that the black surface covers
+   the control (the "connected but black" symptom).
+6. A window resize changes the remote desktop size through
+   `IMsRdpClient9::UpdateSessionDisplaySettings` (desktop and physical size,
+   orientation 0, DPI scale factors), debounced 250 ms after the size settles.
+   SmartSizing stays on as a fallback for servers without dynamic resize.
 
 ## Limits
 

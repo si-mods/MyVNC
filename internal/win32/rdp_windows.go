@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -23,6 +24,7 @@ var (
 	procCoCreate      = ole32.NewProc("CoCreateInstance")
 	procSysAllocStr   = oleaut32.NewProc("SysAllocString")
 	procSysFreeStr    = oleaut32.NewProc("SysFreeString")
+	procSysStringLen  = oleaut32.NewProc("SysStringLen")
 
 	rdpCreateWindowExW = user32.NewProc("CreateWindowExW")
 	rdpDestroyWindow   = user32.NewProc("DestroyWindow")
@@ -30,6 +32,8 @@ var (
 	rdpShowWindow      = user32.NewProc("ShowWindow")
 	rdpSetParent       = user32.NewProc("SetParent")
 	rdpSetFocus        = user32.NewProc("SetFocus")
+	rdpSetWindowPos    = user32.NewProc("SetWindowPos")
+	rdpGetDpiForWindow = user32.NewProc("GetDpiForWindow")
 	rdpGetWindowLong   = user32.NewProc("GetWindowLongPtrW")
 	rdpSetWindowLong   = user32.NewProc("SetWindowLongPtrW")
 	rdpGetClientRect   = user32.NewProc("GetClientRect")
@@ -73,6 +77,7 @@ const (
 	rdpVTBSTR      = 8
 	rdpVTI4        = 3
 	rdpVTBOOL      = 11
+	rdpVTUI4       = 19
 	rdpDispPropPut = -3
 
 	rdpOleInPlaceActivate = ^uintptr(4) // OLEIVERB_INPLACEACTIVATE (-5)
@@ -104,6 +109,18 @@ type rdpVariant struct {
 	_          uint64
 }
 
+type rdpExcepInfo struct {
+	wCode             uint16
+	wReserved         uint16
+	bstrSource        uintptr
+	bstrDescription   uintptr
+	bstrHelpFile      uintptr
+	dwHelpContext     uint32
+	pvReserved        uintptr
+	pfnDeferredFillIn uintptr
+	scode             int32
+}
+
 type rdpDispParams struct {
 	rgvarg            *rdpVariant
 	rgdispidNamedArgs *int32
@@ -124,6 +141,18 @@ func rdpBSTR(s string) uintptr {
 	p, _ := syscall.UTF16PtrFromString(s)
 	r, _, _ := procSysAllocStr.Call(uintptr(unsafe.Pointer(p)))
 	return r
+}
+
+func rdpBSTRString(p uintptr) string {
+	if p == 0 {
+		return ""
+	}
+	n, _, _ := procSysStringLen.Call(p)
+	if n == 0 {
+		return ""
+	}
+	b := unsafe.Slice((*uint16)(rdpPtr(p)), n)
+	return syscall.UTF16ToString(b)
 }
 
 func rdpInvoke(disp uintptr, name string, flags uint32, args ...rdpVariant) (uintptr, error) {
@@ -152,9 +181,19 @@ func rdpInvoke(disp uintptr, name string, flags uint32, args ...rdpVariant) (uin
 		dp.rgdispidNamedArgs = &nm
 	}
 	var res rdpVariant
+	var ei rdpExcepInfo
 	hr, _, _ = syscall.SyscallN(vtbl[6], disp, uintptr(id), 0, 0, uintptr(flags),
-		uintptr(unsafe.Pointer(&dp)), uintptr(unsafe.Pointer(&res)), 0)
+		uintptr(unsafe.Pointer(&dp)), uintptr(unsafe.Pointer(&res)), uintptr(unsafe.Pointer(&ei)))
 	if err := rdpHR(hr); err != nil {
+		if uint32(hr) == 0x80020009 { // DISP_E_EXCEPTION
+			msg := rdpBSTRString(ei.bstrDescription)
+			if msg == "" {
+				msg = "exception"
+			}
+			procSysFreeStr.Call(ei.bstrDescription)
+			procSysFreeStr.Call(ei.bstrSource)
+			return 0, fmt.Errorf("win32: RDP %s: %s (scode %#x)", name, msg, uint32(ei.scode))
+		}
 		return 0, fmt.Errorf("win32: RDP %s: %w", name, err)
 	}
 	return res.val, nil
@@ -318,6 +357,7 @@ type RDP struct {
 	inPlace            uintptr // IOleInPlaceObject
 	site, ip           *rdpComObj
 	visible            bool
+	appliedW, appliedH int32
 }
 
 // NewRDP creates the control in a child window of parent, at the given
@@ -493,6 +533,47 @@ func (r *RDP) Fit(x, y, w, h int32) {
 		pos := [4]int32{0, 0, w, h}
 		vt := (*[16]uintptr)(rdpPtr(*(*uintptr)(rdpPtr(r.inPlace))))
 		syscall.SyscallN(vt[7], r.inPlace, uintptr(unsafe.Pointer(&pos)), uintptr(unsafe.Pointer(&pos)))
+	}
+}
+
+// ResizeRemoteNow asks the session to change its desktop size to the
+// window. SmartSizing stays on as a fallback for servers that do not
+// support dynamic resize. It returns true when a call was made.
+func (r *RDP) ResizeRemoteNow(w, h int32) (bool, error) {
+	if r.disp == 0 || w <= 0 || h <= 0 || (w == r.appliedW && h == r.appliedH) {
+		return false, nil
+	}
+	if !r.Connected() {
+		return false, nil
+	}
+	dpi := int32(96)
+	if v, _, _ := rdpGetDpiForWindow.Call(r.ctrl); v != 0 {
+		dpi = int32(v)
+	}
+	scale := dpi * 100 / 96
+	_, err := rdpInvoke(r.disp, "UpdateSessionDisplaySettings", rdpDispMethod,
+		rdpVariant{vt: rdpVTUI4, val: uintptr(w)},
+		rdpVariant{vt: rdpVTUI4, val: uintptr(h)},
+		rdpVariant{vt: rdpVTUI4, val: uintptr(w)},
+		rdpVariant{vt: rdpVTUI4, val: uintptr(h)},
+		rdpVariant{vt: rdpVTUI4, val: 0}, // orientation
+		rdpVariant{vt: rdpVTUI4, val: uintptr(scale)},
+		rdpVariant{vt: rdpVTUI4, val: uintptr(scale)})
+	// The control applies the size but reports E_UNEXPECTED (0x8000ffff)
+	// on this mstscax build; the remote desktop does change, verified live.
+	if err != nil && !strings.Contains(err.Error(), "scode 0x8000ffff") {
+		return true, err
+	}
+	r.appliedW, r.appliedH = w, h
+	return true, nil
+}
+
+// Raise puts the host above the app's drawing surface. mygo re-raises its
+// own child window, so call this from the frame that shows the session.
+func (r *RDP) Raise() {
+	if r.host != 0 {
+		const swpNoSize, swpNoMove, swpNoActivate = 0x0001, 0x0002, 0x0010
+		rdpSetWindowPos.Call(r.host, 0, 0, 0, 0, 0, swpNoSize|swpNoMove|swpNoActivate)
 	}
 }
 
