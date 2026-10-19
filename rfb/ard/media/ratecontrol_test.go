@@ -9,7 +9,7 @@ import (
 )
 
 func TestRateControl(t *testing.T) {
-	rc := newRateControl()
+	rc := newRateControl(0)
 	t0 := time.Unix(1000, 0)
 	if got := rc.step(t0, 0, 0, 0); got != rateStart {
 		t.Fatalf("start = %d", got)
@@ -73,5 +73,23 @@ func TestRateFeedbackBandwidth(t *testing.T) {
 	f.SetBandwidth(0)
 	if got := bw(); got != 1 {
 		t.Errorf("clamped %d, want 1", got)
+	}
+}
+
+func TestRateControlCap(t *testing.T) {
+	rc := newRateControl(3000)
+	if rc.target != 3000 || rc.max != 3000 {
+		t.Fatalf("start %d max %d, want 3000", rc.target, rc.max)
+	}
+	var bytes uint64
+	for range 100 {
+		bytes += 1 << 20
+		rc.step(rc.lastAt.Add(time.Second), bytes, rc.lastMissing, 0)
+	}
+	if rc.target != 3000 {
+		t.Errorf("target %d, want the 3000 cap", rc.target)
+	}
+	if rc := newRateControl(1); rc.max != rateMin || rc.target != rateMin {
+		t.Errorf("tiny cap: target %d max %d, want %d", rc.target, rc.max, rateMin)
 	}
 }

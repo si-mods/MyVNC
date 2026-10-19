@@ -43,7 +43,13 @@ type StreamConfig struct {
 	// when err is nil; as received with ErrStale or ErrForged. It must
 	// not keep packet.
 	OnPacket func(at time.Time, h RTPHeader, packet []byte, err error)
-	Logger   *slog.Logger
+	// MaxKbps caps the adaptive RCTL bandwidth estimate; 0 is the Mac's
+	// 60 Mbit/s ceiling.
+	MaxKbps int
+	// GOP, when positive, asks for a keyframe after that many pictures,
+	// bounding the effective group of pictures.
+	GOP    int
+	Logger *slog.Logger
 }
 
 // LegStats count one UDP leg.
@@ -83,9 +89,10 @@ type Stream struct {
 	wg           sync.WaitGroup
 	keyframe     chan struct{}
 
-	mu    sync.Mutex
-	stats Stats
-	w, h  uint16 // the answered picture size, for Refresh
+	mu       sync.Mutex
+	stats    Stats
+	w, h     uint16 // the answered picture size, for Refresh
+	sinceKey int    // pictures since the last key picture, for GOP
 }
 
 // Listen binds the audio and video ports on cfg.Local, connects them to
@@ -220,7 +227,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		dep        = Depacketizer{DONL: s.cfg.DONL}
 		order      reorder
 		feedback   = NewRateFeedback(time.Now())
-		rateCtl    = newRateControl()
+		rateCtl    = newRateControl(s.cfg.MaxKbps)
 		mediaSSRC  uint32
 		owed       ask
 		asked      time.Time
@@ -341,6 +348,13 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 		s.stats.Units++
 		if u.Key {
 			s.stats.Keys++
+			s.sinceKey = 0
+		} else {
+			s.sinceKey++
+			if s.cfg.GOP > 0 && s.sinceKey >= s.cfg.GOP {
+				s.sinceKey = 0
+				s.RequestKeyframe()
+			}
 		}
 		s.mu.Unlock()
 		if s.cfg.OnUnit != nil {

@@ -63,6 +63,9 @@ type Session struct {
 	mediaOff   atomic.Bool  // fell back: pictures still decoding are dropped
 	mediaShown atomic.Bool  // the picture is the stream's, not the framebuffer's
 	fbSize     atomic.Int64 // the framebuffer's width<<32 | height, for media pictures
+	rotation   atomic.Int32 // display rotation, degrees clockwise
+	disp       *image.RGBA  // reused rotated copy, UI thread
+	lastSrc    *image.RGBA  // the unrotated picture shown last, UI thread
 
 	// Run's goroutine.
 	imgs    [2]*image.RGBA
@@ -111,7 +114,7 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 	opt.Decoders = timeDecoders(opt.Decoders, &s.n)
 	if opt.HighPerformance != nil {
 		hp := *opt.HighPerformance
-		s.video = newVideoPipe(dec, func() {
+		s.video = newVideoPipe(dec, hp.MaxFPS, func() {
 			if st := s.c.MediaStream(); st != nil {
 				st.RequestKeyframe()
 			}
@@ -256,6 +259,9 @@ func (s *Session) Key(code, keysym uint32, down bool) {
 // Pointer sends the button mask (1 left, 2 middle, 4 right, 8/16 wheel
 // up/down, 32/64 wheel left/right) at framebuffer pixel x, y.
 func (s *Session) Pointer(mask uint16, x, y int) {
+	if deg := int(s.rotation.Load()); deg != 0 {
+		x, y = unrotatePoint(x, y, s.w, s.h, deg)
+	}
 	move := mask == s.ptrMask
 	s.ptrMask = mask
 	s.send(input{ptr: true, move: move, mask: mask, x: x, y: y})
@@ -386,15 +392,9 @@ func (s *Session) ShowMedia(img *image.RGBA, mode string, dec mf.Info) {
 	}
 	s.mediaShown.Store(true)
 	s.n.mediaShown.Add(1)
-	fb := s.fbSize.Load()
 	s.post(func() {
-		if s.Screen == nil {
-			s.Screen = ui.NewBitmap(img)
-		} else {
-			s.Screen.Update(img)
-		}
-		s.Shown, s.Media, s.MediaDecoder = img, mode, dec
-		s.w, s.h = int(fb>>32), int(uint32(fb))
+		s.present(img) // also sets the shown size, rotated or not
+		s.Media, s.MediaDecoder = mode, dec
 		s.free <- struct{}{}
 	})
 }
@@ -519,12 +519,7 @@ func (s *Session) UpdateDone() {
 	// decoding, so it is not the ceiling yet. If it becomes one, split
 	// Screen into tile Bitmaps and update only the dirty tiles.
 	s.post(func() {
-		if s.Screen == nil {
-			s.Screen = ui.NewBitmap(img)
-		} else {
-			s.Screen.Update(img)
-		}
-		s.Shown, s.w, s.h = img, img.Rect.Dx(), img.Rect.Dy()
+		s.present(img)
 		// The image shown until now is free.
 		s.free <- struct{}{}
 	})
@@ -545,7 +540,22 @@ func (s *Session) Cursor(img *image.RGBA, hotspot image.Point) {
 		// does not vanish.
 		img, hotspot = dotCursor(), image.Pt(2, 2)
 	}
-	s.post(func() { s.CursorImage, s.Hotspot = ui.NewBitmap(img), hotspot })
+	s.post(func() {
+		if deg := int(s.rotation.Load()); deg != 0 {
+			sw, sh := img.Rect.Dx(), img.Rect.Dy()
+			var dx, dy int
+			switch deg {
+			case 90:
+				dx, dy = sh-1-hotspot.Y, hotspot.X
+			case 180:
+				dx, dy = sw-1-hotspot.X, sh-1-hotspot.Y
+			case 270:
+				dx, dy = hotspot.Y, sw-1-hotspot.X
+			}
+			img, hotspot = rotateImage(nil, img, deg), image.Pt(dx, dy)
+		}
+		s.CursorImage, s.Hotspot = ui.NewBitmap(img), hotspot
+	})
 }
 
 func blank(img *image.RGBA) bool {
@@ -669,4 +679,36 @@ func (s *Session) H264Decoder() mf.Info {
 		return mf.Info{}
 	}
 	return s.h264.Info()
+}
+
+// SetRotation turns the shown picture clockwise by deg (0, 90, 180 or
+// 270), mapping the pointer back; the framebuffer itself is untouched.
+func (s *Session) SetRotation(deg int) {
+	deg = ((deg % 360) + 360) % 360
+	if deg%90 != 0 {
+		return
+	}
+	s.rotation.Store(int32(deg))
+	s.post(func() {
+		if s.lastSrc != nil {
+			s.present(s.lastSrc)
+		}
+	})
+}
+
+// present uploads img to the UI, rotated as set. UI thread only.
+func (s *Session) present(img *image.RGBA) {
+	s.lastSrc = img
+	if deg := int(s.rotation.Load()); deg != 0 {
+		img = rotateImage(s.disp, img, deg)
+		s.disp = img
+	}
+	if s.Screen == nil {
+		s.Screen = ui.NewBitmap(img)
+	} else if w, h := s.Screen.Size(); w != img.Rect.Dx() || h != img.Rect.Dy() {
+		s.Screen = ui.NewBitmap(img)
+	} else {
+		s.Screen.Update(img)
+	}
+	s.Shown, s.w, s.h = img, img.Rect.Dx(), img.Rect.Dy()
 }

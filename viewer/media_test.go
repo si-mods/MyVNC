@@ -71,7 +71,7 @@ func TestVideoPipe(t *testing.T) {
 	keys := make(chan struct{}, 100)
 	shown := make(chan string, 100)
 	noCodec := make(chan error, 2)
-	p := newVideoPipe(mf.Hardware, func() { keys <- struct{}{} },
+	p := newVideoPipe(mf.Hardware, 0, func() { keys <- struct{}{} },
 		func(img *image.RGBA, mode string, _ mf.Info) { shown <- mode },
 		func(err error) { noCodec <- err }, &n)
 	defer p.close()
