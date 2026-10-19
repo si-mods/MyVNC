@@ -95,6 +95,10 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - Drop files from Explorer on the session window to upload them to the
     Mac's Downloads folder and put their URL on its pasteboard, the same
     path as copied files (#43).
+- v0.0.15:
+  - Files transfer only when dropped on the session window; copying on
+    Windows leaves the clipboard to text. macOS resolves file promises
+    only during a drag, so Finder's paste cannot start a transfer (#43).
 
 ## Deferred by the owner
 
