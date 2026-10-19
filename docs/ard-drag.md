@@ -358,33 +358,37 @@ local OLE drag with lazily downloaded files or download them immediately with
 `StartFileSend(flags 1)`. No live `0x20` capture exists yet (it needs a real
 drag on the Mac), so this half is unimplemented.
 
-## Clipboard files
+## Clipboard files: manual paste is not possible
 
 The Mac's pasteboard agent (`ScreensharingAgent`) installs a remote
 `0x1f` archive with `CreateUTIsFromPackedTypeData`, which drops
 `public.file-url` with `-39` (`noTypeErr`) on macOS 27.2 — verified live. It
-does accept `public.url` when the record uses the promise-style shape: the
-`0x1f` header's promise byte is 1, and the archive is a bare flavor list
-(`u32 flavorCount`, then name/reserved/tags/data per flavor) without the
-normal item wrapper. Text keeps the normal item archive with promise = 0.
+accepts the promise-style shape: the `0x1f` header's promise byte is 1 and
+the archive is a bare flavor list (`u32 flavorCount`, then
+name/reserved/tags/data per flavor). Text keeps the normal item archive with
+promise = 0.
 
-MyVNC uses this for Windows -> Mac:
+Verified on macOS 27.2 (2026-10-19): a promise archive carrying
+`com.apple.pasteboard.promised-file-url` and
+`com.apple.pasteboard.promised-file-content-type` installs six pasteboard
+types including `NSPromiseContentsPboardType`. **Finder's Cmd+V does not
+resolve it**: the helper stays in `waiting for data from parent`, the agent
+never calls `SSDaemon_PasteboardDataNeeded_rpc`, and no message reaches the
+viewer. `NSFilePromiseReceiver` confirms the rule:
 
-1. `win32.ReadClipboardFiles` reads CF_HDROP when files are copied.
-2. `Client.UploadFiles` sends each regular file with the file-copy path above
-   to `/Users/<login>/Downloads`.
-3. `Client.ClipboardFiles` puts the last remote path on the Mac pasteboard as
-   a `public.url` file URL (promise flag 1). The Mac's `clipboard info` then
-   shows `URL`.
+> `receivePromisedFilesAtDestination:…` can only be called during
+> `-prepareForDragOperation:`, `-performDragOperation:`, and
+> `-concludeDragOperation:`
 
-Limitation: this puts the file URL on the pasteboard, so the Mac user can
-paste the path (Finder's Go to Folder, a URL-aware app) and the file is
-already in Downloads. Native Finder "paste as file" needs a file promise:
-the Mac helper serves it through `OurPromiseKeeper` -> agent
-`SSDaemon_PasteboardDataNeeded_rpc` -> daemon -> viewer, and that request /
-response half is not implemented yet. The promises-only archive the Mac sends
-(4 flavors, zero-length data) was captured and is documented above; the
-viewer-side response is the remaining work.
+File promises are a **drag-and-drop** mechanism. Apple's Screen Sharing
+transfers files by dragging, not by clipboard paste. MyVNC therefore does
+not upload files when they are copied: Windows -> Mac transfer is the
+explicit drop on the session window (see above), and clipboard sync keeps
+text only.
+
+`Client.UploadFiles` uploads to `~/Downloads` without touching the
+pasteboard; `Client.ClipboardFiles` is a separate, explicit call for putting
+a path on it. The drop handler uses the plain upload.
 
 ## Open questions
 

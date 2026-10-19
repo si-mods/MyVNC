@@ -96,7 +96,6 @@ type app struct {
 	dynHint    bool       // the session panel says so, until dismissed
 	hpNote     string     // why High Performance fell back, shown until dismissed
 	hpFailed   bool       // it fell back: the panel offers a retry
-	clipFiles  string     // last uploaded file list, so focus does not resend it
 	rdp        *win32.RDP // an embedded Remote Desktop session, if one runs
 	rdpAddr    string
 	rdpResize  *time.Timer
@@ -516,40 +515,28 @@ func (a *app) sendClipboard() {
 	if a.sess == nil || a.cfg.ViewOnly || !a.cfg.SendClipboard {
 		return
 	}
-	// Copied files take the clipboard: upload them to the Mac and leave
-	// their URLs on its pasteboard, so Finder's Cmd+V copies them.
-	if files, err := win32.ReadClipboardFiles(); err == nil && len(files) > 0 {
-		a.sendFiles(files)
-		return
-	}
 	a.sess.SendClipboard(a.svc.ReadClipboard())
 }
 
-// sendFiles uploads the clipboard's files once per copied set. The ARD
-// session puts them on the Mac pasteboard after the upload.
+// sendFiles uploads dropped files to the Mac's Downloads folder. Only an
+// explicit drop transfers files; copying on Windows leaves the clipboard
+// to text.
 func (a *app) sendFiles(files []string) {
-	key := strings.Join(files, "\x00")
-	if key == a.clipFiles {
-		return
-	}
 	if a.user == "" || !a.sess.FileCopyAvailable() {
 		return
 	}
-	a.clipFiles = key
 	dir := "/Users/" + a.user + "/Downloads"
 	a.sess.SendFiles(files, dir, func(remote []string, err error) {
 		if err != nil {
-			a.clipFiles = "" // let the next focus try again
-			a.log.Warn("file clipboard", "err", err)
+			a.log.Warn("file transfer", "err", err)
 			return
 		}
-		a.log.Info("file clipboard: uploaded", "files", len(remote), "dir", dir)
+		a.log.Info("file transfer: uploaded", "files", len(remote), "dir", dir)
 	})
 }
 
-// dropFiles takes files dropped from Explorer on the session window; they
-// follow the same path as copied files: upload to the Mac's Downloads and
-// leave the URL on its pasteboard (#43).
+// dropFiles takes files dropped from Explorer on the session window and
+// uploads them to the Mac's Downloads folder (#43).
 func (a *app) dropFiles(paths []string) {
 	a.log.Info("files dropped", "n", len(paths))
 	if a.sess == nil || a.cfg.ViewOnly || !a.sess.FileCopyAvailable() {
@@ -1002,7 +989,6 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.stats = statsSample{}
 	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
 	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
-	a.clipFiles = ""
 	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
 	a.hpNote, a.hpFailed = "", false
 	a.setTitle(s.Encrypted())
@@ -1146,7 +1132,6 @@ func rdpTarget(server string) (host string, port int, err error) {
 func (a *app) endSession() {
 	a.saveThumbnail(a.sessServer, a.sess.Shown)
 	a.sess, a.emb = nil, nil
-	a.clipFiles = ""
 	if a.sc != nil {
 		a.sc.Reset() // the server is gone: nothing to release
 	}
