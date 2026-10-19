@@ -98,6 +98,8 @@ type app struct {
 	clipFiles  string     // last uploaded file list, so focus does not resend it
 	rdp        *win32.RDP // an embedded Remote Desktop session, if one runs
 	rdpAddr    string
+	rdpResize  *time.Timer
+	rdpW, rdpH int32
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -1010,7 +1012,35 @@ func (a *app) connectRDP(server string) {
 	})
 }
 
+// scheduleRDPResize changes the remote desktop once the window size has
+// been stable for 250 ms, matching the Mac viewer's dynamic resolution.
+func (a *app) scheduleRDPResize(w, h int32) {
+	if a.rdp == nil || (w == a.rdpW && h == a.rdpH && a.rdpResize != nil) {
+		return
+	}
+	a.rdpW, a.rdpH = w, h
+	if a.rdpResize != nil {
+		a.rdpResize.Stop()
+	}
+	a.rdpResize = time.AfterFunc(250*time.Millisecond, func() {
+		mygo.RunOnMain(func() {
+			if a.rdp == nil {
+				return
+			}
+			r := a.rdp
+			applied, err := r.ResizeRemoteNow(a.rdpW, a.rdpH)
+			if applied {
+				a.log.Info("RDP resize", "width", a.rdpW, "height", a.rdpH, "err", err)
+			}
+		})
+	})
+}
+
 func (a *app) disconnectRDP() {
+	if a.rdpResize != nil {
+		a.rdpResize.Stop()
+		a.rdpResize = nil
+	}
 	if a.rdp != nil {
 		a.rdp.Close()
 		a.rdp = nil
