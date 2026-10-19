@@ -684,3 +684,25 @@ func TestStatsOverlayHighPerformance(t *testing.T) {
 	}
 	a.disconnect()
 }
+
+func TestRDPTarget(t *testing.T) {
+	cases := []struct {
+		in   string
+		host string
+		port int
+		ok   bool
+	}{
+		{"rdp://192.168.1.20", "192.168.1.20", 3389, true},
+		{"RDP://pc:3390", "pc", 3390, true},
+		{"rdp://[::1]:3389", "::1", 3389, true},
+		{"rdp://", "", 0, false},
+		{"rdp://host:0", "", 0, false},
+		{"rdp://host:99999", "", 0, false},
+	}
+	for _, c := range cases {
+		host, port, err := rdpTarget(c.in)
+		if (err == nil) != c.ok || (c.ok && (host != c.host || port != c.port)) {
+			t.Errorf("rdpTarget(%q) = %q, %d, %v", c.in, host, port, err)
+		}
+	}
+}
