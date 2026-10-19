@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -89,12 +90,14 @@ type app struct {
 	pxScale    float32
 	srvLED     uint32
 	dyn        viewer.Resizer
-	dynUrgent  bool   // the next size goes at once: a new session, full screen, another monitor
-	dynRefused bool   // the server cannot resize: the session scales to fit instead
-	dynHint    bool   // the session panel says so, until dismissed
-	hpNote     string // why High Performance fell back, shown until dismissed
-	hpFailed   bool   // it fell back: the panel offers a retry
-	clipFiles  string // last uploaded file list, so focus does not resend it
+	dynUrgent  bool       // the next size goes at once: a new session, full screen, another monitor
+	dynRefused bool       // the server cannot resize: the session scales to fit instead
+	dynHint    bool       // the session panel says so, until dismissed
+	hpNote     string     // why High Performance fell back, shown until dismissed
+	hpFailed   bool       // it fell back: the panel offers a retry
+	clipFiles  string     // last uploaded file list, so focus does not resend it
+	rdp        *win32.RDP // an embedded Remote Desktop session, if one runs
+	rdpAddr    string
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -476,7 +479,7 @@ func (a *app) modal() bool {
 // updateGrab grabs the system keys while a session has the keyboard.
 func (a *app) updateGrab() {
 	if a.grab != nil {
-		a.grab(a.sess != nil && !a.cfg.ViewOnly && a.focused && !a.ungrabbed && !a.modal())
+		a.grab(a.rdp == nil && a.sess != nil && !a.cfg.ViewOnly && a.focused && !a.ungrabbed && !a.modal())
 	}
 }
 
@@ -644,6 +647,11 @@ func (a *app) connectTo(server string, again bool) {
 	if a.connecting {
 		return
 	}
+	if strings.HasPrefix(strings.ToLower(server), "rdp://") {
+		a.connectRDP(server)
+		return
+	}
+	a.disconnectRDP()
 	addr, err := viewer.Addr(server)
 	if err != nil {
 		a.errText = err.Error()
@@ -944,10 +952,83 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 
 func (a *app) disconnect() {
 	a.cancelReconnect()
+	a.disconnectRDP()
 	if a.sess != nil {
 		a.sess.Close()
 		a.endSession()
 	}
+}
+
+// connectRDP starts an embedded Microsoft Remote Desktop session. The
+// system ActiveX control brings NLA, codecs, audio and clipboard.
+func (a *app) connectRDP(server string) {
+	host, port, err := rdpTarget(server)
+	if err != nil {
+		a.errText = err.Error()
+		return
+	}
+	if a.win == nil {
+		return
+	}
+	a.disconnect()
+	a.connecting = false
+	a.errText = ""
+	r, err := win32.NewRDP(a.win.NativeHandle())
+	if err != nil {
+		a.errText = err.Error()
+		a.log.Warn("RDP control", "err", err)
+		return
+	}
+	a.rdp, a.rdpAddr = r, server
+	a.cfg.AddServer(server)
+	a.cfg.Username = a.user
+	a.saveConfig()
+	a.name = "RDP " + host
+	a.title = a.name + " - " + appName
+	a.win.SetTitle(a.title)
+	w, h := win32.ClientRect(a.win.NativeHandle())
+	r.Fit(0, 0, w, h)
+	r.Show(true)
+	if err := r.Connect(host, port, a.user, a.pass, ""); err != nil {
+		a.log.Warn("RDP connect", "err", err)
+		a.errText = err.Error()
+		a.disconnectRDP()
+		return
+	}
+	a.updateGrab()
+	time.AfterFunc(5*time.Second, func() {
+		mygo.RunOnMain(func() {
+			if a.rdp == r {
+				a.log.Info("RDP state", "connected", r.Connected())
+			}
+		})
+	})
+}
+
+func (a *app) disconnectRDP() {
+	if a.rdp != nil {
+		a.rdp.Close()
+		a.rdp = nil
+	}
+	a.rdpAddr = ""
+	a.setTitle(false)
+	a.updateGrab()
+}
+
+// rdpTarget parses rdp://host[:port].
+func rdpTarget(server string) (host string, port int, err error) {
+	host = strings.TrimPrefix(strings.TrimPrefix(server, "RDP://"), "rdp://")
+	port = 3389
+	if h, p, e := net.SplitHostPort(host); e == nil {
+		host = h
+		if port, err = strconv.Atoi(p); err != nil || port <= 0 || port > 65535 {
+			return "", 0, fmt.Errorf("rdp: bad port %q", p)
+		}
+	}
+	if host == "" {
+		return "", 0, errors.New("rdp: no host")
+	}
+	return host, port, nil
 }
 
 func (a *app) endSession() {
@@ -1086,6 +1167,9 @@ func (a *app) parseArgs(args []string) (server string, err error) {
 	}
 	if len(rest) == 1 {
 		server = rest[0]
+		if strings.HasPrefix(strings.ToLower(server), "rdp://") {
+			return server, nil
+		}
 		if strings.ContainsAny(server, `/\`) {
 			if server, err = a.loadTiger(p, server); err != nil {
 				return "", err
@@ -1098,7 +1182,7 @@ func (a *app) parseArgs(args []string) (server string, err error) {
 
 func usage() string {
 	var b strings.Builder
-	b.WriteString("usage: MyVNC [parameters] [host][:displayNum] | [parameters] file.tigervnc\n\nParameters:\n")
+	b.WriteString("usage: MyVNC [parameters] [host][:displayNum] | rdp://host[:port] | [parameters] file.tigervnc\n\nParameters:\n")
 	for _, p := range tigerParams(&viewer.Config{}).Params() {
 		fmt.Fprintf(&b, "  %s - %s (default=%s)\n", p.Name(), p.Description(), p.DefaultStr())
 	}
@@ -1226,13 +1310,22 @@ func main() {
 			a.log.Warn("clipboard listener", "err", err)
 		}
 		win.OnClosed(func() {
+			a.disconnectRDP()
 			if a.sess != nil {
 				a.sess.Close()
 			}
 		})
 		if start != "" {
 			a.server = start
-			a.connect()
+			if strings.HasPrefix(strings.ToLower(start), "rdp://") {
+				// Let the window show and the message loop run first: the
+				// RDP ActiveX is an in-place OLE control and needs both.
+				time.AfterFunc(500*time.Millisecond, func() {
+					mygo.RunOnMain(a.connect)
+				})
+			} else {
+				a.connect()
+			}
 		}
 		if perf != nil {
 			a.startPerf(perf)
@@ -1251,6 +1344,15 @@ func wireKeyboard(a *app, win *mygo.Window) {
 	a.localLED, a.setLED = win32.LEDState, win32.SetLEDState
 	hwnd := win.NativeHandle()
 	_, err := win32.Install(hwnd, func(k keymap.WinKey) bool {
+		if a.rdp != nil {
+			// The control gets every key; Ctrl+Alt+Shift+Q leaves.
+			if k.VK == 0x51 && !k.Up && k.State[0x11]&0x80 != 0 &&
+				k.State[0x12]&0x80 != 0 && k.State[0x10]&0x80 != 0 {
+				mygo.RunOnMain(func() { a.disconnectRDP() })
+				return true
+			}
+			return false
+		}
 		if a.sess == nil || a.cfg.ViewOnly || a.modal() {
 			return false
 		}

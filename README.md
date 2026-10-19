@@ -1,7 +1,12 @@
 # MyVNC
 
-MyVNC is a VNC viewer for Windows, written in pure Go with
-[MyGo](https://github.com/egoist/mygo) native UI.
+MyVNC is a VNC and Remote Desktop viewer for Windows, written in pure Go
+with [MyGo](https://github.com/egoist/mygo) native UI.
+
+Besides RFB/VNC it connects to Microsoft Remote Desktop (RDP) endpoints by
+embedding the system Remote Desktop ActiveX control: enter
+`rdp://host[:port]` as the server address. NLA, graphics, audio and
+clipboard come from the Windows component; see `docs/rdp.md`.
 
 It is a port of the [TigerVNC](https://github.com/TigerVNC/tigervnc) viewer
 (including its Apple Remote Desktop authentication work) and is distributed

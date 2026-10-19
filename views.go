@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/i18n"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/kyya/myvnc/internal/win32"
 	"github.com/kyya/myvnc/locales"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
@@ -27,6 +28,8 @@ var gear, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBo
 func (a *app) view(c *ui.Context) {
 	a.svc = c.Services()
 	switch {
+	case a.rdp != nil:
+		a.rdpView(c)
 	case a.sess != nil && a.sess.Screen != nil:
 		a.sessionView(c)
 	case a.connecting || a.sess != nil:
@@ -36,6 +39,17 @@ func (a *app) view(c *ui.Context) {
 	}
 	a.prompts(c)
 	a.updateGrab()
+}
+
+// rdpView is the empty page under the embedded Remote Desktop control; the
+// native window covers it.
+func (a *app) rdpView(c *ui.Context) {
+	ui.Box(c).Fill().Background(ui.RGBA(0, 0, 0, 1))
+	if a.rdp != nil && a.win != nil {
+		w, h := win32.ClientRect(a.win.NativeHandle())
+		a.rdp.Fit(0, 0, w, h)
+		a.rdp.Show(true)
+	}
 }
 
 // Home.
