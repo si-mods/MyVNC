@@ -99,6 +99,11 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - Files transfer only when dropped on the session window; copying on
     Windows leaves the clipboard to text. macOS resolves file promises
     only during a drag, so Finder's paste cannot start a transfer (#43).
+- v0.0.16:
+  - Adaptive picture quality: High Performance moves its RCTL bitrate
+    estimate between 200 kbit/s and 60 Mbit/s from the delivered rate,
+    one-way delay and loss; Standard mode chooses one of six JPEG
+    quality tiers (3-8) with a 750 ms hold instead of only 6/8.
 
 ## Deferred by the owner
 
