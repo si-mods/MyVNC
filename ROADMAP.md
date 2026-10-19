@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.11 (2026-10-19). Open work is tracked in GitHub issues.
+Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -82,6 +82,10 @@ Status as of v0.0.11 (2026-10-19). Open work is tracked in GitHub issues.
 - v0.0.11:
   - Right-click a home card and choose Remove computer to forget a saved
     connection, its metadata and its thumbnail (#50).
+- v0.0.12:
+  - Mouse wheel and touchpad scrolling send one click per scroll line, so
+    a Windows notch (three lines by default) scrolls three steps on the
+    Mac instead of one (#51).
 
 ## Deferred by the owner
 
