@@ -67,6 +67,8 @@ type LegStats struct {
 type Stats struct {
 	Audio, Video LegStats
 	Units, Keys  uint64 // access units handed on, and key pictures among them
+	KeyBytes     uint64 // wire bytes in key pictures
+	SinceKey     int    // pictures since the last key picture
 	Lost         uint64 // losses reported by the depacketizer
 	// Late counts sequence gaps a late packet filled; Missing, picture
 	// packets given up as lost.
@@ -151,6 +153,14 @@ func (s *Stream) Close() error {
 }
 
 // Stats returns a copy of the counters.
+func unitBytes(u *Unit) uint64 {
+	var n uint64
+	for _, p := range u.NALs {
+		n += uint64(len(p))
+	}
+	return n
+}
+
 func (s *Stream) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -348,6 +358,7 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 		s.stats.Units++
 		if u.Key {
 			s.stats.Keys++
+			s.stats.KeyBytes += unitBytes(u)
 			s.sinceKey = 0
 		} else {
 			s.sinceKey++
@@ -356,6 +367,7 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 				s.RequestKeyframe()
 			}
 		}
+		s.stats.SinceKey = s.sinceKey
 		s.mu.Unlock()
 		if s.cfg.OnUnit != nil {
 			s.cfg.OnUnit(u)

@@ -342,6 +342,14 @@ func (a *app) settingsCategories() []components.SettingsCategory {
 	videoPage := components.SettingsCategory{
 		ID: "video", Title: locales.Video(), Icon: lucide.MonitorPlay(),
 		Groups: []components.SettingsGroup{{ID: "picture", Items: []components.SettingsItem{
+			{ID: "profile", Title: locales.Profile(), Build: func(c *ui.Context) {
+				if selectValue(c, &a.cfg.Profile, viewer.Profiles, profileName) {
+					a.cfg.ApplyProfile(a.cfg.Profile)
+					a.quality, a.compress = float64(a.cfg.Quality), float64(a.cfg.Compress)
+					a.maxFPS, a.maxKbps, a.gop = float64(a.cfg.MaxFPS), float64(a.cfg.MaxKbps), float64(a.cfg.GOP)
+					a.videoMode, a.videoMode0 = a.cfg.VideoMode(), a.cfg.VideoMode()
+				}
+			}},
 			{ID: "mode", Title: locales.VideoMode(), Stacked: true, Build: func(c *ui.Context) {
 				tabs := components.Tabs(c, &a.videoMode, components.TabsSegmented,
 					locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
@@ -370,6 +378,11 @@ func (a *app) settingsCategories() []components.SettingsCategory {
 			}},
 			{ID: "decoding", Title: locales.VideoDecoding(), Build: func(c *ui.Context) {
 				selectValue(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
+			}},
+			{ID: "mjpeg-warning", Build: func(c *ui.Context) {
+				if a.videoMode == 2 {
+					components.Text(c, locales.LegacyBandwidthWarning()).TextColor(c.Theme().Warning).Wrap()
+				}
 			}},
 		}}},
 	}
@@ -637,6 +650,8 @@ func (a *app) statsView(c *ui.Context) {
 				a.stats.decodeMs = float64(ns) / float64(n) / 1e6
 			}
 			a.stats.mbps = float64(bytes) * 8 / sec / 1e6
+			a.stats.keys = float64(s.MediaKeys - p.MediaKeys)
+			a.stats.keyMB = float64(s.MediaKeyBytes-p.MediaKeyBytes) / 1e6
 		}
 		a.stats.at, a.stats.last = now, s
 	}
@@ -668,14 +683,29 @@ func (a *app) statsView(c *ui.Context) {
 		if a.mediaLive() {
 			encoding, requested, dropped = "", "", locales.StatsDropped(n(a.stats.dropped, 0))
 		}
+		keys, cache, mixed := "", "", ""
+		if a.mediaLive() && a.stats.keys > 0 {
+			keys = locales.StatsKeys(strconv.FormatInt(int64(a.stats.keys), 10), n(a.stats.keyMB, 1))
+		}
+		if hits, misses := l.CacheHits, l.CacheMisses; hits+misses > 0 {
+			cache = locales.StatsCache(strconv.FormatInt(hits, 10), strconv.FormatInt(misses, 10),
+				strconv.FormatInt(l.CopyRects, 10), strconv.FormatInt(l.CursorHits, 10))
+		}
+		if len(l.Encodings) > 1 {
+			mixed = locales.StatsEncodings(encodingSummary(l.Encodings))
+		}
 		for _, l := range []string{
 			locales.StatsFps(n(a.stats.fps, 0)),
 			locales.StatsDecode(n(a.stats.decodeMs, 1)),
 			locales.StatsBitrate(n(a.stats.mbps, 1)),
 			dropped,
+			keys,
 			encoding,
+			mixed,
 			requested,
 			locales.StatsLink(strconv.FormatInt(l.Kbps, 10), rtt),
+			locales.StatsLinkState(l.State.String()),
+			cache,
 			locales.StatsResolution(resolution(a.sess.Size())),
 			a.statsMode(),
 			a.statsDecoder(),
@@ -716,6 +746,34 @@ type statsSample struct {
 	last                         viewer.Stats
 	link                         rfb.LinkStats
 	fps, decodeMs, mbps, dropped float64
+	keys, keyMB                  float64
+}
+
+// encodingSummary compacts per-encoding traffic for the HUD.
+func encodingSummary(stats []rfb.EncodingStat) string {
+	var b strings.Builder
+	for _, e := range stats {
+		if b.Len() > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(viewer.EncodingName(e.Encoding))
+		b.WriteByte(' ')
+		b.WriteString(bytesText(e.Bytes))
+		b.WriteString("/")
+		b.WriteString(strconv.FormatInt(e.Rects, 10))
+	}
+	return b.String()
+}
+
+func bytesText(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
+	case n >= 1<<10:
+		return strconv.FormatFloat(float64(n)/(1<<10), 'f', 1, 64) + " KB"
+	default:
+		return strconv.FormatInt(n, 10) + " B"
+	}
 }
 
 func (a *app) screenView(c *ui.Context) {
@@ -797,6 +855,16 @@ func selectLabeled(c *ui.Context, v *string, values []string, label func(string)
 		*v = values[i]
 	}
 	return e
+}
+
+func profileName(s string) string {
+	switch s {
+	case "WAN":
+		return locales.ProfileWAN()
+	case "Mobile":
+		return locales.ProfileMobile()
+	}
+	return locales.ProfileLAN()
 }
 
 func encodingLabel(s string) string {

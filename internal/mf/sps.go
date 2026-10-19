@@ -6,8 +6,11 @@ package mf
 
 // baseProfile is what a stream of c most likely needs, before its SPS.
 func baseProfile(c Codec) string {
-	if c == HEVC {
+	switch c {
+	case HEVC:
 		return ProfileHEVCMain
+	case AV1:
+		return "AV1"
 	}
 	return ProfileH264
 }
@@ -15,6 +18,11 @@ func baseProfile(c Codec) string {
 // scan reads the Annex B unit au up to its first slice: the profile its
 // SPS needs, empty without one, and whether it holds a picture.
 func scan(c Codec, au []byte) (profile string, picture bool) {
+	if c == AV1 {
+		// AV1 samples are OBUs, not Annex B. The decoder does not use a
+		// DXVA profile; any non-empty sample is a picture.
+		return "", len(au) > 0
+	}
 	for i := 0; i+3 < len(au); i++ {
 		if au[i] != 0 || au[i+1] != 0 || au[i+2] != 1 {
 			continue
@@ -92,7 +100,9 @@ func hevcProfile(nal []byte) string {
 	r.u(16 + 4) // NAL header, sps_video_parameter_set_id
 	subLayers := int(r.u(3))
 	r.u(1)
-	r.u(88 + 8) // general profile, tier, flags and level
+	r.u(2 + 1) // general_profile_space, general_tier_flag
+	profileIDC := r.u(5)
+	r.u(32 + 48 + 8) // compatibility, constraints, level
 	var prof, level [8]bool
 	for i := range subLayers {
 		prof[i], level[i] = r.u(1) == 1, r.u(1) == 1
@@ -122,6 +132,9 @@ func hevcProfile(nal []byte) string {
 		r.ue() // conformance window
 	}
 	depth := 8 + r.ue()
+	if profileIDC == 9 || profileIDC == 10 {
+		return ProfileHEVCSCC
+	}
 	switch {
 	case chroma == 1 && depth == 8:
 		return ProfileHEVCMain

@@ -230,8 +230,11 @@ func (d *mft) Info() Info {
 }
 
 func subtypeOf(c Codec) guid {
-	if c == HEVC {
+	switch c {
+	case HEVC:
 		return fourCC("HEVC")
+	case AV1:
+		return fourCC("AV1 ")
 	}
 	return fourCC("H264")
 }
@@ -433,7 +436,9 @@ var auds = map[Codec][]byte{HEVC: {0, 0, 0, 1, 0x46, 0x01, 0x50}, H264: {0, 0, 0
 // Decode feeds au; hidden converts none of the pictures that come out.
 func (d *mft) Decode(au []byte, t int64, hidden bool) ([]Frame, error) {
 	d.hidden = hidden
-	au = append(au[:len(au):len(au)], auds[d.codec]...)
+	if aud := auds[d.codec]; len(aud) > 0 {
+		au = append(au[:len(au):len(au)], aud...)
+	}
 	sample, buf, err := newSample(len(au))
 	if err != nil {
 		return nil, err
