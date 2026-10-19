@@ -1267,6 +1267,16 @@ func (msgs Messages) StatsKeys(keys string, mb string) string {
 	return Catalog.Format(msgs.locale, "statsKeys", map[string]any{"keys": keys, "mb": mb})
 }
 
+// StatsRecovery says "recovered in {ms} ms"
+// in the language the app shows.
+func StatsRecovery(ms string) string { return In(i18n.Locale()).StatsRecovery(ms) }
+
+// StatsRecovery says "recovered in {ms} ms"
+// in the language of msgs.
+func (msgs Messages) StatsRecovery(ms string) string {
+	return Catalog.Format(msgs.locale, "statsRecovery", map[string]any{"ms": ms})
+}
+
 // StatsCache says "Tile cache {hits} hit/{misses} miss, CopyRect {copy}, cursor {cursor}"
 // in the language the app shows.
 func StatsCache(hits string, misses string, copy string, cursor string) string {

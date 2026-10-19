@@ -69,6 +69,8 @@ type Stats struct {
 	Units, Keys  uint64 // access units handed on, and key pictures among them
 	KeyBytes     uint64 // wire bytes in key pictures
 	SinceKey     int    // pictures since the last key picture
+	Recoveries   uint64 // loss episodes ended by a key picture
+	RecoveryMs   int64  // the last recovery, in milliseconds
 	Lost         uint64 // losses reported by the depacketizer
 	// Late counts sequence gaps a late packet filled; Missing, picture
 	// packets given up as lost.
@@ -95,6 +97,7 @@ type Stream struct {
 	stats    Stats
 	w, h     uint16 // the answered picture size, for Refresh
 	sinceKey int    // pictures since the last key picture, for GOP
+	lossAt   time.Time
 }
 
 // Listen binds the audio and video ports on cfg.Local, connects them to
@@ -359,6 +362,11 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 		if u.Key {
 			s.stats.Keys++
 			s.stats.KeyBytes += unitBytes(u)
+			if !s.lossAt.IsZero() {
+				s.stats.Recoveries++
+				s.stats.RecoveryMs = time.Since(s.lossAt).Milliseconds()
+				s.lossAt = time.Time{}
+			}
 			s.sinceKey = 0
 		} else {
 			s.sinceKey++
@@ -377,6 +385,9 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 	case lost:
 		s.mu.Lock()
 		s.stats.Lost++
+		if s.lossAt.IsZero() {
+			s.lossAt = time.Now()
+		}
 		s.mu.Unlock()
 		a := askKeyframe
 		if dep.ResumesAtRefresh() {

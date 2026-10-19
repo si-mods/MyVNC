@@ -652,6 +652,7 @@ func (a *app) statsView(c *ui.Context) {
 			a.stats.mbps = float64(bytes) * 8 / sec / 1e6
 			a.stats.keys = float64(s.MediaKeys - p.MediaKeys)
 			a.stats.keyMB = float64(s.MediaKeyBytes-p.MediaKeyBytes) / 1e6
+			a.stats.recovery = s.MediaRecoveryMs
 		}
 		a.stats.at, a.stats.last = now, s
 	}
@@ -686,6 +687,9 @@ func (a *app) statsView(c *ui.Context) {
 		keys, cache, mixed := "", "", ""
 		if a.mediaLive() && a.stats.keys > 0 {
 			keys = locales.StatsKeys(strconv.FormatInt(int64(a.stats.keys), 10), n(a.stats.keyMB, 1))
+		}
+		if a.mediaLive() && a.stats.recovery > 0 {
+			keys += " · " + locales.StatsRecovery(strconv.FormatInt(a.stats.recovery, 10))
 		}
 		if hits, misses := l.CacheHits, l.CacheMisses; hits+misses > 0 {
 			cache = locales.StatsCache(strconv.FormatInt(hits, 10), strconv.FormatInt(misses, 10),
@@ -747,6 +751,7 @@ type statsSample struct {
 	link                         rfb.LinkStats
 	fps, decodeMs, mbps, dropped float64
 	keys, keyMB                  float64
+	recovery                     int64
 }
 
 // encodingSummary compacts per-encoding traffic for the HUD.
