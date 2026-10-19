@@ -804,7 +804,7 @@ func (c *Client) readARDServerMessage(t byte) error {
 			return c.rd.err
 		}
 		c.log.Debug("rfb: ARD file-copy 0x22", "len", n, "body", hex.EncodeToString(body))
-		if c.fcServer != nil {
+		if !c.deliverFileCopy(body) && c.fcServer != nil {
 			c.fcServer(body)
 		}
 	case 0x23:

@@ -465,6 +465,13 @@ func (a *app) panel(c *ui.Context) {
 			a.requestClipboard()
 			a.menuOpen = false
 		}
+		if a.sess.FileCopyAvailable() && ui.Button(c, locales.DownloadFile()).Clicked() {
+			if a.dlPath == "" {
+				a.dlPath = "/Users/" + a.user + "/"
+			}
+			a.dlOpen = true
+			a.menuOpen = false
+		}
 		ui.Divider(c)
 		if ui.Button(c, locales.SendCtrlAltDel()).Clicked() {
 			a.ctrlAltDel()

@@ -326,6 +326,26 @@ func (s *Session) SendFiles(paths []string, remoteDir string, done func([]string
 	}()
 }
 
+// DownloadFile fetches remotePath (a file or a folder tree) from an ARD
+// server into localDir; done runs on the UI thread with the created
+// paths. The transfer runs on the session's read side, so it needs the
+// session to stay connected until it finishes.
+func (s *Session) DownloadFile(remotePath, localDir string, done func([]string, error)) {
+	go func() {
+		c := s.c
+		var paths []string
+		var err error
+		if c == nil {
+			err = errors.New("myvnc: no session")
+		} else {
+			paths, err = c.FileCopyDownload(context.Background(), remotePath, localDir, nil)
+		}
+		if done != nil {
+			s.post(func() { done(paths, err) })
+		}
+	}()
+}
+
 // RequestClipboard fetches the server's clipboard text, which then comes
 // through OnClipboard, if the server announced text that has not come
 // yet; else it does nothing.

@@ -3,12 +3,15 @@
 What is known about Apple Remote Desktop / Screen Sharing drag-and-drop and
 file copy over the RFB 003.889 session, and where MyVNC stands.
 
-Status: **upload complete and verified live end to end; download still needs
-the drag layer.** On 2026-10-18 a live session against desktop (macOS 27.2,
+Status: **upload and download complete and verified live end to end; only the
+drag UI remains.** On 2026-10-18 a live session against desktop (macOS 27.2,
 build 26B5101f, standard mode) drove the `0x22` FileCopy command and then the
 content records decoded from the Mac's own `SSFileCopyReceiver` /
 `SSFileCopySender` binaries. A 200000-byte file arrived with the same SHA-256
-and mode 0644. `screensharingd` and the receiver logged every phase.
+and mode 0644. `screensharingd` and the receiver logged every phase. On
+2026-10-19 the reverse direction worked as well: a viewer `StartFileSend` with
+`flags` bit 0 set made the Mac run `SSFileCopySender` and stream a folder tree
+back; every file matched its SHA-256.
 
 What now works, confirmed by the Mac's own logs and the received file:
 
@@ -19,6 +22,12 @@ What now works, confirmed by the Mac's own logs and the received file:
   `NewItem`, chunked file data and `EndSession`; the Mac creates the item,
   writes every byte, moves it into the destination folder and answers with a
   result record. `rfb.Client.FileCopyUpload` implements it.
+- **Download (Mac -> viewer) end to end.** `StartFileSend` with the
+  start-sending flag makes the Mac run `SSFileCopySender`; the same content
+  records arrive in the other direction. `rfb.Client.FileCopyDownload`
+  reassembles files, folders and symlinks into a local directory atomically
+  (temporary dir, rename on success). The session panel's "Download a file…"
+  asks for the remote path and saves into the local `Downloads` folder.
 - The content sub-message commands and byte layouts below, recovered from the
   arm64e disassembly of the helper tools and verified against their parse logs.
 - The `0x22` status/result record the Mac sends back (`[pad][u32 len][body]`).
@@ -106,8 +115,8 @@ Two things the Mac is strict about, each found by the receiver's error logs:
 
 | cmd | Name | Observed effect |
 |---|---|---|
-| 1 | StartFileSend | Daemon: `do not start file send`, `viewer is sender 1`; **no** `SSFileCopySender` is launched. A viewer `0x22` does not pull a download — see below. |
-| 2 | StartFileReceive | Daemon launches `SSFileCopyReceiver`, resolves the destination folder from the path, and waits for the viewer to stream the file (**upload**). This path works up to the content phase. |
+| 1 | StartFileSend | With `flags` bit 0: `start file send`, `SSFileCopySender` is launched and streams the source path (**download**). With `flags = 0` the daemon logs `do not start file send` — see below. |
+| 2 | StartFileReceive | Daemon launches `SSFileCopyReceiver`, resolves the destination folder from the path, and waits for the viewer to stream the file (**upload**). |
 | 3 | Pause | |
 | 4 | Continue | resume |
 | 5 | Stop | cancel |
@@ -123,16 +132,48 @@ A verified StartFileReceive (upload) command, path
 
 (`bodyLen 0x44 = 68`, total 74; the daemon logs `messageSize 74`.)
 
-### Download direction
+### Download direction — solved: `flags` bit 0
 
-cmd 1 (StartFileSend) from the viewer does **not** make the Mac send a file: the
-daemon logs `viewer is sender 1` / `do not start file send` and keeps a
-`viewerIsSenderFlag` set. The sender tool
-(`screensharingd.bundle/.../SSFileCopySender`) is only launched when
-`viewerIsSenderFlag == 0`, which a plain viewer `0x22` command never sets. A
-download is therefore Mac-initiated — it happens when the user drags a file out
-of the remote screen (the drag subsystem, `0x0e` / `0x20`), after which the Mac
-runs `SSFileCopySender`. Pulling a download with `0x22` alone is not supported.
+An earlier capture sent cmd 1 with `flags = 0` and concluded, wrongly, that a
+viewer could not start a download: the daemon logged `viewer is sender 1` /
+`do not start file send`. The disassembly of `ServerProcessFileCopyCmd` shows
+the gate: after the shared parse it tests the `flags` word with
+`tbnz w22, #0x0`, and only when **bit 0 is set** does it log `start file send`
+and dispatch `ServerFileSenderThread`, which runs
+`SSFileCopySender`. The `viewerIsSenderFlag` it logs is not the gate.
+
+So a download needs only a normal `StartFileSend` with `flags = 1` and the
+source path (same framing, v1 path at 0x18):
+
+```
+22 00 00000044 0001 0001 00000001 00000001 00000000 002c
+2f 55 73 65 72 73 … 6c 5f 64 69 72 00                 (path + NUL)
+00 00 00 00 00 00                                     (6 trailing bytes)
+```
+
+The Mac then streams `0x22` records back on the same encrypted session:
+
+```
+ItemInfo(0x64 flags 0)  total 380006, 3 files, 2 folders
+NewItem(0x65)  folder "dl_dir"          level 0
+NewItem(0x65)  file   "c.txt"           level 1, 6 bytes
+FileData(0x66) 6 bytes
+NewItem(0x65)  folder "sub"             level 1
+NewItem(0x65)  file   "b.bin"           level 2, 100000 bytes
+FileData(0x66) 65536 + 34464 bytes
+NewItem(0x65)  file   "a.txt"           level 1, 280000 bytes
+FileData(0x66) 4 × 65536 + 17856 bytes
+EndSession(0x68) error 0
+```
+
+`level` is the depth below the first level-0 item, so the receiver creates a
+directory stack from it. Item names are single path components. The Mac's
+sender did **not** compress this transfer (`IsFileWorthCompressing 1`,
+`compression savings 0`), but the receiver accepts the same 0x67 records as
+the upload path.
+
+Drag (`0x0e` / `0x20`) is now a UI trigger, not a data path: when it lands, the
+viewer can call the same `StartFileSend(flags 1)` for the dragged paths.
 
 ## FileCopy status / result (`0x22`, Mac → viewer)
 
@@ -324,11 +365,12 @@ viewer-side response is the remaining work.
 
 ## Open questions
 
-1. **Download initiation.** A viewer `0x22` cmd 1 does not start a download
-   (`viewer is sender 1`); the Mac starts `SSFileCopySender` when the user drags
-   a file out of the remote screen. The viewer side therefore needs the drag
-   layer (`0x0e` / `0x20`) plus a writer for the inbound `0x64`/`0x65`/`0x66`/
-   `0x68` records, whose layouts are now known.
+1. **Drag UI.** The data path works both ways; what remains is turning the
+   drag subsystem (`0x0e` / `0x20`) into a Windows drag: a drop target on the
+   session window for local files (upload) and a drag source for the Mac's
+   `ServerDragEvent` (download). The transfer itself is already
+   `FileCopyUpload` / `FileCopyDownload`; the drag payload only carries the
+   paths and the drag image. See [Download direction](#download-direction--solved-flags-bit-0).
 2. The **version 2** StartFileReceive layout: `pathLen` at 0x16, an extra u16
    length at 0x18, path at 0x1a (the receiver accepts it, and logs
    `message is old version` for v1). v1 carries the destination path directly
@@ -349,6 +391,12 @@ viewer-side response is the remaining work.
 `Client.FileCopyUpload` and logs the SHA-256; verify it on the Mac. It prints
 every inbound `0x22` result body.
 
+`TestMacFileCopyDownload` (env `MYVNC_FILECOPY_DOWNLOAD=1`, `MYVNC_E2E_PASS`,
+`MYVNC_FC_PATH` defaulting to `/Users/jdoe/myvnc-drag-test/dl_dir`) runs the
+real `Client.FileCopyDownload` against the Mac, then logs every local file's
+size and SHA-256; compare with `shasum -a 256` on the Mac. Verified on
+2026-10-19: `dl_dir` (folder, 3 files, 380006 bytes) arrived byte-identical.
+
 `TestMacFileCopyCapture` (env `MYVNC_FILECOPY_TEST=1`) drives a single `0x22`
 command and taps the whole decrypted stream to a file; knobs (`MYVNC_FC_CMD`,
 `MYVNC_FC_PATH`, `MYVNC_FC_PREPAD`/`POSTPAD`/`SIZE`,
@@ -356,7 +404,6 @@ command and taps the whole decrypted stream to a file; knobs (`MYVNC_FC_CMD`,
 `log stream --debug --info --predicate 'process == "screensharingd" OR process
 CONTAINS "SSFileCopy"'`; the receiver logs its parse in detail (`cmd = N
 messageSize = M`, `itemInfo->…`, `created item with no error`, `bytes written`,
-`end status = 0`, `unexpected cmd N size U`). For a download capture, have
-Apple's own viewer drag a file out of the Mac; the Mac then emits the same
-content records with the Mac as sender. Do not inject a drag into a Mac a user
-is actively on.
+`end status = 0`, `unexpected cmd N size U`). For a download capture, send
+cmd 1 with `flags = 1` and a source path (see above); the Mac emits the same
+content records with the Mac as sender.
