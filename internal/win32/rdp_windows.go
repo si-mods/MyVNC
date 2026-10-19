@@ -437,7 +437,7 @@ func (r *RDP) Connect(host string, port int, user, password, domain string) erro
 		_ = rdpPutInt(adv, "AuthenticationLevel", 0) // no certificate prompt
 		_ = rdpPutBool(adv, "EnableCredSspSupport", true)
 		_ = rdpPutBool(adv, "SmartSizing", true)
-		_ = rdpPutBool(adv, "PromptForCredentials", password == "")
+		_ = rdpPutBool(adv, "PromptForCredentials", false)
 		if password != "" {
 			_ = rdpPutStr(adv, "ClearTextPassword", password)
 		}
@@ -460,6 +460,22 @@ func (r *RDP) Connected() bool {
 	}
 	v, err := rdpGet(r.disp, "Connected")
 	return err == nil && v != 0
+}
+
+// RemoteSize is the size the server negotiated, 0 before a session.
+func (r *RDP) RemoteSize() (w, h int32) {
+	if r.disp == 0 {
+		return 0, 0
+	}
+	a, err := rdpGet(r.disp, "DesktopWidth")
+	if err == nil {
+		w = int32(a)
+	}
+	b, err := rdpGet(r.disp, "DesktopHeight")
+	if err == nil {
+		h = int32(b)
+	}
+	return w, h
 }
 
 // Fit moves the host window to the client rectangle (x, y, w, h) and sizes
