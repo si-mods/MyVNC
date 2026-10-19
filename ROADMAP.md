@@ -121,6 +121,10 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - WinUI settings: a source list with icons (Interface, Video,
     Clipboard, Input, Connection, Window) beside one card per page, and
     a scrollbar gutter so controls are no longer covered by the bar.
+- v0.0.21:
+  - Onevra components: Settings, Dialog, Slider, Select, Switch, Tabs,
+    TextBox, IconButton and Lucide icons replace the hand-built
+    settings, add-computer dialog and session-panel controls.
 
 ## Deferred by the owner
 
