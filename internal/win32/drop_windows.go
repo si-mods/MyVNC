@@ -13,10 +13,12 @@ import (
 )
 
 var (
+	shell32               = syscall.NewLazyDLL("shell32.dll")
 	procDragAcceptFiles   = shell32.NewProc("DragAcceptFiles")
 	procDragFinish        = shell32.NewProc("DragFinish")
 	procSetWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
 	procCallWindowProcW   = user32.NewProc("CallWindowProcW")
+	procDragQueryFileW    = shell32.NewProc("DragQueryFileW")
 )
 
 const (
