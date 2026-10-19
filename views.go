@@ -240,6 +240,9 @@ func (a *app) addView(c *ui.Context) {
 
 func (a *app) openSettings() {
 	a.quality, a.compress = float64(a.cfg.Quality), float64(a.cfg.Compress)
+	a.maxFPS, a.maxKbps, a.gop = float64(a.cfg.MaxFPS), float64(a.cfg.MaxKbps), float64(a.cfg.GOP)
+	a.videoMode, a.videoMode0 = a.cfg.VideoMode(), a.cfg.VideoMode()
+	a.orient, a.orient0 = a.cfg.Orientation/90, a.cfg.Orientation/90
 	a.zoom, a.clipKiB = float64(a.cfg.Zoom), float64(a.cfg.ClipboardKiB)
 	a.settingsOpen = true
 }
@@ -247,6 +250,15 @@ func (a *app) openSettings() {
 func (a *app) settingsView(c *ui.Context) {
 	apply := func() {
 		a.cfg.Quality, a.cfg.Compress = int(a.quality), int(a.compress)
+		if a.videoMode != a.videoMode0 {
+			a.cfg.SetVideoMode(a.videoMode)
+		}
+		a.cfg.MaxFPS, a.cfg.MaxKbps = int(a.maxFPS), int(a.maxKbps/100)*100
+		a.cfg.GOP = int(a.gop)
+		a.cfg.Orientation = a.orient * 90
+		if a.sess != nil && a.cfg.Orientation != a.orient0*90 {
+			a.sess.SetRotation(a.cfg.Orientation)
+		}
 		a.cfg.Zoom, a.cfg.ClipboardKiB = int(a.zoom), int(a.clipKiB)
 		a.saveConfig()
 		a.settingsOpen = false
@@ -263,9 +275,20 @@ func (a *app) settingsView(c *ui.Context) {
 						}
 					}
 				})
+				ui.Field(c, locales.VideoMode(), func() {
+					ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
+				})
 				ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
-				ui.Field(c, locales.JpegQuality(), func() { ui.NumberInput(c, &a.quality, 0, 9, 1) })
+				ui.Field(c, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
+					ui.Slider(c, &a.quality, 0, 9)
+				})
 				ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
+				ui.Field(c, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() { ui.Slider(c, &a.maxFPS, 0, 60) })
+				ui.Field(c, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() { ui.Slider(c, &a.maxKbps, 0, 60000) })
+				ui.Field(c, locales.H264GOP()+": "+gopText(a.gop), func() { ui.Slider(c, &a.gop, 0, 300) })
+				ui.Field(c, locales.Orientation(), func() {
+					ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°")
+				})
 				ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
 				ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
 				ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
@@ -710,4 +733,27 @@ func languageName(tag string) string {
 		return locales.LanguageSystem()
 	}
 	return i18n.Autonym(tag)
+}
+
+// fpsText, kbpsText and gopText label a video setting's value; zero
+// means the automatic choice.
+func fpsText(v float64) string {
+	if v < 1 {
+		return locales.Unlimited()
+	}
+	return strconv.Itoa(int(v))
+}
+
+func kbpsText(v float64) string {
+	if v < 1 {
+		return locales.Auto()
+	}
+	return strconv.Itoa(int(v/100) * 100)
+}
+
+func gopText(v float64) string {
+	if v < 1 {
+		return locales.Auto()
+	}
+	return strconv.Itoa(int(v))
 }

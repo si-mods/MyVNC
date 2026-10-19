@@ -59,6 +59,12 @@ type app struct {
 	addOpen            bool
 	settingsOpen       bool
 	quality, compress  float64
+	maxFPS, maxKbps    float64
+	gop                float64
+	videoMode          int
+	videoMode0         int // the mode when the form opened
+	orient             int
+	orient0            int
 	zoom, clipKiB      float64
 	connecting         bool
 	cancel             context.CancelFunc
@@ -257,7 +263,7 @@ func (a *app) scaling() string {
 // Screen Sharing's dynamic resolution; a Mac gets a virtual display at the
 // monitor's density.
 func (a *app) followWindow(p *ui.Painter, r ui.Rect) {
-	if !a.cfg.DynamicResolution || a.dynRefused || a.cfg.ViewOnly {
+	if !a.cfg.DynamicResolution || a.dynRefused || a.cfg.ViewOnly || a.cfg.Orientation != 0 {
 		return
 	}
 	a.dyn.Want(viewer.DesktopSize(r.W, r.H, p.Scale()), p.Now(), a.dynUrgent)
@@ -776,7 +782,9 @@ func (a *app) connectTo(server string, again bool) {
 			},
 		}
 		if cfg.HighPerformance {
-			opt.HighPerformance = &rfb.HighPerformance{} // only an ARD server takes it
+			opt.HighPerformance = &rfb.HighPerformance{ // only an ARD server takes it
+				MaxKbps: cfg.MaxKbps, GOP: cfg.GOP, MaxFPS: cfg.MaxFPS,
+			}
 		}
 		s, err := viewer.Connect(ctx, addr, opt, cfg.DecoderMode(), a.post)
 		if cfg.Remember {
@@ -981,6 +989,7 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	}
 	a.cancelReconnect()
 	a.sess, a.addr, a.sessServer, a.sessPass, a.secType = s, addr, server, pass, s.SecurityType()
+	s.SetRotation(a.cfg.Orientation)
 	a.step = locales.StepFirstFrame
 	a.cfg.Computers[server] = viewer.Computer{Name: a.cfg.Computers[server].Name, Last: time.Now()}
 	// The desktop name is kept by setName when the server tells it.

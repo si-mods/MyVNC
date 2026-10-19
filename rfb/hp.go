@@ -58,6 +58,15 @@ type HighPerformance struct {
 	// packet may take; zero is 5 seconds. A NAT between this side and the
 	// Mac drops the media: the Mac sends to the address it sees.
 	MediaTimeout time.Duration
+	// MaxKbps caps the adaptive RCTL bandwidth estimate; 0 is the Mac's
+	// 60 Mbit/s ceiling.
+	MaxKbps int
+	// GOP asks for a keyframe after that many pictures, bounding the
+	// effective group of pictures; 0 leaves it to the Mac.
+	GOP int
+	// MaxFPS caps how many decoded pictures per second are shown; 0 is
+	// the stream's own rate.
+	MaxFPS int
 }
 
 // The reasons High Performance falls back, as OnFallback gets them.
@@ -318,7 +327,8 @@ func (c *Client) hpListen(audio, video uint16) error {
 	}
 	s, err := media.Listen(media.StreamConfig{
 		Local: local.IP, Peer: peer.IP, AudioPort: int(audio), VideoPort: int(video),
-		Secrets: hp.secrets, DONL: hp.cfg.Offer.Tiles > 1, OnUnit: hp.cfg.OnUnit, OnPacket: hp.cfg.OnPacket, Logger: c.log,
+		Secrets: hp.secrets, DONL: hp.cfg.Offer.Tiles > 1, OnUnit: hp.cfg.OnUnit, OnPacket: hp.cfg.OnPacket,
+		MaxKbps: hp.cfg.MaxKbps, GOP: hp.cfg.GOP, Logger: c.log,
 	})
 	if err != nil {
 		return err
