@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.8 (2026-10-19). Open work is tracked in GitHub issues.
+Status as of v0.0.9 (2026-10-19). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -67,6 +67,12 @@ Status as of v0.0.8 (2026-10-19). Open work is tracked in GitHub issues.
     threshold; text uploads shrink by orders of magnitude.
   - Clipboard files from Windows to a Mac: copied files upload to
     ~/Downloads and their file URL goes on the Mac pasteboard.
+- v0.0.9:
+  - Remote Desktop sessions next to VNC: `rdp://host[:port]` embeds the
+    system mstscax control (NLA, codecs, audio, clipboard), uses saved
+    Windows credentials, and leaves with Ctrl+Alt+Shift+Q (#48).
+  - Verified against a live Windows host: connected, remote desktop
+    rendered inside the app.
 
 ## Deferred by the owner
 
