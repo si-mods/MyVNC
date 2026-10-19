@@ -44,5 +44,8 @@ all input. Press **Ctrl+Alt+Shift+Q** to leave the session.
   disconnect UI. Ctrl+Alt+Shift+Q returns to the home view.
 - No saved per-connection RDP options yet (size follows the window at
   connect, SmartSizing scales afterwards).
-- The embedded control has not been tested against a live Windows host in
-  CI; the host path and control activation are verified locally.
+- Verified against a live Windows host (192.0.2.20) with a saved
+  `MicrosoftAccount\jdoe` credential: `Connected=true`, negotiated desktop
+  1262x853, TCP and UDP transports established, and the remote desktop
+  rendered inside the app. CI has no Windows host, so this stays a local
+  check.
