@@ -10,12 +10,12 @@ import "time"
 const (
 	rateMin   = 200
 	rateMax   = 60000
-	rateStart = 8000      // a conservative start; demand raises it
-	rateGain  = 1.05      // multiplicative increase per second of demand
-	rateStep  = 50        // additive increase, kbit/s
-	rateCut   = 0.75      // multiplicative decrease on loss or queueing
-	rateDelay = 0.100     // seconds of one-way queueing that counts as congestion
-	rateHold  = 0.050     // below this the link is clean, above it hold
+	rateStart = 8000  // a conservative start; demand raises it
+	rateGain  = 1.05  // multiplicative increase per second of demand
+	rateStep  = 50    // additive increase, kbit/s
+	rateCut   = 0.75  // multiplicative decrease on loss or queueing
+	rateDelay = 0.100 // seconds of one-way queueing that counts as congestion
+	rateHold  = 0.050 // below this the link is clean, above it hold
 	rateEvery = time.Second
 )
 
