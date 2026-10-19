@@ -21,10 +21,9 @@ import (
 	"github.com/kyya/myvnc/locales"
 	"github.com/kyya/myvnc/rfb"
 	"github.com/kyya/myvnc/viewer"
+	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 )
-
-// gear is the settings icon (Lucide's "settings", ISC license).
-var gear, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`))
 
 func (a *app) view(c *ui.Context) {
 	c.SetTheme(appTheme(c))
@@ -64,7 +63,7 @@ func (a *app) homeView(c *ui.Context) {
 		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32, 32, 32+scrollGutter(t), 32).Gap(24).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, appName).FontSize(28).FontWeight(600).Grow(1)
-				if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
+				if components.IconButton(c, lucide.Settings(), locales.Settings(), components.IconButtonToolbar).Clicked() {
 					a.openSettings()
 				}
 			})
@@ -161,10 +160,6 @@ func (a *app) removeServer(server string) {
 	}
 }
 
-// monitor is the icon of a computer without a name (Lucide's "monitor",
-// ISC license).
-var monitor, _ = ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 21h8M12 17v4"/></svg>`))
-
 // avatar is the picture of a computer: the initials of the desktop name,
 // or of a host name, else a computer, for an IP address would give its
 // first digits.
@@ -175,7 +170,7 @@ func (a *app) avatar(c *ui.Context, server, name string) {
 		if _, ipErr := netip.ParseAddr(host); err != nil || ipErr == nil {
 			size := c.Theme().FontSize * 2.25
 			ui.Box(c).Size(size, size).Radius(size / 2).Center().Background(c.Theme().TextMuted).Label(server).Children(func() {
-				ui.Icon(c, monitor).TextColor(ui.RGB(255, 255, 255))
+				ui.Icon(c, lucide.Monitor()).TextColor(ui.RGB(255, 255, 255))
 			})
 			return
 		}
@@ -216,29 +211,27 @@ func (a *app) saveThumbnail(server string, img *image.RGBA) {
 
 // addView is the form of "+ Add computer".
 func (a *app) addView(c *ui.Context) {
-	ui.Modal(c, &a.addOpen, func() {
-		ui.Text(c, locales.AddComputer()).Bold()
+	components.Dialog(c, &a.addOpen, components.DialogOptions{Label: locales.AddComputer()}, func(panel ui.Element) {
+		panel.Width(420).Padding(20).Gap(14)
+		components.Text(c, locales.AddComputer()).FontSize(20).FontWeight(600)
 		submit := false
-		ui.Field(c, locales.Server(), func() {
-			submit = ui.TextInput(c, &a.server).Placeholder(locales.ServerPlaceholder()).AutoFocus().Submitted()
-		})
-		ui.Field(c, locales.Username(), func() {
-			ui.TextInput(c, &a.user).Placeholder(locales.UsernamePlaceholder())
-		})
-		ui.Field(c, locales.Password(), func() {
-			submit = ui.TextInput(c, &a.pass).Password().Submitted() || submit
-		})
-		if ui.Checkbox(c, &a.cfg.Remember, locales.RememberPassword()).Changed() {
+		submit = components.TextBox(c, &a.server, components.TextBoxOptions{}).
+			Label(locales.Server()).Placeholder(locales.ServerPlaceholder()).AutoFocus().Submitted() || submit
+		components.TextBox(c, &a.user, components.TextBoxOptions{}).
+			Label(locales.Username()).Placeholder(locales.UsernamePlaceholder())
+		submit = components.TextBox(c, &a.pass, components.TextBoxOptions{}).
+			Label(locales.Password()).Password().Submitted() || submit
+		if components.Switch(c, &a.cfg.Remember, locales.RememberPassword()).Changed() {
 			if !a.cfg.Remember {
 				a.forgetPassword(a.server)
 			}
 			a.saveConfig()
 		}
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if ui.Button(c, locales.Cancel()).Clicked() {
+			if components.Button(c, locales.Cancel(), components.ButtonGhost).Clicked() {
 				a.addOpen = false
 			}
-			if ui.PrimaryButton(c, locales.Connect()).Clicked() || submit {
+			if components.Button(c, locales.Connect(), components.ButtonPrimary).Clicked() || submit {
 				a.addOpen = false
 				a.connect()
 			}
@@ -271,74 +264,183 @@ func (a *app) settingsView(c *ui.Context) {
 		a.saveConfig()
 		a.settingsOpen = false
 	}
-	if a.settingsTab == "" {
-		a.settingsTab = "interface"
-	}
-	if ui.Modal(c, &a.settingsOpen, func() {
-		t := c.Theme()
-		ui.Column(c).Width(760).Height(520).Children(func() {
-			ui.Row(c).Padding(24, 24, 8, 24).Children(func() {
-				ui.Text(c, locales.Settings()).FontSize(20).FontWeight(600)
-			})
-			ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
-				ui.Column(c).Width(200).PaddingY(8).Background(t.Surface).
-					BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-					ui.Sidebar(c, &a.settingsTab, func() {
-						ui.SidebarItem(c, "interface", iconInterface, locales.Interface())
-						ui.SidebarItem(c, "video", iconVideo, locales.Video())
-						ui.SidebarItem(c, "clipboard", iconClipboard, locales.Clipboard())
-						ui.SidebarItem(c, "input", iconInput, locales.Input())
-						ui.SidebarItem(c, "connection", iconConnection, locales.Connection())
-						ui.SidebarItem(c, "window", iconWindow, locales.Window())
-					}).Grow(1)
-				})
-				ui.Scroll(c).Grow(1).Children(func() {
-					ui.Column(c).Padding(24, 24, 24+scrollGutter(t), 24).Gap(16).Children(func() {
-						switch a.settingsTab {
-						case "video":
-							a.settingsVideo(c)
-						case "clipboard":
-							a.settingsClipboard(c)
-						case "input":
-							a.settingsInput(c)
-						case "connection":
-							a.settingsConnection(c)
-						case "window":
-							a.settingsWindow(c)
-						default:
-							a.settingsInterface(c)
-						}
-					})
-				})
-			})
-			ui.Row(c).Padding(24, 12, 24, 24).Gap(8).Justify(ui.End).Children(func() {
-				if a.importFile != nil && ui.Button(c, locales.ImportTiger()).Clicked() {
+	components.Dialog(c, &a.settingsOpen, components.DialogOptions{
+		Label: locales.Settings(), DisableBackdropClose: true, DisableEscapeClose: true,
+	}, func(panel ui.Element) {
+		w, h := c.Size()
+		width := min(float32(860), w-80)
+		height := min(float32(580), h-120)
+		panel.Width(width).Height(height).Padding(0).Gap(0).Clip()
+		components.Settings(c, &a.settingsState, a.settingsCategories(), components.SettingsOptions{
+			Title:  locales.Settings(),
+			Narrow: width < 600,
+			Close:  apply,
+			HeaderActions: func(c *ui.Context) {
+				if a.importFile != nil && components.Button(c, locales.ImportTiger(), components.ButtonGhost).Clicked() {
 					apply()
 					a.importFile()
 				}
-				if a.exportFile != nil && ui.Button(c, locales.ExportTiger()).Clicked() {
+				if a.exportFile != nil && components.Button(c, locales.ExportTiger(), components.ButtonGhost).Clicked() {
 					apply()
 					a.exportFile()
 				}
-				if ui.PrimaryButton(c, locales.Ok()).Clicked() {
+				if components.Button(c, locales.Ok(), components.ButtonPrimary).Clicked() {
 					apply()
 				}
-			})
+			},
 		})
-	}).Dismissed() {
-		apply()
-	}
+	})
 }
 
-// Settings page icons (Lucide, ISC license).
-var (
-	iconInterface  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>`))
-	iconVideo      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M10 9.5l4.5 2.5-4.5 2.5z"/></svg>`))
-	iconClipboard  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>`))
-	iconInput      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/></svg>`))
-	iconConnection = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>`))
-	iconWindow     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg>`))
-)
+// onevraSelect is a Onevra select over values, showing label of the one
+// chosen; its Trigger.Changed reports a new choice.
+func onevraSelect[T comparable](c *ui.Context, value *T, values []T, label func(T) string) *components.SelectParts[T] {
+	sel := components.Select(c, value)
+	sel.Trigger.Children(func() { components.Text(c, label(*value)) })
+	sel.Popup(func(panel ui.Element) {
+		for _, v := range values {
+			item := sel.Item(v)
+			item.Children(func() { components.Text(c, label(v)) })
+		}
+	})
+	return sel
+}
+
+// selectValue reports whether a Onevra select chose another value.
+func selectValue[T comparable](c *ui.Context, value *T, values []T, label func(T) string) bool {
+	return onevraSelect(c, value, values, label).Trigger.Changed()
+}
+
+// settingsCategories builds Onevra's settings surface: one category per
+// page, one row per setting.
+func (a *app) settingsCategories() []components.SettingsCategory {
+	interfacePage := components.SettingsCategory{
+		ID: "interface", Title: locales.Interface(), Icon: lucide.SlidersHorizontal(),
+		Groups: []components.SettingsGroup{{ID: "look", Items: []components.SettingsItem{
+			{ID: "appearance", Title: locales.Appearance(), Build: func(c *ui.Context) {
+				if selectValue(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName) {
+					setThemeSource(a.cfg.Theme)
+					a.saveConfig()
+				}
+			}},
+			{ID: "language", Title: locales.Language(), Build: func(c *ui.Context) {
+				if selectValue(c, &a.cfg.Language, languages, languageName) {
+					a.saveConfig()
+					if a.setLocale != nil {
+						a.setLocale(a.cfg.Language)
+					}
+				}
+			}},
+			{ID: "scaling", Title: locales.Scaling(), Build: func(c *ui.Context) {
+				selectValue(c, &a.cfg.Scaling, viewer.Scalings, scalingName)
+			}},
+			{ID: "zoom", Title: locales.ZoomPercent(), Build: func(c *ui.Context) {
+				components.NumberInput(c, &a.zoom, 50, 200, 10).Label(locales.ZoomPercent())
+			}},
+		}}},
+	}
+	videoPage := components.SettingsCategory{
+		ID: "video", Title: locales.Video(), Icon: lucide.MonitorPlay(),
+		Groups: []components.SettingsGroup{{ID: "picture", Items: []components.SettingsItem{
+			{ID: "mode", Title: locales.VideoMode(), Stacked: true, Build: func(c *ui.Context) {
+				tabs := components.Tabs(c, &a.videoMode, components.TabsSegmented,
+					locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
+				_ = tabs
+			}},
+			{ID: "encoding", Title: locales.PreferredEncoding(), Build: func(c *ui.Context) {
+				selectValue(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel)
+			}},
+			{ID: "quality", Title: locales.JpegQuality() + ": " + strconv.Itoa(int(a.quality)*10) + " %", Stacked: true, Build: func(c *ui.Context) {
+				components.Slider(c, &a.quality, 0, 9, components.SliderOptions{Step: 1}).Label(locales.JpegQuality())
+			}},
+			{ID: "compression", Title: locales.CompressionLevel(), Build: func(c *ui.Context) {
+				components.NumberInput(c, &a.compress, 0, 9, 1).Label(locales.CompressionLevel())
+			}},
+			{ID: "fps", Title: locales.MaxFPS() + ": " + fpsText(a.maxFPS), Stacked: true, Build: func(c *ui.Context) {
+				components.Slider(c, &a.maxFPS, 0, 60, components.SliderOptions{Step: 1}).Label(locales.MaxFPS())
+			}},
+			{ID: "kbps", Title: locales.H264Kbps() + ": " + kbpsText(a.maxKbps), Stacked: true, Build: func(c *ui.Context) {
+				components.Slider(c, &a.maxKbps, 0, 60000, components.SliderOptions{Step: 500}).Label(locales.H264Kbps())
+			}},
+			{ID: "gop", Title: locales.H264GOP() + ": " + gopText(a.gop), Stacked: true, Build: func(c *ui.Context) {
+				components.Slider(c, &a.gop, 0, 300, components.SliderOptions{Step: 1}).Label(locales.H264GOP())
+			}},
+			{ID: "orientation", Title: locales.Orientation(), Stacked: true, Build: func(c *ui.Context) {
+				components.Tabs(c, &a.orient, components.TabsSegmented, locales.Default(), "90°", "180°", "270°")
+			}},
+			{ID: "decoding", Title: locales.VideoDecoding(), Build: func(c *ui.Context) {
+				selectValue(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
+			}},
+		}}},
+	}
+	clipboardPage := components.SettingsCategory{
+		ID: "clipboard", Title: locales.Clipboard(), Icon: lucide.Clipboard(),
+		Groups: []components.SettingsGroup{{ID: "text", Items: []components.SettingsItem{
+			{ID: "limit", Title: locales.ClipboardLimit(), Build: func(c *ui.Context) {
+				components.NumberInput(c, &a.clipKiB, 1, 64*1024, 64).Label(locales.ClipboardLimit())
+			}},
+			{ID: "accept", Title: locales.AcceptClipboard(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard(), components.SwitchOptions{HideLabel: true})
+			}},
+			{ID: "send", Title: locales.SendClipboard(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.SendClipboard, locales.SendClipboard(), components.SwitchOptions{HideLabel: true})
+			}},
+		}}},
+	}
+	inputPage := components.SettingsCategory{
+		ID: "input", Title: locales.Input(), Icon: lucide.Keyboard(),
+		Groups: []components.SettingsGroup{{ID: "mouse", Items: []components.SettingsItem{
+			{ID: "view", Title: locales.ViewOnly(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.ViewOnly, locales.ViewOnly(), components.SwitchOptions{HideLabel: true})
+			}},
+			{ID: "middle", Title: locales.EmulateMiddleButton(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton(), components.SwitchOptions{HideLabel: true})
+			}},
+		}}},
+	}
+	connectionPage := components.SettingsCategory{
+		ID: "connection", Title: locales.Connection(), Icon: lucide.Plug(),
+		Groups: []components.SettingsGroup{{ID: "session", Items: []components.SettingsItem{
+			{ID: "shared", Title: locales.Shared(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.Shared, locales.Shared(), components.SwitchOptions{HideLabel: true})
+			}},
+			{ID: "reconnect", Title: locales.Reconnect(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.Reconnect, locales.Reconnect(), components.SwitchOptions{HideLabel: true})
+			}},
+			{ID: "hp", Title: locales.HighPerformance(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.HighPerformance, locales.HighPerformance(), components.SwitchOptions{HideLabel: true})
+			}},
+			{ID: "secure", Title: locales.SecureOnly(), Build: func(c *ui.Context) {
+				components.Switch(c, &a.cfg.SecureOnly, locales.SecureOnly(), components.SwitchOptions{HideLabel: true})
+			}},
+		}}},
+	}
+	windowItems := []components.SettingsItem{
+		{ID: "fullscreen", Title: locales.FullScreen(), Build: func(c *ui.Context) {
+			components.Switch(c, &a.cfg.FullScreen, locales.FullScreen(), components.SwitchOptions{HideLabel: true})
+		}},
+		{ID: "dynamic", Title: locales.DynamicResolution(), Build: func(c *ui.Context) {
+			components.Switch(c, &a.cfg.DynamicResolution, locales.DynamicResolution(), components.SwitchOptions{HideLabel: true})
+		}},
+	}
+	if a.displays != nil {
+		if ds := a.displays(); len(ds) > 1 {
+			windowItems = append(windowItems, components.SettingsItem{ID: "display", Title: locales.FullScreenOn(), Build: func(c *ui.Context) {
+				selectValue(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
+					if d == "" {
+						return locales.DisplayCurrent()
+					}
+					return d
+				})
+			}})
+		}
+	}
+	windowPage := components.SettingsCategory{
+		ID: "window", Title: locales.Window(), Icon: lucide.AppWindow(),
+		Groups: []components.SettingsGroup{{ID: "layout", Items: windowItems}},
+	}
+	return []components.SettingsCategory{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage}
+}
 
 // scrollGutter is the room a scroll's bar takes at its right edge, so
 // that content does not run under it.
@@ -348,114 +450,6 @@ func scrollGutter(t *ui.Theme) float32 {
 		w = 6
 	}
 	return w + 12
-}
-
-// settingsCard is one WinUI settings card: a title and a rounded surface
-// of fields.
-func (a *app) settingsCard(c *ui.Context, title string, fn func()) {
-	t := c.Theme()
-	ui.Column(c).Gap(8).Children(func() {
-		ui.Text(c, title).FontSize(20).FontWeight(600)
-		ui.Box(c).Padding(16).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
-			ui.Form(c, fn)
-		})
-	})
-}
-
-func (a *app) settingsInterface(c *ui.Context) {
-	a.settingsCard(c, locales.Interface(), func() {
-		ui.Field(c, locales.Appearance(), func() {
-			if selectLabeled(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName).Changed() {
-				setThemeSource(a.cfg.Theme)
-				a.saveConfig()
-			}
-		})
-		ui.Field(c, locales.Language(), func() {
-			if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
-				a.saveConfig()
-				if a.setLocale != nil {
-					a.setLocale(a.cfg.Language)
-				}
-			}
-		})
-		ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
-		ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
-	})
-}
-
-func (a *app) settingsVideo(c *ui.Context) {
-	a.settingsCard(c, locales.Video(), func() {
-		ui.Field(c, locales.VideoMode(), func() {
-			ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
-		})
-		ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
-		ui.Field(c, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
-			ui.Slider(c, &a.quality, 0, 9)
-		})
-		ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
-		ui.Field(c, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() { ui.Slider(c, &a.maxFPS, 0, 60) })
-		ui.Field(c, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() { ui.Slider(c, &a.maxKbps, 0, 60000) })
-		ui.Field(c, locales.H264GOP()+": "+gopText(a.gop), func() { ui.Slider(c, &a.gop, 0, 300) })
-		ui.Field(c, locales.Orientation(), func() {
-			ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°")
-		})
-		ui.Field(c, locales.VideoDecoding(), func() {
-			selectLabeled(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
-		})
-	})
-}
-
-func (a *app) settingsClipboard(c *ui.Context) {
-	a.settingsCard(c, locales.Clipboard(), func() {
-		ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
-		ui.Field(c, locales.Clipboard(), func() {
-			ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard())
-			ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard())
-		})
-	})
-}
-
-func (a *app) settingsInput(c *ui.Context) {
-	a.settingsCard(c, locales.Input(), func() {
-		ui.Field(c, locales.Input(), func() {
-			ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly())
-			ui.Checkbox(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton())
-		})
-	})
-}
-
-func (a *app) settingsConnection(c *ui.Context) {
-	a.settingsCard(c, locales.Connection(), func() {
-		ui.Field(c, locales.Connection(), func() {
-			ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
-			ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
-			ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
-		})
-		ui.Field(c, locales.Security(), func() {
-			ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
-		})
-	})
-}
-
-func (a *app) settingsWindow(c *ui.Context) {
-	a.settingsCard(c, locales.Window(), func() {
-		ui.Field(c, locales.Window(), func() {
-			ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
-			ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution())
-		})
-		if a.displays != nil {
-			if ds := a.displays(); len(ds) > 1 {
-				ui.Field(c, locales.FullScreenOn(), func() {
-					selectLabeled(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
-						if d == "" {
-							return locales.DisplayCurrent()
-						}
-						return d
-					})
-				})
-			}
-		}
-	})
 }
 
 func (a *app) connectingView(c *ui.Context) {
@@ -552,18 +546,20 @@ func (a *app) panel(c *ui.Context) {
 		ui.Text(c, text+" · "+kind).TextColor(color)
 		if a.sess.HighPerformance() {
 			ui.Text(c, locales.StatsMode(a.mediaMode()))
-			if a.hpFailed && ui.Button(c, locales.RetryHighPerformance()).Clicked() {
+			if a.hpFailed && components.Button(c, locales.RetryHighPerformance(), components.ButtonGhost).Clicked() {
 				a.retryMedia()
 				a.menuOpen = false
 			}
 		}
 		ui.Divider(c)
 		ui.Field(c, locales.Scaling(), func() {
-			if selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName).Disabled(a.cfg.DynamicResolution).Changed() {
+			sel := onevraSelect(c, &a.cfg.Scaling, viewer.Scalings, scalingName)
+			sel.Trigger.Disabled(a.cfg.DynamicResolution)
+			if sel.Trigger.Changed() {
 				a.saveConfig()
 			}
 		})
-		if ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution()).Changed() {
+		if components.Switch(c, &a.cfg.DynamicResolution, locales.DynamicResolution()).Changed() {
 			a.dyn.Forget()
 			a.dynUrgent = true
 			a.saveConfig()
@@ -571,35 +567,35 @@ func (a *app) panel(c *ui.Context) {
 		if a.dynHint {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, locales.DynamicResolutionRefused()).TextColor(t.Warning).Wrap().Grow(1)
-				if ui.Button(c, locales.Dismiss()).Clicked() {
+				if components.Button(c, locales.Dismiss(), components.ButtonGhost).Clicked() {
 					a.dynHint = false
 				}
 			})
 		}
-		if ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly()).Changed() {
+		if components.Switch(c, &a.cfg.ViewOnly, locales.ViewOnly()).Changed() {
 			if a.cfg.ViewOnly && a.sc != nil {
 				a.sendKeys(a.sc.Reset())
 			}
 			a.saveConfig()
 		}
 		fs := a.cfg.FullScreen
-		if ui.Checkbox(c, &fs, locales.FullScreen()).Changed() {
+		if components.Switch(c, &fs, locales.FullScreen()).Changed() {
 			a.toggleFullScreen()
 		}
-		if ui.Checkbox(c, &a.cfg.Stats, locales.ShowStats()).Changed() {
+		if components.Switch(c, &a.cfg.Stats, locales.ShowStats()).Changed() {
 			a.saveConfig()
 		}
-		if ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard()).Changed() {
+		if components.Switch(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard()).Changed() {
 			a.saveConfig()
 		}
-		if ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard()).Changed() {
+		if components.Switch(c, &a.cfg.SendClipboard, locales.SendClipboard()).Changed() {
 			a.saveConfig()
 		}
-		if a.cfg.AcceptClipboard && !a.cfg.ViewOnly && ui.Button(c, locales.FetchClipboard()).Clicked() {
+		if a.cfg.AcceptClipboard && !a.cfg.ViewOnly && components.Button(c, locales.FetchClipboard(), components.ButtonGhost).Clicked() {
 			a.requestClipboard()
 			a.menuOpen = false
 		}
-		if a.sess.FileCopyAvailable() && ui.Button(c, locales.DownloadFile()).Clicked() {
+		if a.sess.FileCopyAvailable() && components.Button(c, locales.DownloadFile(), components.ButtonGhost).Clicked() {
 			if a.dlPath == "" {
 				a.dlPath = "/Users/" + a.user + "/"
 			}
@@ -607,11 +603,11 @@ func (a *app) panel(c *ui.Context) {
 			a.menuOpen = false
 		}
 		ui.Divider(c)
-		if ui.Button(c, locales.SendCtrlAltDel()).Clicked() {
+		if components.Button(c, locales.SendCtrlAltDel(), components.ButtonGhost).Clicked() {
 			a.ctrlAltDel()
 			a.menuOpen = false
 		}
-		if ui.Button(c, locales.Disconnect()).Clicked() {
+		if components.Button(c, locales.Disconnect(), components.ButtonGhost).Clicked() {
 			a.menuOpen = false
 			a.disconnect()
 		}

@@ -33,6 +33,7 @@ import (
 	"github.com/kyya/myvnc/viewer/emulatemb"
 	"github.com/kyya/myvnc/viewer/keymap"
 	"github.com/kyya/myvnc/viewer/params"
+	"github.com/oneo-me/onevra/source/components"
 )
 
 const appName = "MyVNC"
@@ -58,7 +59,7 @@ type app struct {
 	server, user, pass string
 	addOpen            bool
 	settingsOpen       bool
-	settingsTab        string // the settings page shown
+	settingsState      components.SettingsState
 	quality, compress  float64
 	maxFPS, maxKbps    float64
 	gop                float64
