@@ -3,6 +3,8 @@
 MyVNC is a VNC and Remote Desktop viewer for Windows, written in pure Go
 with [MyGo](https://github.com/egoist/mygo) native UI.
 
+Right-click a card on the home view to remove that saved connection.
+
 Besides RFB/VNC it connects to Microsoft Remote Desktop (RDP) endpoints by
 embedding the system Remote Desktop ActiveX control: enter
 `rdp://host[:port]` as the server address. NLA, graphics, audio and

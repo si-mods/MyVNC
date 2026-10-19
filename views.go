@@ -8,6 +8,7 @@ package main
 import (
 	"image"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -132,7 +133,24 @@ func (a *app) card(c *ui.Context, server string) {
 	}).OnClick(func() {
 		a.server = server
 		a.connect()
+	}).ContextMenu(func(m *ui.Menu) {
+		if m.Item(locales.RemoveComputer()).Chosen() {
+			a.removeServer(server)
+		}
 	})
+}
+
+// removeServer forgets a saved connection: its card, metadata and thumbnail.
+func (a *app) removeServer(server string) {
+	a.cfg.RemoveServer(server)
+	delete(a.thumbs, server)
+	if err := os.Remove(viewer.ThumbnailPath(a.dir, server)); err != nil && !os.IsNotExist(err) {
+		a.log.Warn("removing the thumbnail", "err", err)
+	}
+	a.saveConfig()
+	if a.sessServer == server {
+		a.sessServer = ""
+	}
 }
 
 // monitor is the icon of a computer without a name (Lucide's "monitor",

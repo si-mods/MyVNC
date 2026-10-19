@@ -706,3 +706,34 @@ func TestRDPTarget(t *testing.T) {
 		}
 	}
 }
+
+// Right-clicking a card and choosing Remove computer forgets the saved
+// connection and its card.
+func TestRemoveServer(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.AddServer("192.168.1.10")
+	a.cfg.Computers["192.168.1.10"] = viewer.Computer{Name: "pc", Last: time.Now()}
+	a.tt.Frame()
+	if !a.tt.HasText("pc") {
+		t.Fatalf("card missing: %q", a.tt.Texts())
+	}
+	if err := a.tt.RightClick("pc"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tt.Menu(); !slices.Contains(got, "Remove computer") {
+		t.Fatalf("context menu %q", got)
+	}
+	if err := a.tt.ChooseMenuItem("Remove computer"); err != nil {
+		t.Fatal(err)
+	}
+	a.tt.Frame()
+	if slices.Contains(a.cfg.Servers, "192.168.1.10") {
+		t.Errorf("server still saved: %v", a.cfg.Servers)
+	}
+	if _, ok := a.cfg.Computers["192.168.1.10"]; ok {
+		t.Error("computer metadata still saved")
+	}
+	if a.tt.HasText("pc") {
+		t.Errorf("card still shown: %q", a.tt.Texts())
+	}
+}
