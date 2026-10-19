@@ -63,16 +63,18 @@ type videoPipe struct {
 	units    chan *media.Unit
 	done     chan struct{}
 	mode     mf.Mode
-	keyframe func() // asks the Mac for a keyframe
+	maxFPS   int       // display cap, 0 for the stream's rate
+	lastShow time.Time // when the last picture was shown
+	keyframe func()    // asks the Mac for a keyframe
 	// show has a decoded picture, how it came and the decoder
 	show    func(img *image.RGBA, how string, dec mf.Info)
 	noCodec func(error) // nothing decodes the codec: give up
 	n       *counters   // the session's, for the statistics overlay
 }
 
-func newVideoPipe(m mf.Mode, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), n *counters) *videoPipe {
+func newVideoPipe(m mf.Mode, maxFPS int, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), n *counters) *videoPipe {
 	p := &videoPipe{units: make(chan *media.Unit, videoQueue), done: make(chan struct{}), mode: m,
-		keyframe: keyframe, show: show, noCodec: noCodec, n: n}
+		maxFPS: maxFPS, keyframe: keyframe, show: show, noCodec: noCodec, n: n}
 	go p.run()
 	return p
 }
@@ -143,6 +145,12 @@ func (p *videoPipe) run() {
 		}
 		if len(frames) > 0 {
 			f := frames[len(frames)-1]
+			if p.maxFPS > 0 {
+				if gap := time.Second / time.Duration(p.maxFPS); time.Since(p.lastShow) < gap {
+					continue // decoded for its references, not shown
+				}
+				p.lastShow = time.Now()
+			}
 			info := dec.Info()
 			p.show(f.RGBA, mediaMode(codec, info.Output, f.Rect), info)
 		}

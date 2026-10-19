@@ -193,6 +193,10 @@ type Config struct {
 	Reconnect         bool   // after an unexpected disconnect
 	ClipboardKiB      int    // largest server clipboard accepted
 	HighPerformance   bool   // ask a Mac for ARD High Performance, on (re)connect
+	MaxFPS            int    // High Performance pictures shown per second, 0 unlimited
+	MaxKbps           int    // High Performance bitrate cap, 0 adaptive
+	GOP               int    // asked-for keyframe interval in pictures, 0 off
+	Orientation       int    // clockwise display rotation: 0, 90, 180 or 270
 	// VideoDecoding is one of VideoDecodings: where High Performance and
 	// H.264 video is decoded, on (re)connect.
 	VideoDecoding string
@@ -256,6 +260,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	c.Quality = min(max(c.Quality, 0), 9)
 	c.Compress = min(max(c.Compress, 0), 9)
+	c.MaxFPS = min(max(c.MaxFPS, 0), 240)
+	c.MaxKbps = min(max(c.MaxKbps, 0), 60000)
+	c.GOP = min(max(c.GOP, 0), 3600)
+	if c.Orientation%90 != 0 || c.Orientation < 0 || c.Orientation >= 360 {
+		c.Orientation = 0
+	}
 	if !slices.Contains(VideoDecodings, c.VideoDecoding) {
 		c.VideoDecoding = "Auto"
 	}
@@ -288,6 +298,30 @@ func (c *Config) RemoveServer(server string) {
 
 // AutoSelect reports whether the encoding is "Auto".
 func (c *Config) AutoSelect() bool { return c.Encoding == "Auto" }
+
+// VideoMode is the PiKVM-style choice of pipeline: 0 ARD High Performance
+// (WebRTC H.264), 1 H.264 over the RFB stream, 2 legacy JPEG (Tight).
+func (c *Config) VideoMode() int {
+	if c.HighPerformance {
+		return 0
+	}
+	if c.Encoding == "H.264" {
+		return 1
+	}
+	return 2
+}
+
+// SetVideoMode sets the pipeline VideoMode reads.
+func (c *Config) SetVideoMode(mode int) {
+	switch mode {
+	case 0:
+		c.HighPerformance, c.Encoding = true, "Auto"
+	case 1:
+		c.HighPerformance, c.Encoding = false, "H.264"
+	default:
+		c.HighPerformance, c.Encoding = false, "Tight"
+	}
+}
 
 // EncodingList is the SetEncodings list: the preferred encoding, then
 // the other decoders' from the highest number down, as TigerVNC orders
