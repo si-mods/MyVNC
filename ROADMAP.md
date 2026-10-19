@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.9 (2026-10-19). Open work is tracked in GitHub issues.
+Status as of v0.0.10 (2026-10-19). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -73,6 +73,12 @@ Status as of v0.0.9 (2026-10-19). Open work is tracked in GitHub issues.
     Windows credentials, and leaves with Ctrl+Alt+Shift+Q (#48).
   - Verified against a live Windows host: connected, remote desktop
     rendered inside the app.
+- v0.0.10:
+  - RDP no longer shows a black screen: the native control is raised
+    above mygo's canvas every frame (#49).
+  - RDP window resizes change the remote desktop resolution through
+    UpdateSessionDisplaySettings, debounced and DPI-aware, like the Mac
+    viewer's dynamic resolution.
 
 ## Deferred by the owner
 
