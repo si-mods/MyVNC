@@ -117,6 +117,10 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - WinUI 11's look: the system light/dark appearance and accent, 4 DIP
     controls and 8 DIP cards, Segoe UI Variable, WinUI surfaces and
     strokes, and an Appearance choice (System/Light/Dark).
+- v0.0.20:
+  - WinUI settings: a source list with icons (Interface, Video,
+    Clipboard, Input, Connection, Window) beside one card per page, and
+    a scrollbar gutter so controls are no longer covered by the bar.
 
 ## Deferred by the owner
 
