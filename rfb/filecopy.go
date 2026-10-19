@@ -28,6 +28,18 @@ const (
 	fileCopyCmdEndSess    = 0x68
 )
 
+// Command-layer cmd values (the u16 at 0x08 of a 0x22 record).
+const (
+	fileCopyStartSend    = 1
+	fileCopyStartReceive = 2
+	fileCopyStop         = 5
+)
+
+// fileCopyFlagStartSending is bit 0 of StartFileSend's flags. Without
+// it screensharingd parses the command but never launches
+// SSFileCopySender ("do not start file send").
+const fileCopyFlagStartSending = 1
+
 // ardFileCopyChunkSize is the payload per 0x66/0x67 record. A variable so
 // benchmarks can compare sizes; 64 KiB matches the sizes the Mac accepts
 // and keeps each encrypted record small.
@@ -273,9 +285,11 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 		return errors.New("rfb: file copy destination must be an absolute path")
 	}
 
-	const sessionID = 1 // one transfer at a time; the Mac keys records on it
+	// One transfer at a time, keyed by sessionID; the Mac frees the
+	// session after EndSession.
+	const sessionID = fileCopySessionID
 
-	if err := c.write(ardFileCopyCmd(2, sessionID, 0, dir)); err != nil {
+	if err := c.write(ardFileCopyCmd(fileCopyStartReceive, sessionID, 0, dir)); err != nil {
 		return err
 	}
 	// screensharingd spawns SSFileCopyReceiver asynchronously after the

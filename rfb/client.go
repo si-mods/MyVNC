@@ -212,7 +212,9 @@ type Client struct {
 	ardLayout    bool              // a display layout (1101/1105) has arrived
 	rawTap       io.Writer         // test-only: tee of the decrypted ARD stream (#43)
 	fcServer     func(body []byte) // test/impl hook: an inbound 0x22 file-copy record body (#43)
-	fcMu         sync.Mutex        // serialises FileCopyUpload; sessionID is fixed (#43)
+	fcMu         sync.Mutex        // serialises file copy; sessionID is fixed (#43)
+	fcIn         *fileCopyDownload // active download consuming inbound 0x22 records (#43)
+	fcInMu       sync.Mutex        // guards fcIn; the read side must not take fcMu
 	hp           *hpState
 	name         string
 	pf           pixel.Format
@@ -312,6 +314,7 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 // Close closes the connection; Run then returns nil.
 func (c *Client) Close() error {
 	c.closed.Store(true)
+	c.abortFileCopy(errors.New("rfb: connection closed"))
 	// Close the connection first: a writer blocked on a stalled network
 	// holds c.mu, which hpStop needs.
 	err := c.conn.Close()
