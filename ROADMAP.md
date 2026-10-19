@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.10 (2026-10-19). Open work is tracked in GitHub issues.
+Status as of v0.0.11 (2026-10-19). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -79,6 +79,9 @@ Status as of v0.0.10 (2026-10-19). Open work is tracked in GitHub issues.
   - RDP window resizes change the remote desktop resolution through
     UpdateSessionDisplaySettings, debounced and DPI-aware, like the Mac
     viewer's dynamic resolution.
+- v0.0.11:
+  - Right-click a home card and choose Remove computer to forget a saved
+    connection, its metadata and its thumbnail (#50).
 
 ## Deferred by the owner
 
