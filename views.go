@@ -284,12 +284,12 @@ func (a *app) settingsView(c *ui.Context) {
 				ui.Column(c).Width(200).PaddingY(8).Background(t.Surface).
 					BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 					ui.Sidebar(c, &a.settingsTab, func() {
-						ui.SidebarItem(c, "interface", nil, locales.Interface())
-						ui.SidebarItem(c, "video", nil, locales.Video())
-						ui.SidebarItem(c, "clipboard", nil, locales.Clipboard())
-						ui.SidebarItem(c, "input", nil, locales.Input())
-						ui.SidebarItem(c, "connection", nil, locales.Connection())
-						ui.SidebarItem(c, "window", nil, locales.Window())
+						ui.SidebarItem(c, "interface", iconInterface, locales.Interface())
+						ui.SidebarItem(c, "video", iconVideo, locales.Video())
+						ui.SidebarItem(c, "clipboard", iconClipboard, locales.Clipboard())
+						ui.SidebarItem(c, "input", iconInput, locales.Input())
+						ui.SidebarItem(c, "connection", iconConnection, locales.Connection())
+						ui.SidebarItem(c, "window", iconWindow, locales.Window())
 					}).Grow(1)
 				})
 				ui.Scroll(c).Grow(1).Children(func() {
@@ -329,6 +329,16 @@ func (a *app) settingsView(c *ui.Context) {
 		apply()
 	}
 }
+
+// Settings page icons (Lucide, ISC license).
+var (
+	iconInterface  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>`))
+	iconVideo      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M10 9.5l4.5 2.5-4.5 2.5z"/></svg>`))
+	iconClipboard  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>`))
+	iconInput      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/></svg>`))
+	iconConnection = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>`))
+	iconWindow     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg>`))
+)
 
 // scrollGutter is the room a scroll's bar takes at its right edge, so
 // that content does not run under it.
