@@ -69,3 +69,23 @@ func TestTileCacheEvicts(t *testing.T) {
 		t.Fatalf("cache holds %d bytes, cap %d", c.bytes, maxTileCacheBytes)
 	}
 }
+
+func BenchmarkTileCacheHit(b *testing.B) {
+	c := newTileCache()
+	pf := pixel.RGBA
+	rect := image.Rect(0, 0, 64, 64)
+	fb := image.NewRGBA(rect)
+	key, ok := c.key(EncodingRaw, rect, &pf, []byte("bench"))
+	if !ok {
+		b.Fatal("key rejected")
+	}
+	c.put(key, fb, rect)
+	out := image.NewRGBA(rect)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !c.get(key, out, rect) {
+			b.Fatal("cache miss")
+		}
+	}
+}
