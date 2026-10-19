@@ -91,6 +91,10 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
     the Mac run SSFileCopySender and stream files, folders and symlinks
     back. The session menu's Download a file… asks for the remote path
     and saves into the local Downloads folder (#43).
+- v0.0.14:
+  - Drop files from Explorer on the session window to upload them to the
+    Mac's Downloads folder and put their URL on its pasteboard, the same
+    path as copied files (#43).
 
 ## Deferred by the owner
 
