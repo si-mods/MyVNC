@@ -280,6 +280,12 @@ func (c *Config) AddServer(server string) {
 	}
 }
 
+// RemoveServer forgets a saved connection and its card metadata.
+func (c *Config) RemoveServer(server string) {
+	c.Servers = slices.DeleteFunc(c.Servers, func(s string) bool { return s == server })
+	delete(c.Computers, server)
+}
+
 // AutoSelect reports whether the encoding is "Auto".
 func (c *Config) AutoSelect() bool { return c.Encoding == "Auto" }
 

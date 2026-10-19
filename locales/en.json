@@ -16,6 +16,8 @@
     }
   },
   "addComputer": "Add computer",
+  "removeComputer": "Remove computer",
+  "@removeComputer": { "description": "Context menu item on a home-view card, removing the saved connection." },
   "@addComputer": { "description": "The last card of the home view, and the title of its form." },
   "neverConnected": "Never connected",
   "lastConnected": "Last connected {when, date, medium} {when, time, short}",

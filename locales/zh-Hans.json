@@ -8,6 +8,8 @@
   "disconnect": "断开连接",
   "reconnecting": "与 {server} 的连接已断开，正在重新连接（第 {attempt} 次，共 {total} 次）…",
   "addComputer": "添加计算机",
+  "removeComputer": "移除计算机",
+  "@removeComputer": { "description": "主页卡片右键菜单：删除已保存的连接。" },
   "neverConnected": "从未连接",
   "lastConnected": "上次连接：{when, date, medium} {when, time, short}",
   "server": "服务器",
