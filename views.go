@@ -61,7 +61,7 @@ func (a *app) rdpView(c *ui.Context) {
 func (a *app) homeView(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32).Gap(24).Children(func() {
+		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32, 32, 32+scrollGutter(t), 32).Gap(24).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, appName).FontSize(28).FontWeight(600).Grow(1)
 				if ui.Button(c, "").Label(locales.Settings()).Children(func() { ui.Icon(c, gear) }).Clicked() {
@@ -271,92 +271,47 @@ func (a *app) settingsView(c *ui.Context) {
 		a.saveConfig()
 		a.settingsOpen = false
 	}
+	if a.settingsTab == "" {
+		a.settingsTab = "interface"
+	}
 	if ui.Modal(c, &a.settingsOpen, func() {
-		ui.Column(c).Width(520).Gap(16).Children(func() {
-			ui.Text(c, locales.Settings()).FontSize(20).FontWeight(600)
-			ui.Scroll(c).MaxHeight(400).Children(func() {
-				ui.Form(c, func() {
-					ui.Fieldset(c, locales.Interface(), func() {
-						ui.Field(c, locales.Appearance(), func() {
-							if selectLabeled(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName).Changed() {
-								setThemeSource(a.cfg.Theme)
-								a.saveConfig()
-							}
-						})
-						ui.Field(c, locales.Language(), func() {
-							if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
-								a.saveConfig()
-								if a.setLocale != nil {
-									a.setLocale(a.cfg.Language)
-								}
-							}
-						})
-						ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
-						ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
-					})
-					ui.Fieldset(c, locales.Video(), func() {
-						ui.Field(c, locales.VideoMode(), func() {
-							ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
-						})
-						ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
-						ui.Field(c, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
-							ui.Slider(c, &a.quality, 0, 9)
-						})
-						ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
-						ui.Field(c, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() { ui.Slider(c, &a.maxFPS, 0, 60) })
-						ui.Field(c, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() { ui.Slider(c, &a.maxKbps, 0, 60000) })
-						ui.Field(c, locales.H264GOP()+": "+gopText(a.gop), func() { ui.Slider(c, &a.gop, 0, 300) })
-						ui.Field(c, locales.Orientation(), func() {
-							ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°")
-						})
-						ui.Field(c, locales.VideoDecoding(), func() {
-							selectLabeled(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
-						})
-					})
-					ui.Fieldset(c, locales.Clipboard(), func() {
-						ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
-						ui.Field(c, locales.Clipboard(), func() {
-							ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard())
-							ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard())
-						})
-					})
-					ui.Fieldset(c, locales.Input(), func() {
-						ui.Field(c, locales.Input(), func() {
-							ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly())
-							ui.Checkbox(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton())
-						})
-					})
-					ui.Fieldset(c, locales.Connection(), func() {
-						ui.Field(c, locales.Connection(), func() {
-							ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
-							ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
-							ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
-						})
-						ui.Field(c, locales.Security(), func() {
-							ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
-						})
-					})
-					ui.Fieldset(c, locales.Window(), func() {
-						ui.Field(c, locales.Window(), func() {
-							ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
-							ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution())
-						})
-						if a.displays != nil {
-							if ds := a.displays(); len(ds) > 1 {
-								ui.Field(c, locales.FullScreenOn(), func() {
-									selectLabeled(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
-										if d == "" {
-											return locales.DisplayCurrent()
-										}
-										return d
-									})
-								})
-							}
+		t := c.Theme()
+		ui.Column(c).Width(760).Height(520).Children(func() {
+			ui.Row(c).Padding(24, 24, 8, 24).Children(func() {
+				ui.Text(c, locales.Settings()).FontSize(20).FontWeight(600)
+			})
+			ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
+				ui.Column(c).Width(200).PaddingY(8).Background(t.Surface).
+					BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
+					ui.Sidebar(c, &a.settingsTab, func() {
+						ui.SidebarItem(c, "interface", iconInterface, locales.Interface())
+						ui.SidebarItem(c, "video", iconVideo, locales.Video())
+						ui.SidebarItem(c, "clipboard", iconClipboard, locales.Clipboard())
+						ui.SidebarItem(c, "input", iconInput, locales.Input())
+						ui.SidebarItem(c, "connection", iconConnection, locales.Connection())
+						ui.SidebarItem(c, "window", iconWindow, locales.Window())
+					}).Grow(1)
+				})
+				ui.Scroll(c).Grow(1).Children(func() {
+					ui.Column(c).Padding(24, 24, 24+scrollGutter(t), 24).Gap(16).Children(func() {
+						switch a.settingsTab {
+						case "video":
+							a.settingsVideo(c)
+						case "clipboard":
+							a.settingsClipboard(c)
+						case "input":
+							a.settingsInput(c)
+						case "connection":
+							a.settingsConnection(c)
+						case "window":
+							a.settingsWindow(c)
+						default:
+							a.settingsInterface(c)
 						}
 					})
 				})
 			})
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Row(c).Padding(24, 12, 24, 24).Gap(8).Justify(ui.End).Children(func() {
 				if a.importFile != nil && ui.Button(c, locales.ImportTiger()).Clicked() {
 					apply()
 					a.importFile()
@@ -375,7 +330,133 @@ func (a *app) settingsView(c *ui.Context) {
 	}
 }
 
-// Connecting.
+// Settings page icons (Lucide, ISC license).
+var (
+	iconInterface  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>`))
+	iconVideo      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M10 9.5l4.5 2.5-4.5 2.5z"/></svg>`))
+	iconClipboard  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>`))
+	iconInput      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/></svg>`))
+	iconConnection = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>`))
+	iconWindow     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg>`))
+)
+
+// scrollGutter is the room a scroll's bar takes at its right edge, so
+// that content does not run under it.
+func scrollGutter(t *ui.Theme) float32 {
+	w := t.ScrollbarWidth
+	if w <= 0 {
+		w = 6
+	}
+	return w + 12
+}
+
+// settingsCard is one WinUI settings card: a title and a rounded surface
+// of fields.
+func (a *app) settingsCard(c *ui.Context, title string, fn func()) {
+	t := c.Theme()
+	ui.Column(c).Gap(8).Children(func() {
+		ui.Text(c, title).FontSize(20).FontWeight(600)
+		ui.Box(c).Padding(16).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
+			ui.Form(c, fn)
+		})
+	})
+}
+
+func (a *app) settingsInterface(c *ui.Context) {
+	a.settingsCard(c, locales.Interface(), func() {
+		ui.Field(c, locales.Appearance(), func() {
+			if selectLabeled(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName).Changed() {
+				setThemeSource(a.cfg.Theme)
+				a.saveConfig()
+			}
+		})
+		ui.Field(c, locales.Language(), func() {
+			if selectLabeled(c, &a.cfg.Language, languages, languageName).Changed() {
+				a.saveConfig()
+				if a.setLocale != nil {
+					a.setLocale(a.cfg.Language)
+				}
+			}
+		})
+		ui.Field(c, locales.Scaling(), func() { selectLabeled(c, &a.cfg.Scaling, viewer.Scalings, scalingName) })
+		ui.Field(c, locales.ZoomPercent(), func() { ui.NumberInput(c, &a.zoom, 50, 200, 10) })
+	})
+}
+
+func (a *app) settingsVideo(c *ui.Context) {
+	a.settingsCard(c, locales.Video(), func() {
+		ui.Field(c, locales.VideoMode(), func() {
+			ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
+		})
+		ui.Field(c, locales.PreferredEncoding(), func() { selectLabeled(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel) })
+		ui.Field(c, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
+			ui.Slider(c, &a.quality, 0, 9)
+		})
+		ui.Field(c, locales.CompressionLevel(), func() { ui.NumberInput(c, &a.compress, 0, 9, 1) })
+		ui.Field(c, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() { ui.Slider(c, &a.maxFPS, 0, 60) })
+		ui.Field(c, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() { ui.Slider(c, &a.maxKbps, 0, 60000) })
+		ui.Field(c, locales.H264GOP()+": "+gopText(a.gop), func() { ui.Slider(c, &a.gop, 0, 300) })
+		ui.Field(c, locales.Orientation(), func() {
+			ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°")
+		})
+		ui.Field(c, locales.VideoDecoding(), func() {
+			selectLabeled(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
+		})
+	})
+}
+
+func (a *app) settingsClipboard(c *ui.Context) {
+	a.settingsCard(c, locales.Clipboard(), func() {
+		ui.Field(c, locales.ClipboardLimit(), func() { ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64) })
+		ui.Field(c, locales.Clipboard(), func() {
+			ui.Checkbox(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard())
+			ui.Checkbox(c, &a.cfg.SendClipboard, locales.SendClipboard())
+		})
+	})
+}
+
+func (a *app) settingsInput(c *ui.Context) {
+	a.settingsCard(c, locales.Input(), func() {
+		ui.Field(c, locales.Input(), func() {
+			ui.Checkbox(c, &a.cfg.ViewOnly, locales.ViewOnly())
+			ui.Checkbox(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton())
+		})
+	})
+}
+
+func (a *app) settingsConnection(c *ui.Context) {
+	a.settingsCard(c, locales.Connection(), func() {
+		ui.Field(c, locales.Connection(), func() {
+			ui.Checkbox(c, &a.cfg.Shared, locales.Shared())
+			ui.Checkbox(c, &a.cfg.Reconnect, locales.Reconnect())
+			ui.Checkbox(c, &a.cfg.HighPerformance, locales.HighPerformance())
+		})
+		ui.Field(c, locales.Security(), func() {
+			ui.Checkbox(c, &a.cfg.SecureOnly, locales.SecureOnly())
+		})
+	})
+}
+
+func (a *app) settingsWindow(c *ui.Context) {
+	a.settingsCard(c, locales.Window(), func() {
+		ui.Field(c, locales.Window(), func() {
+			ui.Checkbox(c, &a.cfg.FullScreen, locales.FullScreen())
+			ui.Checkbox(c, &a.cfg.DynamicResolution, locales.DynamicResolution())
+		})
+		if a.displays != nil {
+			if ds := a.displays(); len(ds) > 1 {
+				ui.Field(c, locales.FullScreenOn(), func() {
+					selectLabeled(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
+						if d == "" {
+							return locales.DisplayCurrent()
+						}
+						return d
+					})
+				})
+			}
+		}
+	})
+}
 
 func (a *app) connectingView(c *ui.Context) {
 	t := c.Theme()

@@ -58,6 +58,7 @@ type app struct {
 	server, user, pass string
 	addOpen            bool
 	settingsOpen       bool
+	settingsTab        string // the settings page shown
 	quality, compress  float64
 	maxFPS, maxKbps    float64
 	gop                float64
