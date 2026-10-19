@@ -125,6 +125,20 @@ func (msgs Messages) AddComputer() string {
 	return Catalog.Format(msgs.locale, "addComputer", nil)
 }
 
+// RemoveComputer says "Remove computer"
+// in the language the app shows.
+//
+// Context menu item on a home-view card, removing the saved connection.
+func RemoveComputer() string { return In(i18n.Locale()).RemoveComputer() }
+
+// RemoveComputer says "Remove computer"
+// in the language of msgs.
+//
+// Context menu item on a home-view card, removing the saved connection.
+func (msgs Messages) RemoveComputer() string {
+	return Catalog.Format(msgs.locale, "removeComputer", nil)
+}
+
 // NeverConnected says "Never connected"
 // in the language the app shows.
 func NeverConnected() string { return In(i18n.Locale()).NeverConnected() }
