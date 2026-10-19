@@ -20,11 +20,18 @@ const (
 	// against.
 	bpsEstimateWindow = 1000
 	initialBPS        = 20000000
-	// Above 16 Mbit/s (a LAN) quality 8, perceptually lossless; else 6.
+	// Quality tiers: JPEG level per estimated line speed. 8 is
+	// perceptually lossless on a LAN; slower links trade detail for
+	// latency, down to 3 on a very slow one.
 	lanBPS = 16000000
 	// Below 256 kbit/s the pixel format drops to 256 colours.
 	fullColourBPS = 256000
 )
+
+// qualityHold is how long a new tier must persist before it is applied,
+// so noise around a threshold does not flap the encodings. A variable so
+// tests can turn the delay off.
+var qualityHold = 750 * time.Millisecond
 
 // mediumColourPF is TigerVNC's LowColorLevel 2 (its default): 256
 // colours, 3/3/2 bits.
@@ -44,10 +51,20 @@ func estimateBPS(est, n uint64, elapsed time.Duration) uint64 {
 }
 
 func autoQuality(bps uint64) int {
-	if bps > lanBPS {
+	switch {
+	case bps >= lanBPS:
 		return 8
+	case bps >= 8000000:
+		return 7
+	case bps >= 4000000:
+		return 6
+	case bps >= 1500000:
+		return 5
+	case bps >= 600000:
+		return 4
+	default:
+		return 3
 	}
-	return 6
 }
 
 func autoFullColour(bps uint64) bool { return bps > fullColourBPS }
@@ -180,8 +197,16 @@ func (c *Client) autoSelectLocked() error {
 	}
 	kbps := c.bps / 1000
 	if q := autoQuality(c.bps); q != c.quality {
-		c.log.Info("rfb: throughput changed, changing quality", "kbps", kbps, "quality", q)
-		c.quality, c.encChange = q, true
+		if q != c.qualityNext {
+			c.qualityNext, c.qualityAt = q, time.Now()
+		}
+		if time.Since(c.qualityAt) >= qualityHold {
+			c.log.Info("rfb: throughput changed, changing quality", "kbps", kbps, "quality", q)
+			c.quality, c.encChange = q, true
+			c.qualityNext = q
+		}
+	} else {
+		c.qualityNext = q
 	}
 	// Old servers may send cursors in the middle of a format change;
 	// TigerVNC never changes the format with them.

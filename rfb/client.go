@@ -239,27 +239,29 @@ type Client struct {
 	pingAt       time.Time // a ping fence is out
 	lastPing     time.Time
 
-	mu         sync.Mutex // serialises writes and guards the fields below
-	out        io.Writer
-	width      int
-	height     int
-	ardEnabled bool
-	extMouse   bool
-	qemuKeys   bool // server confirmed -258
-	cuEnabled  bool
-	setDesktop bool // server confirmed -308, so SetDesktopSize works
-	screenID   uint32
-	screenFlag uint32
-	clipFlags  uint32
-	clipSize   uint32 // server's UTF-8 auto-send limit
-	localClip  *string
-	remoteClip bool // announced by the server and not yet received
-	auto       bool
-	encs       []int32 // the last SetEncodings
-	bps        uint64  // line speed estimate
-	quality    int     // JPEG quality level in encs, -1 for none
-	fullColour bool
-	rtt        time.Duration
+	mu          sync.Mutex // serialises writes and guards the fields below
+	out         io.Writer
+	width       int
+	height      int
+	ardEnabled  bool
+	extMouse    bool
+	qemuKeys    bool // server confirmed -258
+	cuEnabled   bool
+	setDesktop  bool // server confirmed -308, so SetDesktopSize works
+	screenID    uint32
+	screenFlag  uint32
+	clipFlags   uint32
+	clipSize    uint32 // server's UTF-8 auto-send limit
+	localClip   *string
+	remoteClip  bool // announced by the server and not yet received
+	auto        bool
+	encs        []int32 // the last SetEncodings
+	bps         uint64  // line speed estimate
+	quality     int     // JPEG quality level in encs, -1 for none
+	qualityNext int     // tier autoQuality asks for, held for qualityHold
+	qualityAt   time.Time
+	fullColour  bool
+	rtt         time.Duration
 
 	disp displayChange // SetDisplayConfiguration's, also under mu; see hp.go
 }
@@ -502,6 +504,7 @@ func (c *Client) finishInit() error {
 	msgs = append(msgs, c.hpInit()...)
 	c.auto = c.opt.AutoSelect && !c.appleARD
 	c.quality = qualityOf(c.opt.Encodings)
+	c.qualityNext = c.quality
 	encs := c.encodingList()
 	c.encs = encs
 	if c.hp != nil {
