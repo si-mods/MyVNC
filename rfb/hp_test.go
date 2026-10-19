@@ -343,9 +343,9 @@ func TestHighPerformanceOfferNotHeld(t *testing.T) {
 	displayHold, displayOfferHold = 100*time.Millisecond, 200*time.Millisecond
 	t.Cleanup(func() { displayHold, displayOfferHold = hold, offerHold })
 	c, s := hpSession(t, &HighPerformance{})
+	sent := time.Now() // the hold timer starts inside the call
 	call(t, s, func() error { return c.SetDisplayConfiguration(40, 20, 2) }, ardAutoFBUpdate(true, 1, 1))
 	s.recv(4 + 8 + 0xb8)
-	sent := time.Now()
 	ports := portsBody(t)
 	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(ports)...)...)
 	s.expect(ardAutoFBUpdate(true, 1, 1))

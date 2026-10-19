@@ -45,21 +45,22 @@ func PLI(ssrc, mediaSSRC uint32) []byte {
 
 const (
 	videoClock = 24000.0 // the picture leg's RTP clock, Hz
-	// reportedBandwidth is the RCTL bandwidth estimate, kbit/s: the Mac's
-	// 60 Mbit/s ceiling. Its controller moves on the one-way delay alone.
-	reportedBandwidth = 60000
+	// defaultBandwidth is the RCTL bandwidth estimate before the adaptive
+	// controller runs, kbit/s: the Mac's 60 Mbit/s ceiling.
+	defaultBandwidth = 60000
 )
 
 // RateFeedback builds the RCTL report Apple's viewer sends every 50 ms on
 // the picture's leg, from the picture packets that arrived.
 type RateFeedback struct {
-	epoch    time.Time
-	ssrc     uint32
-	have     bool
-	lastTS   uint32
-	lastAt   time.Time
-	received uint32
-	delay    oneWayDelay
+	epoch     time.Time
+	ssrc      uint32
+	have      bool
+	lastTS    uint32
+	lastAt    time.Time
+	received  uint32
+	delay     oneWayDelay
+	bandwidth uint16 // kbit/s; 0 means defaultBandwidth
 }
 
 // NewRateFeedback starts the report's 1/1024 s clock at epoch.
@@ -77,6 +78,12 @@ func (f *RateFeedback) Received(ssrc, timestamp uint32, at time.Time) {
 
 // Delay is the one-way delay the next report carries, in seconds.
 func (f *RateFeedback) Delay() float64 { return f.delay.owrd }
+
+// SetBandwidth sets the RCTL bandwidth estimate in kbit/s, which the
+// adaptive controller moves between 200 and 60000.
+func (f *RateFeedback) SetBandwidth(kbps int) {
+	f.bandwidth = uint16(min(max(kbps, 1), 65535))
+}
 
 // Report is the RCTL APP packet from ssrc at now, or nil before any
 // picture packet arrived. The Mac takes it only alone in its datagram.
@@ -104,7 +111,11 @@ func (f *RateFeedback) Report(ssrc uint32, now time.Time) []byte {
 	binary.BigEndian.PutUint16(b[24:], uint16(int64(now.Sub(f.epoch).Seconds()*1024)))
 	binary.BigEndian.PutUint16(b[26:], uint16(min(f.delay.owrd*8192, 0xffff)))
 	binary.BigEndian.PutUint16(b[28:], uint16(f.received&0xfff))
-	binary.BigEndian.PutUint16(b[30:], reportedBandwidth)
+	bw := f.bandwidth
+	if bw == 0 {
+		bw = defaultBandwidth
+	}
+	binary.BigEndian.PutUint16(b[30:], bw)
 	return b
 }
 

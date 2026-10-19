@@ -41,7 +41,7 @@ func TestEstimateBPS(t *testing.T) {
 		est = estimateBPS(est, n, time.Second)
 		got = append(got, step{autoQuality(est), autoFullColour(est)})
 	}
-	if want := []step{{8, true}, {6, true}, {6, true}, {6, true}}; !slices.Equal(got, want) {
+	if want := []step{{8, true}, {7, true}, {7, true}, {7, true}}; !slices.Equal(got, want) {
 		t.Errorf("100 kB/s: %v, want %v", got, want)
 	}
 	steps := 0
@@ -58,7 +58,8 @@ func TestEstimateBPS(t *testing.T) {
 		bps  uint64
 		q    int
 		full bool
-	}{{16000001, 8, true}, {16000000, 6, true}, {256001, 6, true}, {256000, 6, false}} {
+	}{{16000001, 8, true}, {16000000, 8, true}, {8000000, 7, true}, {4000000, 6, true},
+		{1500000, 5, true}, {600000, 4, true}, {599999, 3, true}, {256001, 3, true}, {256000, 3, false}} {
 		if q, full := autoQuality(c.bps), autoFullColour(c.bps); q != c.q || full != c.full {
 			t.Errorf("%d bit/s: quality %d full %v, want %d %v", c.bps, q, full, c.q, c.full)
 		}
@@ -79,6 +80,8 @@ func setBPS(c *Client, bps uint64) {
 }
 
 func TestAutoSelectResendsEncodings(t *testing.T) {
+	defer func(old time.Duration) { qualityHold = old }(qualityHold)
+	qualityHold = 0
 	h := newHandler()
 	dec := map[int32]pixel.Decoder{EncodingRaw: rawDecoder{}, EncodingTight: rawDecoder{}}
 	encs := []int32{EncodingRaw, EncodingTight, EncodingH264, -256 + 2,
@@ -108,11 +111,11 @@ func TestAutoSelectResendsEncodings(t *testing.T) {
 		t.Errorf("LinkStats %+v", l)
 	}
 
-	// A slow line: quality 6 and 256 colours, switched after the update
+	// A slow line: quality 3 and 256 colours, switched after the update
 	// that was already asked for in the old format.
 	setBPS(c, 100000)
 	update(req)
-	update(setPixelFormat(&mediumColourPF), withQuality(6), req)
+	update(setPixelFormat(&mediumColourPF), withQuality(3), req)
 	if c.pf != mediumColourPF {
 		t.Errorf("format %v, want medium colour", c.pf)
 	}
@@ -128,6 +131,8 @@ func TestAutoSelectResendsEncodings(t *testing.T) {
 }
 
 func TestAutoSelectContinuousUpdatesAndPing(t *testing.T) {
+	defer func(old time.Duration) { qualityHold = old }(qualityHold)
+	qualityHold = 0
 	h := newHandler()
 	dec := map[int32]pixel.Decoder{EncodingRaw: rawDecoder{}, EncodingTight: rawDecoder{}}
 	c, s, got := dialNone(t, Options{AutoSelect: true, Decoders: dec,
@@ -149,7 +154,7 @@ func TestAutoSelectContinuousUpdatesAndPing(t *testing.T) {
 	s.expect(enableCU(false, 0, 0))
 	s.expect(setPixelFormat(&mediumColourPF))
 	s.expect(enableCU(true, 4, 2))
-	s.expect(setEncodings(withQuality(got, 6)))
+	s.expect(setEncodings(withQuality(got, 3)))
 	h.next(t, "done")
 	if c.pf != pixel.RGBA {
 		t.Error("format switched before EndOfContinuousUpdates")
@@ -168,7 +173,7 @@ func TestAutoSelectContinuousUpdatesAndPing(t *testing.T) {
 	if c.pf != mediumColourPF {
 		t.Errorf("format %v after EndOfContinuousUpdates", c.pf)
 	}
-	if l := c.LinkStats(); l.RTT <= 0 || l.FullColour || l.Quality != 6 {
+	if l := c.LinkStats(); l.RTT <= 0 || l.FullColour || l.Quality != 3 {
 		t.Errorf("LinkStats %+v", l)
 	}
 }
