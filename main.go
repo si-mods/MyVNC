@@ -547,6 +547,17 @@ func (a *app) sendFiles(files []string) {
 	})
 }
 
+// dropFiles takes files dropped from Explorer on the session window; they
+// follow the same path as copied files: upload to the Mac's Downloads and
+// leave the URL on its pasteboard (#43).
+func (a *app) dropFiles(paths []string) {
+	a.log.Info("files dropped", "n", len(paths))
+	if a.sess == nil || a.cfg.ViewOnly || !a.sess.FileCopyAvailable() {
+		return
+	}
+	a.sendFiles(paths)
+}
+
 // startDownload fetches the remote path in the download form into the
 // local Downloads folder. It is the viewer-initiated half of the ARD file
 // transfer; the Mac streams the records over the session (#43).
@@ -1339,6 +1350,10 @@ func main() {
 			Content:   ui.View(a.view),
 		})
 		a.win, a.post = win, win.Update
+		if err := win32.RegisterFileDrop(win.NativeHandle(), a.dropFiles); err != nil {
+			a.log.Warn("file drop", "err", err)
+		}
+		win.OnClosed(func() { win32.UnregisterFileDrop() })
 		a.setLocale = mygo.App.SetLocale
 		mygo.App.OnLocaleChanged(func(string) {
 			a.title = "" // said again in the new language
