@@ -411,6 +411,9 @@ func TestMacClipboardFiles(t *testing.T) {
 		t.Fatalf("upload: %v", err)
 	}
 	t.Logf("remote: %v", remote)
+	if err := c.ClipboardFiles(remote[len(remote)-1]); err != nil {
+		t.Fatalf("clipboard: %v", err)
+	}
 	time.Sleep(3 * time.Second)
 }
 

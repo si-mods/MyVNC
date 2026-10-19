@@ -206,9 +206,8 @@ func (c *Client) ClipboardFiles(u string) error {
 }
 
 // UploadFiles sends local regular files to remoteDir on an ARD server and
-// then puts their remote file URLs on the Mac's pasteboard, so Finder can
-// paste them. It returns the remote paths it offered. Directories are
-// skipped.
+// returns the remote paths it created. Directories are skipped. It does
+// not touch the server's pasteboard; call ClipboardFiles for that.
 func (c *Client) UploadFiles(paths []string, remoteDir string) ([]string, error) {
 	if !c.appleARD || !c.Encrypted() {
 		return nil, ErrFileCopyUnsupported
@@ -242,7 +241,7 @@ func (c *Client) UploadFiles(paths []string, remoteDir string) ([]string, error)
 	if len(remote) == 0 {
 		return nil, errors.New("rfb: no regular files to upload")
 	}
-	return remote, c.ClipboardFiles(remote[len(remote)-1])
+	return remote, nil
 }
 
 // ardFileCopyEndSession builds the 0x68 record that makes the receiver
