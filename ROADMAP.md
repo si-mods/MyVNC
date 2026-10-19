@@ -113,6 +113,10 @@ Status as of v0.0.12 (2026-10-19). Open work is tracked in GitHub issues.
   - A custom dark theme (near-black surfaces, blue accent, 8 px
     radius) and a restyled home and settings: a centered card grid
     with bordered, hover-lit cards, and grouped fieldsets.
+- v0.0.19:
+  - WinUI 11's look: the system light/dark appearance and accent, 4 DIP
+    controls and 8 DIP cards, Segoe UI Variable, WinUI surfaces and
+    strokes, and an Appearance choice (System/Light/Dark).
 
 ## Deferred by the owner
 
