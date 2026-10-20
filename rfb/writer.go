@@ -8,6 +8,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/si-mods/MyVNC/internal/text"
@@ -185,6 +186,84 @@ func ardAutoFBUpdate(enable bool, w, h int) []byte {
 }
 
 // Input
+
+// Apple's wheel event, message 0x17 version 1 subtype 11, what the Mac's
+// own Screen Sharing client sends instead of wheel button bits; RDM 2023.3
+// and open-screen-sharing confirm it. screensharingd turns one click of
+// the standard pointer mask into about a line, while its native wheel
+// path takes lines directly — the difference seen as "scrolling is
+// unusable" on every VNC client against macOS 14.4+ (TigerVNC #1741).
+// Wire (big-endian; verified against ScreenSharing
+// 776.27 / macOS 27.0.1 in open-screen-sharing input.go):
+//
+//	0x00 u8  type = 0x17
+//	0x01 u8  pad
+//	0x02 u16 length = 4 + len(body)
+//	0x04 u16 version = 1
+//	0x06 u16 subtype = 11 (eventScrollWheel)
+//	0x08 i16 deltaAxis1 (wheel lines, vertical; +up on the wire)
+//	0x0a i16 deltaAxis2 (horizontal)
+//	0x0c i16 pad
+//	0x0e i32 fixed axis1  (lines << 16)
+//	0x12 i32 fixed axis2
+//	0x16 i32 pad
+//	0x1a i32 pointDX (points)
+//	0x1e i32 pointDY
+//	0x22 i32 pad
+//	0x26 u32 gesture phase (0 none)
+//	0x2a u32 momentum phase (0 none)
+//	0x2e u32 count (0 continuous, 1 discrete)
+//	0x32 u32 flags (bit 1 continuous)
+//	0x36 u16 x, u16 y (wire position)
+const applePointsPerLine = 10
+
+// AppleWheel sends the Mac a native wheel event of lines at wire pixel x,
+// y. lines may be fractional; positive scrolls up on the wire. The server
+// gates it by the 0x17 bit of its command bitmap, so it is only for Apple
+// dialects that advertise it.
+func (c *Client) AppleWheel(lines float64, x, y int) error {
+	fixed := func(v float64) uint32 { return uint32(int32(v * 65536)) }
+	points := lines * applePointsPerLine
+	body := be.AppendUint16(nil, uint16(int16(clampInt16(lines))))
+	body = be.AppendUint16(body, 0)
+	body = be.AppendUint32(body, fixed(lines))
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, uint32(int32(points)))
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, 0) // phase
+	body = be.AppendUint32(body, 0) // momentum
+	body = be.AppendUint32(body, 1) // count: one discrete wheel event
+	body = be.AppendUint32(body, 0) // flags: not continuous
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeLocked(appleEventMessage(1, 11, appendPosition(body, x, y)))
+}
+
+// appleEventMessage frames Apple's 0x17 event: u8 type, u8 pad, u16
+// length, u16 version, u16 subtype, body.
+func appleEventMessage(version, subtype uint16, body []byte) []byte {
+	b := []byte{0x17, 0}
+	b = be.AppendUint16(b, uint16(4+len(body)))
+	b = be.AppendUint16(b, version)
+	b = be.AppendUint16(b, subtype)
+	return append(b, body...)
+}
+
+func clampInt16(v float64) int16 {
+	return int16(max(math.MinInt16, min(math.MaxInt16, math.Round(v))))
+}
+
+// appendPosition appends the wire pixel x, y.
+func appendPosition(body []byte, x, y int) []byte {
+	body = be.AppendUint16(body, uint16(max(0, min(0xffff, x))))
+	return be.AppendUint16(body, uint16(max(0, min(0xffff, y))))
+}
+
+// AppleWheelAvailable reports whether the server takes Apple's 0x17
+// event messages; AppleWheel without it is a protocol error.
+func (c *Client) AppleWheelAvailable() bool {
+	return c.appleARD && c.ardCommands[0x17>>3]&(0x80>>(0x17&7)) != 0
+}
 
 const (
 	xkTab        = 0xff09

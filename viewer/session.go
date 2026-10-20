@@ -267,6 +267,31 @@ func (s *Session) Pointer(mask uint16, x, y int) {
 	s.send(input{ptr: true, move: move, mask: mask, x: x, y: y})
 }
 
+// AppleWheelAvailable reports whether the session's server takes the
+// Apple wheel event of AppleWheel.
+func (s *Session) AppleWheelAvailable() bool {
+	return s.c.AppleWheelAvailable()
+}
+
+// AppleWheel tells the Mac a native wheel event of lines at pixel x, y;
+// positive lines scroll up. True when the session is to a Mac that takes
+// the event, false to fall back to Pointer's wheel bits.
+func (s *Session) AppleWheel(lines float64, x, y int) bool {
+	if deg := int(s.rotation.Load()); deg != 0 {
+		x, y = unrotatePoint(x, y, s.w, s.h, deg)
+	}
+	s.send(input{f: func(c *rfb.Client) error {
+		if !c.AppleWheelAvailable() {
+			return errNoAppleWheel
+		}
+		return c.AppleWheel(lines, x, y)
+	}})
+	return true
+}
+
+// errNoAppleWheel leaves the fallback choice with the caller's callback.
+var errNoAppleWheel = errors.New("rfb: the server does not take Apple wheel events")
+
 // SetDesktopSize asks the server for a desktop of w×h pixels: a Mac that
 // takes SetDisplayConfiguration for a virtual display of that many pixels
 // at density (1 or 2) pixels a point, any other server for one screen

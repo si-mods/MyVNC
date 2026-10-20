@@ -25,6 +25,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/oneo-me/onevra/source/components"
 	"github.com/si-mods/MyVNC/internal/mf"
 	"github.com/si-mods/MyVNC/internal/win32"
 	"github.com/si-mods/MyVNC/locales"
@@ -33,7 +34,6 @@ import (
 	"github.com/si-mods/MyVNC/viewer/emulatemb"
 	"github.com/si-mods/MyVNC/viewer/keymap"
 	"github.com/si-mods/MyVNC/viewer/params"
-	"github.com/oneo-me/onevra/source/components"
 )
 
 const appName = "MyVNC"
@@ -78,42 +78,43 @@ type app struct {
 	thumbs             map[string]*ui.Bitmap // by server, nil for none
 
 	// The session view.
-	sess       *viewer.Session
-	addr       string // of sess
-	sessServer string // what the user chose, as in Config.Servers
-	emb        *emulatemb.Emulator
-	pill       pillDrag
-	stats      statsSample
-	sessPass   string // kept for reconnecting, never written anywhere
-	secType    uint32
-	name       string
-	title      string // shown in the title bar
-	screen     ui.Handle
-	buttons    uint16
-	ptrX, ptrY float32 // pointer in the screen box
-	ptrMove    bool    // a move to ptrX, ptrY waits for the next frame
-	scrollAcc  [2]float32
-	wheelPend  []uint16 // wheel clicks waiting, one pair a frame (flushPointer)
-	wheelLast  time.Time
-	wheelAccel float32          // 1-3, from how fast the wheel repeats
-	sysLines   int              // the system's lines per notch, as notches report
-	wheelNow   func() time.Time // injectable, for the tests
-	svc        ui.Services
-	menuOpen   bool
-	focused    bool
-	ungrabbed  bool // the user released the grab with the shortcut keys
-	pxScale    float32
-	srvLED     uint32
-	dyn        viewer.Resizer
-	dynUrgent  bool       // the next size goes at once: a new session, full screen, another monitor
-	dynRefused bool       // the server cannot resize: the session scales to fit instead
-	dynHint    bool       // the session panel says so, until dismissed
-	hpNote     string     // why High Performance fell back, shown until dismissed
-	hpFailed   bool       // it fell back: the panel offers a retry
-	rdp        *win32.RDP // an embedded Remote Desktop session, if one runs
-	rdpAddr    string
-	rdpResize  *time.Timer
-	rdpW, rdpH int32
+	sess           *viewer.Session
+	addr           string // of sess
+	sessServer     string // what the user chose, as in Config.Servers
+	emb            *emulatemb.Emulator
+	pill           pillDrag
+	stats          statsSample
+	sessPass       string // kept for reconnecting, never written anywhere
+	secType        uint32
+	name           string
+	title          string // shown in the title bar
+	screen         ui.Handle
+	buttons        uint16
+	ptrX, ptrY     float32 // pointer in the screen box
+	ptrMove        bool    // a move to ptrX, ptrY waits for the next frame
+	scrollAcc      [2]float32
+	wheelPend      []uint16     // wheel clicks waiting, one pair a frame (flushPointer)
+	appleWheelPend []appleWheel // native lines waiting, one a frame (flushPointer)
+	wheelLast      time.Time
+	wheelAccel     float32          // 1-3, from how fast the wheel repeats
+	sysLines       int              // the system's lines per notch, as notches report
+	wheelNow       func() time.Time // injectable, for the tests
+	svc            ui.Services
+	menuOpen       bool
+	focused        bool
+	ungrabbed      bool // the user released the grab with the shortcut keys
+	pxScale        float32
+	srvLED         uint32
+	dyn            viewer.Resizer
+	dynUrgent      bool       // the next size goes at once: a new session, full screen, another monitor
+	dynRefused     bool       // the server cannot resize: the session scales to fit instead
+	dynHint        bool       // the session panel says so, until dismissed
+	hpNote         string     // why High Performance fell back, shown until dismissed
+	hpFailed       bool       // it fell back: the panel offers a retry
+	rdp            *win32.RDP // an embedded Remote Desktop session, if one runs
+	rdpAddr        string
+	rdpResize      *time.Timer
+	rdpW, rdpH     int32
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -357,6 +358,13 @@ func (a *app) resizeRefused() {
 	}
 }
 
+// appleWheel is one queued native wheel event: the lines to scroll and
+// the wire pixel to scroll at.
+type appleWheel struct {
+	lines float64
+	x, y  int
+}
+
 // pointerMask maps ui buttons (primary, secondary, middle) to RFB bits.
 var pointerMask = [3]uint16{1, 4, 2}
 
@@ -385,6 +393,18 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 		a.ptrMove = true
 		return true
 	case ui.InputScroll:
+		// A Mac that takes Apple's native wheel event gets lines
+		// directly: its screensharingd scrolls about a line per wheel
+		// button click, but runs its own acceleration curve on native
+		// events, so the button bits always felt far too slow
+		// (TigerVNC #1741). Notches carry their whole distance at once;
+		// touchpads accumulate like the click path does.
+		if a.sess.AppleWheelAvailable() {
+			if lines, x, y, ok := a.scrollLines(ev); ok {
+				a.appleWheelPend = append(a.appleWheelPend, appleWheel{lines, x, y})
+			}
+			return true
+		}
 		// The click pairs go out one a frame (flushPointer): RFB's
 		// pointer is a state, so a press and release the server sees in
 		// one breath can merge into no click at all. Native wheels
@@ -405,18 +425,18 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	return true
 }
 
-// flushPointer sends the move that waits and one wheel click pair, for
-// the image placed at f in the screen box. The frame is the pointer's
-// clock: one pair a frame keeps every press and its release a separate
+// flushPointer sends the move that waits and one wheel event, for the
+// image placed at f in the screen box. The frame is the pointer's clock:
+// one wheel event a frame keeps every press and its release a separate
 // event, whatever the server merges.
 func (a *app) flushPointer(f ui.Rect, w, h int) {
-	if !a.ptrMove && len(a.wheelPend) == 0 {
+	if !a.ptrMove && len(a.wheelPend) == 0 && len(a.appleWheelPend) == 0 {
 		return
 	}
 	move := a.ptrMove
 	a.ptrMove = false
 	if a.sess == nil || a.emb == nil || a.cfg.ViewOnly {
-		a.wheelPend = nil // nothing to scroll: drop what waits
+		a.wheelPend, a.appleWheelPend = nil, nil // nothing to scroll: drop what waits
 		return
 	}
 	x, y := viewer.ToFramebuffer(a.ptrX, a.ptrY, f, w, h)
@@ -424,7 +444,11 @@ func (a *app) flushPointer(f ui.Rect, w, h int) {
 	if move {
 		a.sendPointer(x, y, a.buttons)
 	}
-	if len(a.wheelPend) > 0 {
+	if len(a.appleWheelPend) > 0 {
+		w := a.appleWheelPend[0]
+		a.appleWheelPend = a.appleWheelPend[1:]
+		a.sess.AppleWheel(w.lines, w.x, w.y)
+	} else if len(a.wheelPend) > 0 {
 		a.sendPointer(x, y, a.buttons|a.wheelPend[0])
 		a.sendPointer(x, y, a.buttons)
 		a.wheelPend = a.wheelPend[1:]
@@ -447,6 +471,19 @@ func (a *app) sendPointer(x, y int, mask uint16) {
 			})
 		})
 	}
+}
+
+// scrollLines reads a scroll as the native lines the Mac's wheel event
+// takes: DY is DIPs, one scroll line is 33 of them (mygo's notch, see
+// scrollLineDIP). The lines carry the wire position in x, y; ok is false
+// when the scroll is a no-op.
+func (a *app) scrollLines(ev ui.InputEvent) (lines float64, x, y int, ok bool) {
+	lines = float64(ev.DY) / scrollLineDIP
+	if lines == 0 {
+		return 0, 0, 0, false
+	}
+	x, y = a.toFramebuffer(a.screen.Bounds(nil), ev.X, ev.Y)
+	return lines, x, y, true
 }
 
 // wheel turns a scroll into clicks of buttons 4-7.
@@ -504,7 +541,7 @@ func (a *app) wheel(ev ui.InputEvent) []uint16 {
 			if d > 0 {
 				bit = pos
 			}
-			add(bit, int(math.Round(math.Abs(float64(d)) / float64(line) * float64(a.wheelAccel))))
+			add(bit, int(math.Round(math.Abs(float64(d))/float64(line)*float64(a.wheelAccel))))
 			continue
 		}
 		a.scrollAcc[i] += d
@@ -1062,7 +1099,7 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
 	a.stats = statsSample{}
 	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
-	a.wheelPend = nil
+	a.wheelPend, a.appleWheelPend = nil, nil
 	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
 	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
 	a.hpNote, a.hpFailed = "", false
