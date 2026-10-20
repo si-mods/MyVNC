@@ -282,15 +282,17 @@ func (s *Session) AppleWheel(lines float64, x, y int) bool {
 	}
 	s.send(input{f: func(c *rfb.Client) error {
 		if !c.AppleWheelAvailable() {
-			return errNoAppleWheel
+			return ErrNoAppleWheel
 		}
 		return c.AppleWheel(lines, x, y)
 	}})
 	return true
 }
 
-// errNoAppleWheel leaves the fallback choice with the caller's callback.
-var errNoAppleWheel = errors.New("rfb: the server does not take Apple wheel events")
+// ErrNoAppleWheel is what AppleWheel's queued callback reports when the
+// server never advertised the event; the session then falls back to the
+// paced wheel bits.
+var ErrNoAppleWheel = rfb.ErrNoAppleWheel
 
 // SetDesktopSize asks the server for a desktop of w×h pixels: a Mac that
 // takes SetDisplayConfiguration for a virtual display of that many pixels

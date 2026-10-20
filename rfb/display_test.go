@@ -27,6 +27,7 @@ func dialARD(t *testing.T, h *testHandler) (*Client, *fakeServer) {
 		s.expect([]byte{0xc1})
 		name := make([]byte, 22)
 		name[6+3] = 0x04 // the command bitmap lists 0x1d
+		name[6+2] = 0x01 // and 0x17, Apple's wheel event
 		s.send(serverInit(64, 32, append(name, "\x00Mac"...)))
 		s.expect(ardViewerInfo())
 		s.expect(ardSetMode(1))

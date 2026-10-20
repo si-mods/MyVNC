@@ -218,26 +218,38 @@ func ardAutoFBUpdate(enable bool, w, h int) []byte {
 const applePointsPerLine = 10
 
 // AppleWheel sends the Mac a native wheel event of lines at wire pixel x,
-// y. lines may be fractional; positive scrolls up on the wire. The server
-// gates it by the 0x17 bit of its command bitmap, so it is only for Apple
-// dialects that advertise it.
+// y. lines may be fractional; positive lines scroll up on the wire. The
+// server gates it by the 0x17 bit of its command bitmap, so it is only
+// for Apple dialects that advertise it.
 func (c *Client) AppleWheel(lines float64, x, y int) error {
+	if !c.AppleWheelAvailable() {
+		return ErrNoAppleWheel
+	}
 	fixed := func(v float64) uint32 { return uint32(int32(v * 65536)) }
-	points := lines * applePointsPerLine
-	body := be.AppendUint16(nil, uint16(int16(clampInt16(lines))))
-	body = be.AppendUint16(body, 0)
-	body = be.AppendUint32(body, fixed(lines))
-	body = be.AppendUint32(body, 0)
-	body = be.AppendUint32(body, uint32(int32(points)))
-	body = be.AppendUint32(body, 0)
-	body = be.AppendUint32(body, 0) // phase
-	body = be.AppendUint32(body, 0) // momentum
-	body = be.AppendUint32(body, 1) // count: one discrete wheel event
-	body = be.AppendUint32(body, 0) // flags: not continuous
+	points := func(v float64) uint32 { return uint32(int32(math.Round(v * applePointsPerLine))) }
+	// open-screen-sharing scrollWheelMessage, byte for byte: three u16
+	// axes, then ten u32s, then the position.
+	body := be.AppendUint16(nil, uint16(clampInt16(lines))) // axis1: vertical lines
+	body = be.AppendUint16(body, 0)                         // axis2: horizontal lines
+	body = be.AppendUint16(body, 0)                         // pad
+	body = be.AppendUint32(body, fixed(lines))              // fixed axis1
+	body = be.AppendUint32(body, 0)                         // fixed axis2
+	body = be.AppendUint32(body, 0)                         // pad
+	body = be.AppendUint32(body, points(lines))             // pointDX
+	body = be.AppendUint32(body, 0)                         // pointDY
+	body = be.AppendUint32(body, 0)                         // pad
+	body = be.AppendUint32(body, 0)                         // gesture phase
+	body = be.AppendUint32(body, 0)                         // momentum phase
+	body = be.AppendUint32(body, 1)                         // count: one discrete event
+	body = be.AppendUint32(body, 0)                         // flags: not continuous
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.writeLocked(appleEventMessage(1, 11, appendPosition(body, x, y)))
 }
+
+// ErrNoAppleWheel is AppleWheel's refusal when the server never
+// advertised the event.
+var ErrNoAppleWheel = errors.New("rfb: the server does not take Apple wheel events")
 
 // appleEventMessage frames Apple's 0x17 event: u8 type, u8 pad, u16
 // length, u16 version, u16 subtype, body.
