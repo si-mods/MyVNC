@@ -220,6 +220,7 @@ type Config struct {
 	SendClipboard       bool   // give the server the local clipboard
 	Language            string // of the UI, as "zh-Hans"; "" follows the system
 	Theme               string // "", "light" or "dark"; "" follows the system
+	WheelLines          int    // lines one wheel notch scrolls, 0 follows the system
 }
 
 // Computer is what the home view knows of a server.

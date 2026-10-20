@@ -4,6 +4,13 @@ Status as of v0.0.23 (2026-10-20). Open work is tracked in GitHub issues.
 
 ## Done
 
+- v0.0.24:
+  - Wheel: click pairs go out one a frame instead of in one burst, so a
+    server cannot merge a press and its release into no scroll; fast
+    repeating strokes accelerate up to three times like a native wheel;
+    `WheelScrollLines` (settings, Input; command line and .tigervnc too)
+    sets the lines one notch scrolls, for servers whose per-click
+    distance differs (0 follows the system).
 - v0.0.1: RFB 3.3 / 3.7 / 3.8 and Apple RFB 3.889; None, VncAuth, Plain,
   VeNCrypt X509, RSA-AES, MSLogonII, ARD DH with session encryption; Raw,
   CopyRect, RRE, Hextile, Tight (JPEG), ZRLE, ARD 1000-1002, MVS; Windows

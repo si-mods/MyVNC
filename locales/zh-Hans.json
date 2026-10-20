@@ -58,6 +58,7 @@
   "interface": "界面",
   "viewOnly": "仅查看",
   "emulateMiddleButton": "模拟鼠标中键（左键 + 右键）",
+  "wheelLines": "滚轮每个刻度滚动行数（0 为系统）",
   "connection": "连接",
   "shared": "共享（保留其他查看器的连接）",
   "reconnect": "连接断开时自动重新连接",

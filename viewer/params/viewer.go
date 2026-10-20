@@ -49,6 +49,7 @@ type Viewer struct {
 	SendClipboard       *Bool
 	ShortcutModifiers   *EnumList
 	VideoDecoding       *Enum // MyVNC's own
+	WheelScrollLines    *Int  // MyVNC's own
 
 	saved []Param
 }
@@ -79,6 +80,8 @@ func NewViewer() *Viewer {
 		VideoDecoding: NewEnum("VideoDecoding", "Decode High Performance and H.264 video on the GPU "+
 			"when it decodes the stream (Auto), on the GPU (Hardware) or on the CPU (Software)",
 			[]string{"Auto", "Hardware", "Software"}, "Auto"),
+		WheelScrollLines: NewIntRange("WheelScrollLines", "Scroll this many lines per wheel notch, "+
+			"0 = follow the system's setting", 0, 0, 15),
 		ShortcutModifiers: NewEnumList("ShortcutModifiers", "The combination of modifier keys that triggers "+
 			"special actions in the viewer instead of being sent to the remote session (possible keys "+
 			"are a combination of Ctrl, Shift, Alt, and Super)",
@@ -90,7 +93,7 @@ func NewViewer() *Viewer {
 		v.SecurityTypes, v.Shared, v.AutoSelect, v.PreferredEncoding, v.CustomCompressLevel,
 		v.CompressLevel, v.NoJPEG, v.QualityLevel, v.FullScreen, v.ViewOnly,
 		v.EmulateMiddleButton, v.AcceptClipboard, v.SendClipboard, v.ShortcutModifiers,
-		v.VideoDecoding,
+		v.VideoDecoding, v.WheelScrollLines,
 	}
 	v.Add(v.saved...)
 	v.Add(v.RemoteResize)

@@ -649,6 +649,16 @@ func (msgs Messages) EmulateMiddleButton() string {
 	return Catalog.Format(msgs.locale, "emulateMiddleButton", nil)
 }
 
+// WheelLines says "Wheel scroll lines (0 = system)"
+// in the language the app shows.
+func WheelLines() string { return In(i18n.Locale()).WheelLines() }
+
+// WheelLines says "Wheel scroll lines (0 = system)"
+// in the language of msgs.
+func (msgs Messages) WheelLines() string {
+	return Catalog.Format(msgs.locale, "wheelLines", nil)
+}
+
 // Connection says "Connection"
 // in the language the app shows.
 func Connection() string { return In(i18n.Locale()).Connection() }

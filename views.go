@@ -245,6 +245,7 @@ func (a *app) openSettings() {
 	a.videoMode, a.videoMode0 = a.cfg.VideoMode(), a.cfg.VideoMode()
 	a.orient, a.orient0 = a.cfg.Orientation/90, a.cfg.Orientation/90
 	a.zoom, a.clipKiB = float64(a.cfg.Zoom), float64(a.cfg.ClipboardKiB)
+	a.wheelLines = float64(a.cfg.WheelLines)
 	a.settingsOpen = true
 }
 
@@ -261,6 +262,7 @@ func (a *app) settingsView(c *ui.Context) {
 			a.sess.SetRotation(a.cfg.Orientation)
 		}
 		a.cfg.Zoom, a.cfg.ClipboardKiB = int(a.zoom), int(a.clipKiB)
+		a.cfg.WheelLines = int(a.wheelLines)
 		a.saveConfig()
 		a.settingsOpen = false
 	}
@@ -408,6 +410,9 @@ func (a *app) settingsCategories() []components.SettingsCategory {
 			}},
 			{ID: "middle", Title: locales.EmulateMiddleButton(), Build: func(c *ui.Context) {
 				components.Switch(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton(), components.SwitchOptions{HideLabel: true})
+			}},
+			{ID: "wheel", Title: locales.WheelLines(), Build: func(c *ui.Context) {
+				components.NumberInput(c, &a.wheelLines, 0, 15, 1).Label(locales.WheelLines())
 			}},
 		}}},
 	}
@@ -817,8 +822,8 @@ func (a *app) screenView(c *ui.Context) {
 		f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
 		p.Image(s.Screen, ui.Rect{X: r.X + f.X, Y: r.Y + f.Y, W: f.W, H: f.H}, ui.FillBox)
 		// The frame is the pointer's clock: the moves since the last one
-		// go out as one.
-		a.flushMove(f, w, h)
+		// go out as one, and one wheel pair goes with them.
+		a.flushPointer(f, w, h)
 		if a.perf != nil {
 			a.painted(s.Shown)
 		}

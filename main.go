@@ -68,6 +68,7 @@ type app struct {
 	orient             int
 	orient0            int
 	zoom, clipKiB      float64
+	wheelLines         float64
 	connecting         bool
 	cancel             context.CancelFunc
 	step               func() string // what connecting does, said in the language shown
@@ -92,6 +93,11 @@ type app struct {
 	ptrX, ptrY float32 // pointer in the screen box
 	ptrMove    bool    // a move to ptrX, ptrY waits for the next frame
 	scrollAcc  [2]float32
+	wheelPend  []uint16 // wheel clicks waiting, one pair a frame (flushPointer)
+	wheelLast  time.Time
+	wheelAccel float32          // 1-3, from how fast the wheel repeats
+	sysLines   int              // the system's lines per notch, as notches report
+	wheelNow   func() time.Time // injectable, for the tests
 	svc        ui.Services
 	menuOpen   bool
 	focused    bool
@@ -177,7 +183,7 @@ func newApp(dir string) *app {
 		dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")},
 		log: slog.New(slog.DiscardHandler), focused: true, srvLED: keymap.LEDUnknown,
 		mods: keymap.DefaultShortcutModifiers, thumbs: map[string]*ui.Bitmap{},
-		step: locales.StepConnecting,
+		step: locales.StepConnecting, wheelNow: time.Now,
 	}
 	a.initTouch()
 	cfg, err := viewer.LoadConfig(filepath.Join(dir, "config.json"))
@@ -363,7 +369,6 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	if a.cfg.ViewOnly {
 		return false
 	}
-	var wheel []uint16
 	switch ev.Kind {
 	case ui.InputPointerDown, ui.InputPointerUp:
 		if ev.Button < 0 || ev.Button >= len(pointerMask) {
@@ -376,40 +381,54 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 		}
 	case ui.InputPointerMove:
 		// At most one move a frame (RDP's cadence, TigerVNC's rate
-		// limit): flushMove sends it when the frame is drawn.
+		// limit): flushPointer sends it when the frame is drawn.
 		a.ptrMove = true
 		return true
 	case ui.InputScroll:
-		wheel = a.wheel(ev)
+		// The click pairs go out one a frame (flushPointer): RFB's
+		// pointer is a state, so a press and release the server sees in
+		// one breath can merge into no click at all. Native wheels
+		// spread their notches over time; so do we.
+		if len(a.wheelPend) < 32 {
+			a.wheelPend = append(a.wheelPend, a.wheel(ev)...)
+		}
+		return true
 	default:
 		return false
 	}
-	// Buttons and wheels go at once and carry the position, so that they
-	// replace the move waiting.
+	// A click carries its position, so the move waiting is its twin:
+	// one event is enough.
 	a.ptrMove = false
 	x, y := a.toFramebuffer(a.screen.Bounds(c), ev.X, ev.Y)
 	a.flushAltGr()
 	a.sendPointer(x, y, a.buttons)
-	for _, bit := range wheel {
-		a.sendPointer(x, y, a.buttons|bit)
-		a.sendPointer(x, y, a.buttons)
-	}
 	return true
 }
 
-// flushMove sends the move that waits, for the image placed at f in the
-// screen box.
-func (a *app) flushMove(f ui.Rect, w, h int) {
-	if !a.ptrMove {
+// flushPointer sends the move that waits and one wheel click pair, for
+// the image placed at f in the screen box. The frame is the pointer's
+// clock: one pair a frame keeps every press and its release a separate
+// event, whatever the server merges.
+func (a *app) flushPointer(f ui.Rect, w, h int) {
+	if !a.ptrMove && len(a.wheelPend) == 0 {
 		return
 	}
+	move := a.ptrMove
 	a.ptrMove = false
 	if a.sess == nil || a.emb == nil || a.cfg.ViewOnly {
+		a.wheelPend = nil // nothing to scroll: drop what waits
 		return
 	}
 	x, y := viewer.ToFramebuffer(a.ptrX, a.ptrY, f, w, h)
 	a.flushAltGr()
-	a.sendPointer(x, y, a.buttons)
+	if move {
+		a.sendPointer(x, y, a.buttons)
+	}
+	if len(a.wheelPend) > 0 {
+		a.sendPointer(x, y, a.buttons|a.wheelPend[0])
+		a.sendPointer(x, y, a.buttons)
+		a.wheelPend = a.wheelPend[1:]
+	}
 }
 
 // sendPointer passes a pointer event through the middle button emulation
@@ -430,38 +449,70 @@ func (a *app) sendPointer(x, y int, mask uint16) {
 	}
 }
 
-// wheel turns a scroll into clicks of buttons 4-7. mygo reports a wheel
-// notch as wheelLines*33 DIPs (Windows' default is three lines), while
-// macOS advances one line per button click, so one click per 33 DIPs keeps
-// the two systems' scroll speed aligned. Touchpads accumulate the same
-// distance.
+// wheel turns a scroll into clicks of buttons 4-7.
+//
+// RFB carries no scroll distance: a click is one unit whose on-screen
+// result only the server knows, and macOS turns one click into one line
+// of its own scrolling. mygo reports a wheel notch as wheelLines*33 DIPs
+// (Windows' default is three lines), so one click per 33 DIPs aligns the
+// two systems' speeds; WheelLines rescales that for servers whose
+// per-click distance differs (0 follows the system's own setting).
+// Touchpads accumulate the same distance.
+//
+// A native wheel repeats, and both systems scroll faster the faster it
+// turns: scrolls within 200 ms of each other multiply, up to three
+// times, and an idle wheel resets.
 const scrollLineDIP = 33
 
 func (a *app) wheel(ev ui.InputEvent) []uint16 {
+	now := a.wheelNow()
+	if a.wheelLast.IsZero() || now.Sub(a.wheelLast) > 200*time.Millisecond {
+		a.wheelAccel = 1
+	} else {
+		a.wheelAccel = min(a.wheelAccel+0.4, 3)
+	}
+	a.wheelLast = now
+	// A notch reports the system's lines-per-notch setting: |d| = lines*33.
+	if !ev.Precise {
+		if n := int(math.Round(math.Abs(float64(ev.DY)) / scrollLineDIP)); n > 0 {
+			a.sysLines = min(n, 15)
+		}
+	}
+	// The distance of one click, in DIPs.
+	line := float32(scrollLineDIP)
+	if L := a.cfg.WheelLines; L > 0 {
+		sys := a.sysLines
+		if sys == 0 {
+			sys = 3
+		}
+		line = scrollLineDIP * float32(sys) / float32(L)
+	}
+	clicks := int(math.Round(float64(a.wheelAccel)))
 	var out []uint16
+	add := func(bit uint16, n int) {
+		for range min(max(n, 1), 32-len(out)) {
+			out = append(out, bit)
+		}
+	}
 	for i, d := range [2]float32{ev.DY, ev.DX} {
 		neg, pos := uint16(8), uint16(16) // up, down
 		if i == 1 {
 			neg, pos = 32, 64 // left, right
 		}
 		if !ev.Precise {
-			n := int(math.Round(math.Abs(float64(d)) / scrollLineDIP))
-			n = min(max(n, 1), 16)
 			bit := neg
 			if d > 0 {
 				bit = pos
 			}
-			for range n {
-				out = append(out, bit)
-			}
+			add(bit, int(math.Round(math.Abs(float64(d)) / float64(line) * float64(a.wheelAccel))))
 			continue
 		}
 		a.scrollAcc[i] += d
-		for ; a.scrollAcc[i] <= -scrollLineDIP; a.scrollAcc[i] += scrollLineDIP {
-			out = append(out, neg)
+		for ; a.scrollAcc[i] <= -line; a.scrollAcc[i] += line {
+			add(neg, clicks)
 		}
-		for ; a.scrollAcc[i] >= scrollLineDIP; a.scrollAcc[i] -= scrollLineDIP {
-			out = append(out, pos)
+		for ; a.scrollAcc[i] >= line; a.scrollAcc[i] -= line {
+			add(pos, clicks)
 		}
 	}
 	return out
@@ -1011,6 +1062,7 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
 	a.stats = statsSample{}
 	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
+	a.wheelPend = nil
 	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
 	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
 	a.hpNote, a.hpFailed = "", false
@@ -1227,6 +1279,7 @@ func tigerParams(cfg *viewer.Config) *params.Viewer {
 	p.AcceptClipboard.Set(cfg.AcceptClipboard)
 	p.SendClipboard.Set(cfg.SendClipboard)
 	p.VideoDecoding.SetString(cfg.VideoDecoding)
+	p.WheelScrollLines.Set(cfg.WheelLines)
 	return p
 }
 
@@ -1250,6 +1303,7 @@ func (a *app) applyParams(p *params.Viewer) {
 	c.AcceptClipboard = p.AcceptClipboard.Value()
 	c.SendClipboard = p.SendClipboard.Value()
 	c.VideoDecoding = p.VideoDecoding.Value()
+	c.WheelLines = p.WheelScrollLines.Value()
 	if !p.SecurityTypes.IsDefault() {
 		a.secTypes = p.SecTypes()
 	}

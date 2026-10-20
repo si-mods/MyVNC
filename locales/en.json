@@ -83,6 +83,7 @@
   "interface": "Interface",
   "viewOnly": "View only",
   "emulateMiddleButton": "Emulate middle button (left + right)",
+  "wheelLines": "Wheel scroll lines (0 = system)",
   "connection": "Connection",
   "shared": "Shared (keep other viewers connected)",
   "reconnect": "Reconnect when the connection drops",

@@ -739,7 +739,7 @@ func TestRemoveServer(t *testing.T) {
 }
 
 func TestWheelSteps(t *testing.T) {
-	a := &app{}
+	a := &app{wheelNow: func() time.Time { return time.Time{} }} // never accelerating
 	count := func(ev ui.InputEvent, bit uint16) int {
 		n := 0
 		for _, b := range a.wheel(ev) {
@@ -774,5 +774,87 @@ func TestWheelSteps(t *testing.T) {
 	}
 	if n := count(ui.InputEvent{DY: -1, Precise: true}, 8); n != 1 {
 		t.Errorf("precise accumulator did not reach one click: %d", n)
+	}
+}
+
+func TestWheelLinesSetting(t *testing.T) {
+	a := &app{cfg: viewer.Config{WheelLines: 6}, wheelNow: func() time.Time { return time.Time{} }}
+	n := 0
+	for _, b := range a.wheel(ui.InputEvent{DY: -99}) { // one notch of a system set to three lines
+		if b == 8 {
+			n++
+		}
+	}
+	if n != 6 {
+		t.Errorf("WheelLines 6: one notch = %d clicks, want 6", n)
+	}
+	// A touchpad crossing is a sixth of a notch: 33 DIPs is two clicks.
+	n = 0
+	for _, b := range a.wheel(ui.InputEvent{DY: -33, Precise: true}) {
+		if b == 8 {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("WheelLines 6: 33 precise DIPs = %d clicks, want 2", n)
+	}
+}
+
+func TestWheelAcceleration(t *testing.T) {
+	now := time.Unix(0, 0)
+	a := &app{wheelNow: func() time.Time { return now }}
+	steps := func() int {
+		n := 0
+		for _, b := range a.wheel(ui.InputEvent{DY: -99}) {
+			if b == 8 {
+				n++
+			}
+		}
+		return n
+	}
+	if n := steps(); n != 3 {
+		t.Fatalf("first stroke = %d clicks, want 3", n)
+	}
+	now = now.Add(100 * time.Millisecond)
+	if n := steps(); n != 4 {
+		t.Errorf("second stroke = %d clicks, want 4", n)
+	}
+	for i, want := range []int{5, 7, 8, 9} {
+		now = now.Add(100 * time.Millisecond)
+		if n := steps(); n != want {
+			t.Errorf("stroke %d = %d clicks, want %d", i+3, n, want)
+		}
+	}
+	now = now.Add(10 * time.Second) // an idle wheel resets
+	if n := steps(); n != 3 {
+		t.Errorf("stroke after idle = %d clicks, want 3", n)
+	}
+}
+
+func TestWheelPacing(t *testing.T) {
+	s := &viewer.Session{}
+	var sent []uint16
+	a := &app{cfg: viewer.Config{}, wheelNow: func() time.Time { return time.Time{} },
+		sess: s, emb: emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, m) })}
+	a.wheelPend = []uint16{8, 8, 8}
+	f := ui.Rect{W: 100, H: 100}
+	a.flushPointer(f, 100, 100)
+	if len(sent) != 2 || sent[0] != 8 || sent[1] != 0 {
+		t.Fatalf("first frame sent %v, want one pair of click 8", sent)
+	}
+	a.flushPointer(f, 100, 100)
+	a.flushPointer(f, 100, 100)
+	if len(sent) != 6 {
+		t.Fatalf("three frames sent %d events, want 6", len(sent))
+	}
+	if len(a.wheelPend) != 0 {
+		t.Errorf("%d clicks still pending", len(a.wheelPend))
+	}
+	// View-only drops what waits instead of sending it.
+	a.wheelPend = []uint16{8}
+	a.cfg.ViewOnly = true
+	a.flushPointer(f, 100, 100)
+	if len(a.wheelPend) != 0 || len(sent) != 6 {
+		t.Errorf("view-only flush sent %v", sent)
 	}
 }
