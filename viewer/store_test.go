@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb"
 )
 
 func TestKnownHosts(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 func TestAV1Decode(t *testing.T) {

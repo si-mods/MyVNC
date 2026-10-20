@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // Stats are a session's running totals, for the statistics overlay.

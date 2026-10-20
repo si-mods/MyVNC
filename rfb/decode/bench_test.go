@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 const (

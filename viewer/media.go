@@ -6,8 +6,8 @@ import (
 	"image"
 	"time"
 
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb/ard/media"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 )
 
 // ARD High Performance: the media stream's pictures, decoded with Media

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // The numbers are TigerVNC's CConn::framebufferUpdateEnd worked by hand.

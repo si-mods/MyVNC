@@ -16,7 +16,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/ard/media"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 )
 
 // HighPerformance configures ARD High Performance (Options.HighPerformance).

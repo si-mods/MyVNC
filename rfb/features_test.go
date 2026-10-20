@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/decode"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/decode"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // dialNone runs an RFB 3.8 handshake with security type None and a 4x2

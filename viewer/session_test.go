@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/kyya/myvnc/internal/fakerfb"
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb"
+	"github.com/si-mods/MyVNC/internal/fakerfb"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb"
 )
 
 // stalledSession is a session over a net.Pipe whose server does the

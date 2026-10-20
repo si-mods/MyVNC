@@ -3,7 +3,7 @@ package rfb
 import (
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/decode"
+	"github.com/si-mods/MyVNC/rfb/decode"
 )
 
 // TestMixedEncodings sends Raw, Hextile and CopyRect rectangles in one

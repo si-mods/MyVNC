@@ -17,10 +17,10 @@ import (
 	"github.com/egoist/mygo/i18n"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/kyya/myvnc/internal/win32"
-	"github.com/kyya/myvnc/locales"
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/viewer"
+	"github.com/si-mods/MyVNC/internal/win32"
+	"github.com/si-mods/MyVNC/locales"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/viewer"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
 )

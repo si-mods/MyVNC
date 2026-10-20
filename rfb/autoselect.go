@@ -11,7 +11,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // AutoSelect thresholds and formats, as TigerVNC's CConn.

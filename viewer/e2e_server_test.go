@@ -39,8 +39,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/rfb/decode"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/rfb/decode"
 )
 
 // e2eSh runs script on the server and returns its stdout.

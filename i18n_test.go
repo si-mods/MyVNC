@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/i18n"
-	"github.com/kyya/myvnc/internal/win32"
-	"github.com/kyya/myvnc/viewer/emulatemb"
+	"github.com/si-mods/MyVNC/internal/win32"
+	"github.com/si-mods/MyVNC/viewer/emulatemb"
 )
 
 // testLocale is the language the app's messages are said in: English

@@ -8,7 +8,7 @@ import (
 	"image"
 	"io"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // ARDFormat selects the pixel layout of an ARD zlib rectangle.

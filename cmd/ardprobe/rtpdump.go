@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/ard/media"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 )
 
 // rtpDump writes the picture leg's RTP packets for offline study: the

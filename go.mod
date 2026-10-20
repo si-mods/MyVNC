@@ -1,4 +1,4 @@
-module github.com/kyya/myvnc
+module github.com/si-mods/MyVNC
 
 go 1.27.2
 

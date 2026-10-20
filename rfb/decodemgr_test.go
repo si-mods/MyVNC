@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/decode"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/decode"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 type fakeDec struct {

@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/rfb/decode"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/rfb/decode"
 )
 
 // KnownHosts remembers the RSA-AES host keys and the X509 certificates

@@ -25,14 +25,14 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/internal/win32"
-	"github.com/kyya/myvnc/locales"
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/viewer"
-	"github.com/kyya/myvnc/viewer/emulatemb"
-	"github.com/kyya/myvnc/viewer/keymap"
-	"github.com/kyya/myvnc/viewer/params"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/internal/win32"
+	"github.com/si-mods/MyVNC/locales"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/viewer"
+	"github.com/si-mods/MyVNC/viewer/emulatemb"
+	"github.com/si-mods/MyVNC/viewer/keymap"
+	"github.com/si-mods/MyVNC/viewer/params"
 	"github.com/oneo-me/onevra/source/components"
 )
 

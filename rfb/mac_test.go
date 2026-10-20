@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/decode"
+	"github.com/si-mods/MyVNC/rfb/decode"
 )
 
 // macHandler keeps the last whole frame, the cursors and positions the

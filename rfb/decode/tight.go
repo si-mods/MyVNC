@@ -9,7 +9,7 @@ import (
 	"image/jpeg"
 	"io"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 const (

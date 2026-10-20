@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // A server clipboard over Options.MaxClipboard (default 256 KiB) is

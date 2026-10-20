@@ -13,9 +13,9 @@ import (
 	"net"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/ard"
-	"github.com/kyya/myvnc/rfb/auth"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/ard"
+	"github.com/si-mods/MyVNC/rfb/auth"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 type fakeServer struct {

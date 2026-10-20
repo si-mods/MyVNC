@@ -3,7 +3,7 @@ package decode
 import (
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // TestConvToRGBA runs every source format of TigerVNC tests/unit/conv.cxx

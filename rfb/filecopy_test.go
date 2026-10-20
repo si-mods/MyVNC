@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/decode"
+	"github.com/si-mods/MyVNC/rfb/decode"
 )
 
 // TestMacFileCopyCapture drives a live ARD file-copy command against the

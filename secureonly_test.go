@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb"
+	"github.com/si-mods/MyVNC/rfb"
 )
 
 // offerServer speaks RFB 3.8, offers the given one-byte security types and

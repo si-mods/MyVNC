@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb/ard/media"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 )
 
 type fakeDecoder struct {

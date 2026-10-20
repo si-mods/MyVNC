@@ -5,7 +5,7 @@ import (
 	"image"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // TestReadRectBoundaries reads each fixture's rectangles back to back off

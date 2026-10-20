@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kyya/myvnc/viewer/keymap"
+	"github.com/si-mods/MyVNC/viewer/keymap"
 )
 
 var errNotWindows = errors.New("win32: not supported on this system")

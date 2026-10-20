@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/internal/fakerfb"
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb"
+	"github.com/si-mods/MyVNC/internal/fakerfb"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb"
 )
 
 // BenchmarkSessionFrames streams full-screen updates from fakerfb over

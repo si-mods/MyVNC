@@ -10,9 +10,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kyya/myvnc/internal/text"
-	"github.com/kyya/myvnc/rfb/ard"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/internal/text"
+	"github.com/si-mods/MyVNC/rfb/ard"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 var be = binary.BigEndian

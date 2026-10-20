@@ -8,7 +8,7 @@ import (
 	"image"
 	"sync"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // A server may resend the same tile bytes (a blinking cursor, a repeated

@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/kyya/myvnc/viewer/keymap"
+	"github.com/si-mods/MyVNC/viewer/keymap"
 )
 
 var (

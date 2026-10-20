@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/viewer/keymap"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/viewer/keymap"
 )
 
 // No TigerVNC unit test covers .tigervnc files; this checks the format

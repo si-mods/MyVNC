@@ -6,7 +6,7 @@ import (
 	"image"
 	"io"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // Raw is the Raw encoding (0).

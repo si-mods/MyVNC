@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // A partial update on a tile whose Cb/Cr DC are 0 reads each chroma delta

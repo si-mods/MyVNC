@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 var be565 = pixel.Format{BPP: 16, Depth: 16, BigEndian: true, TrueColor: true,

@@ -26,13 +26,13 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/rfb/ard"
-	"github.com/kyya/myvnc/viewer"
-	"github.com/kyya/myvnc/viewer/emulatemb"
-	"github.com/kyya/myvnc/viewer/keymap"
-	"github.com/kyya/myvnc/viewer/params"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/rfb/ard"
+	"github.com/si-mods/MyVNC/viewer"
+	"github.com/si-mods/MyVNC/viewer/emulatemb"
+	"github.com/si-mods/MyVNC/viewer/keymap"
+	"github.com/si-mods/MyVNC/viewer/params"
 )
 
 // fakeServer speaks RFB 3.8 with one security type and sends one Raw

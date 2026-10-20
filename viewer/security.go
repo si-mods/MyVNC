@@ -3,7 +3,7 @@ package viewer
 import (
 	"strconv"
 
-	"github.com/kyya/myvnc/rfb"
+	"github.com/si-mods/MyVNC/rfb"
 )
 
 // SecTypeName names a security type for people.

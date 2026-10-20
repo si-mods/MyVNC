@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo/audio"
-	"github.com/kyya/myvnc/rfb"
+	"github.com/si-mods/MyVNC/rfb"
 )
 
 const (

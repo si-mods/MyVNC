@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/kyya/myvnc/internal/fakerfb"
-	"github.com/kyya/myvnc/internal/win32"
+	"github.com/si-mods/MyVNC/internal/fakerfb"
+	"github.com/si-mods/MyVNC/internal/win32"
 )
 
 // perfTest is -perftest[=WxH/encoding/seconds]: the real window shows

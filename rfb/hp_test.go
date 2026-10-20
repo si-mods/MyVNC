@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/ard"
-	"github.com/kyya/myvnc/rfb/ard/media"
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/ard"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 func freeUDPPort(t *testing.T) uint16 {

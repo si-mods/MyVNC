@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 type convMode int

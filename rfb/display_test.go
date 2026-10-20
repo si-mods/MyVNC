@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // dialARD runs an RFB 003.889 handshake without security with a 64x32

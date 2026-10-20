@@ -9,8 +9,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/viewer"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/viewer"
 )
 
 // ardServer is a Mac without security that sends one Raw 64×32 update and

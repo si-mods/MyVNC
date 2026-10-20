@@ -4,7 +4,7 @@ import (
 	"image"
 	"testing"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 func TestTileCacheReusesPixels(t *testing.T) {

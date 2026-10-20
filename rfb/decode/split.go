@@ -10,7 +10,7 @@ import (
 	"io"
 	"slices"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // The pixel.ParallelDecoder side of the decoders. ReadRect copies a

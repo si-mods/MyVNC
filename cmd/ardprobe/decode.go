@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kyya/myvnc/internal/mf"
-	"github.com/kyya/myvnc/rfb/ard/media"
+	"github.com/si-mods/MyVNC/internal/mf"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 )
 
 // decoder decodes access units with Media Foundation off the receiver's

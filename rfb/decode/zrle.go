@@ -6,7 +6,7 @@ import (
 	"image"
 	"io"
 
-	"github.com/kyya/myvnc/rfb/pixel"
+	"github.com/si-mods/MyVNC/rfb/pixel"
 )
 
 // ZRLE is the ZRLE encoding (16). It keeps one zlib stream.

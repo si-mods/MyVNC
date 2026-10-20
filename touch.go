@@ -7,10 +7,10 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/kyya/myvnc/internal/win32"
-	"github.com/kyya/myvnc/viewer"
-	"github.com/kyya/myvnc/viewer/gesture"
-	"github.com/kyya/myvnc/viewer/keymap"
+	"github.com/si-mods/MyVNC/internal/win32"
+	"github.com/si-mods/MyVNC/viewer"
+	"github.com/si-mods/MyVNC/viewer/gesture"
+	"github.com/si-mods/MyVNC/viewer/keymap"
 )
 
 // touchState is the session's touch input: fingers on the remote screen

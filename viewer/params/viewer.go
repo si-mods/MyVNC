@@ -7,8 +7,8 @@ package params
 import (
 	"io"
 
-	"github.com/kyya/myvnc/rfb"
-	"github.com/kyya/myvnc/viewer/keymap"
+	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/viewer/keymap"
 )
 
 // SecurityTypeNames are TigerVNC's SecurityTypes values. TLSNone, TLSVnc
