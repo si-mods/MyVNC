@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of v0.0.22 (2026-10-19). Open work is tracked in GitHub issues.
+Status as of v0.0.23 (2026-10-20). Open work is tracked in GitHub issues.
 
 ## Done
 
@@ -125,6 +125,8 @@ Status as of v0.0.22 (2026-10-19). Open work is tracked in GitHub issues.
   - Onevra components: Settings, Dialog, Slider, Select, Switch, Tabs,
     TextBox, IconButton and Lucide icons replace the hand-built
     settings, add-computer dialog and session-panel controls.
+- v0.0.23:
+  - Release and documentation maintenance; no functional change.
 - v0.0.22:
   - Bandwidth: AutoSelect caps the JPEG tier by RTT and jitter as well as
     throughput (#62); LAN/WAN/Mobile presets, a Legacy MJPEG warning and

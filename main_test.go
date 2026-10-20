@@ -471,7 +471,7 @@ func TestHomeCards(t *testing.T) {
 	a.tt.Frame()
 	has := func(s string) bool { return slices.Contains(a.tt.Texts(), s) }
 	// The remembered name leads, the address follows; its initial is the avatar's.
-	if !has("desktop") || !has("192.0.2.10") || !has("M") {
+	if !has("desktop") || !has("192.0.2.10") || !has("D") {
 		t.Errorf("named card: texts %q", a.tt.Texts())
 	}
 	for _, digits := range []string{"19", "12", "10", "FE"} {

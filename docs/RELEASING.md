@@ -28,8 +28,8 @@ repo config stays unsigned for local builds. A missing certificate never fails t
 PFX certificate:
 
 ```sh
-base64 -w0 code-signing.pfx | gh secret set WINDOWS_CERTIFICATE -R kyya/MyVNC
-gh secret set WINDOWS_CERTIFICATE_PASSWORD -R kyya/MyVNC
+base64 -w0 code-signing.pfx | gh secret set WINDOWS_CERTIFICATE -R si-mods/MyVNC
+gh secret set WINDOWS_CERTIFICATE_PASSWORD -R si-mods/MyVNC
 ```
 
 mygo then signs `MyVNC.exe`, the installer and the uninstaller with `signtool` (present on
@@ -45,11 +45,11 @@ identity and an OIDC federated credential; details in mygo `docs/distribution.md
 ## Auto-update: decision needed
 
 mygo updates read signed manifests from a public GitHub repo (`updates.github`) or an HTTPS/S3
-feed (`updates.url` / `updates.s3`). `kyya/MyVNC` is private, so updates cannot work from its
-releases. Nothing is configured yet. Choose one:
+feed (`updates.url` / `updates.s3`). `si-mods/MyVNC` is public, so its releases can serve
+update manifests, but nothing is configured yet. Choose one:
 
-- **A. Public release repo** (for example `kyya/MyVNC-releases`): CI uploads the release there; the
-  source repo stays private. Needs a token secret with write access to that repo.
+- **A. Public release repo** (for example `si-mods/MyVNC-releases`): CI uploads the release there; the
+  source repo can stay separate. Needs a token secret with write access to that repo.
 - **B. HTTPS/S3 feed** (for example an S3 bucket behind CloudFront, or Cloudflare R2): needs a bucket,
   its credentials as secrets, and a URL.
 - **C. No auto-update**: users download new installers manually.
@@ -58,7 +58,7 @@ Either A or B also needs an update signing key, generated once by the owner:
 
 ```sh
 go tool mygo keygen        # writes mygo-update.key (secret) and mygo-update.pub
-gh secret set MYGO_UPDATER_PRIVATE_KEY -R kyya/MyVNC < mygo-update.key
+gh secret set MYGO_UPDATER_PRIVATE_KEY -R si-mods/MyVNC < mygo-update.key
 ```
 
 Then add `updates.publicKey` (contents of `mygo-update.pub`) and `updates.github` or `updates.url`
