@@ -1,59 +1,98 @@
+<div align="center">
+
 # MyVNC
 
-MyVNC is a VNC and Remote Desktop viewer for Windows, written in pure Go
-with [MyGo](https://github.com/egoist/mygo) native UI.
+**A fast VNC / Remote Desktop viewer for Windows, in pure Go.**
 
-Right-click a card on the home view to remove that saved connection.
+English · [简体中文](README.zh-CN.md)
 
-Besides RFB/VNC it connects to Microsoft Remote Desktop (RDP) endpoints by
-embedding the system Remote Desktop ActiveX control: enter
-`rdp://host[:port]` as the server address. NLA, graphics, audio and
-clipboard come from the Windows component; see `docs/rdp.md`.
+</div>
 
-It is a port of the [TigerVNC](https://github.com/TigerVNC/tigervnc) viewer
-(including its Apple Remote Desktop authentication work) and is distributed
-under the GNU General Public License, version 2. See `LICENSE`.
+MyVNC is a native Windows viewer for VNC (RFB) and Microsoft Remote Desktop
+(RDP), built with pure Go and [MyGo](https://github.com/egoist/mygo) — no
+Electron, no runtime dependencies. It is a port of the
+[TigerVNC](https://github.com/TigerVNC/tigervnc) viewer, extended with an
+Apple Remote Desktop high-performance media path, adaptive video quality,
+and file transfer.
 
-Portions are derived from TigerVNC, Copyright (C) 1999-2025 TigerVNC Team
-and many others (see individual files), and from TightVNC/RealVNC code it
-contains.
+## Highlights
 
-## Third-party projects
+- **Two protocols, one app.** Standard VNC sessions plus RDP by embedding
+  the system Remote Desktop ActiveX control — enter `rdp://host[:port]` as
+  the address. NLA, RemoteFX/H.264, audio and clipboard are handled by
+  Windows itself.
+- **Apple Remote Desktop High Performance.** HEVC 4:4:4 or H.264 over
+  SRTP at the Mac's source frame rate, decoded on the GPU through Media
+  Foundation (D3D11/DXVA), with NAT punch, packet reordering and AV1 when
+  an MFT is installed. Verified live against macOS 27.2 at ~50 fps.
+- **Adaptive quality.** Throughput, RTT and jitter are measured every
+  update; JPEG quality tiers, H.264 bitrate and GOP follow the link.
+  LAN / WAN / Mobile presets and a PiKVM-style video panel
+  (mode, quality, max fps, GOP, display orientation).
+- **Full TigerVNC protocol coverage.** RFB 3.3 / 3.7 / 3.8 and Apple
+  3.889; None, VncAuth, Plain, VeNCrypt X509, RSA-AES, MSLogonII, ARD DH
+  with session encryption; Raw, CopyRect, RRE, Hextile, Tight, ZRLE, ARD,
+  MVS, H.264, AV1; QEMU extended keys, fence, continuous updates, remote
+  resize, LED sync, QEMU audio.
+- **File transfer with a Mac.** Drop files from Explorer onto the session
+  to upload; the session menu downloads files, folders and symlinks.
+  Windows clipboard files land in the Mac's Downloads folder.
+- **Parsec-style UI.** Computer cards with live thumbnails, chrome-free
+  sessions with an overlay panel, a stats HUD (fps, decode ms, bitrates,
+  dropped frames), WinUI 11 look, light/dark/system theme.
+  English and Simplified Chinese.
+- **Safe by default.** Security-level indicator, weak-type refusal,
+  certificate and host-key trust on first use, password warnings,
+  logging to `myvnc.log`.
 
-### Code ported or derived
+## Install
 
-| Project | License | Used for |
-|---|---|---|
-| [TigerVNC](https://github.com/TigerVNC/tigervnc) (incl. TightVNC/RealVNC code it contains) | GPL-2.0-or-later | The viewer this is a port of: RFB protocol, security types, decoders, keyboard mapping, shortcut handler, gesture and touch handling, middle-button emulation, parameters, and its unit tests; the ARD work on its `ard-auth-support` branch |
-| [remotex](https://github.com/aleonnet/remotex) | MIT ([LICENSES/remotex-MIT.txt](LICENSES/remotex-MIT.txt)) | ARD High Performance: media offer, reply parsing, SRTP/SRTCP, RTP depacketizer, RTCP feedback, display configuration (`rfb/ard/media`, `rfb/hp.go`) |
-| [Lucide](https://lucide.dev) | ISC ([LICENSES/lucide-ISC.txt](LICENSES/lucide-ISC.txt)) | The settings, computer and session icons, through Onevra |
+Grab `MyVNC-Setup-<version>-amd64.exe` (installer) or the portable
+`MyVNC-<version>-amd64.exe` from
+[Releases](https://github.com/si-mods/MyVNC/releases). Both are built and
+checksummed by CI. No installation of runtimes is required.
 
-### Libraries linked into the app
+## Usage
 
-| Project | License |
-|---|---|
-| [MyGo](https://github.com/egoist/mygo) | MIT |
-| [Onevra](https://github.com/oneo-me/onevra) | MIT | Lucide icon set and native UI component library |
-| [purego](https://github.com/ebitengine/purego) | Apache-2.0 |
-| [go-text/typesetting](https://github.com/go-text/typesetting) | Unlicense or BSD-3-Clause |
-| [golang.org/x/image](https://pkg.go.dev/golang.org/x/image), [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | BSD-3-Clause |
+- Launch `MyVNC.exe`, add a computer, and click its card.
+- Command line: `MyVNC.exe [host[:port]]` or `MyVNC.exe rdp://host[:port]`.
+  TigerVNC-compatible options and `.tigervnc` files are supported
+  (`MyVNC.exe -h` for the list).
+- In-session: overlay panel for stats and video settings;
+  Ctrl+Alt+Del sends Ctrl+Alt+Del; right-click a home card to remove it.
 
-### References only (no code taken)
+## Build
 
-| Project | License | Used for |
-|---|---|---|
-| [noVNC-ARD](https://github.com/peetinc/noVNC-ARD) | MPL-2.0 | Comparing the ARD High Performance message sequence and offer template |
-| [noVNC](https://github.com/novnc/noVNC) | MPL-2.0 | Behaviour comparisons (gesture angles) |
-| [FFmpeg](https://ffmpeg.org) | LGPL-2.1+ | Reference decoding of a recorded Mac HEVC 4:4:4 stream for test expectations |
-| [PyCryptodome](https://www.pycryptodome.org) | BSD-2-Clause / Public Domain | Generating known-answer test vectors |
-| [Parsec](https://parsec.app) | proprietary | UX inspiration only |
-
-Specifications: RFB (RFC 6143), SRTP (RFC 3711, RFC 6188), RTP/AVPF (RFC 4585), RTP payload for H.264 (RFC 6184) and HEVC (RFC 7798), EAX mode (Bellare, Rogaway, Wagner).
-
-## Develop
+Requires Go 1.27+ and Windows.
 
 ```
 go tool mygo dev     # run with live reload
 go test ./...        # tests
 go tool mygo build   # build exe + installer into build/
 ```
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/rdp.md](docs/rdp.md) | RDP sessions: usage, credentials, limits |
+| [docs/bandwidth.md](docs/bandwidth.md) | Link measurement, quality policy, server-side requirements |
+| [docs/ard-drag.md](docs/ard-drag.md) | ARD drag-and-drop and file transfer internals |
+| [docs/RELEASING.md](docs/RELEASING.md) | Release workflow |
+| [ROADMAP.md](ROADMAP.md) | Version history, known limits, open work |
+
+## License
+
+GNU General Public License, version 2 — see [LICENSE](LICENSE).
+
+Portions derived from TigerVNC, Copyright (C) 1999-2025 TigerVNC Team and
+many others (see individual files), and from TightVNC/RealVNC code it
+contains. Third-party projects and licenses:
+[README.third-party.md](README.third-party.md).
+
+## Acknowledgements
+
+TigerVNC (viewer core), remotex (ARD media), MyGo & Onevra (UI), purego,
+go-text/typesetting, golang.org/x/image & x/text, Lucide (icons), FFmpeg,
+PyCryptodome, Parsec (UX inspiration). Full attribution in
+[README.third-party.md](README.third-party.md).
