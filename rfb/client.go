@@ -449,6 +449,7 @@ func (c *Client) readServerInit() error {
 	if c.appleARD && len(name) >= 22 && name[0] == 0 {
 		c.ardFlags = uint32(name[2])<<24 | uint32(name[3])<<16 | uint32(name[4])<<8 | uint32(name[5])
 		copy(c.ardCommands[:], name[6:22])
+		c.log.Info("rfb: server commands", "bitmap", fmt.Sprintf("% x", c.ardCommands))
 		for i := len(name); i > 0; i-- {
 			if name[i-1] == 0 {
 				name = name[i:]

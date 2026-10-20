@@ -261,6 +261,56 @@ func appleEventMessage(version, subtype uint16, body []byte) []byte {
 	return append(b, body...)
 }
 
+// AppleScrollPhase sends a scroll of lines as the paired continuous
+// wheel + gesture scroll events of Apple's trackpad path. Points move at
+// 10 per line; lines stay exact in the fixed-point fields.
+func (c *Client) AppleScrollPhase(lines float64, phase uint32, x, y int) error {
+	if !c.AppleWheelAvailable() {
+		return ErrNoAppleWheel
+	}
+	points := math.Round(lines * applePointsPerLine)
+	wheel := appleWheelContinuous(lines, x, y)
+	gesture := appleGestureScroll(0, points, phase, x, y)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeLocked(append(wheel, gesture...))
+}
+
+// appleGestureScroll frames Apple's gesture scroll event, 0x17 subtype 8:
+// the float32 point deltas and phase that ride beside a continuous wheel
+// event. screensharingd's verified input path is this pair — the wheel
+// event alone parsed but scrolled nothing on macOS 27.2 (2026-10-20).
+func appleGestureScroll(deltaX, deltaY float64, phase uint32, x, y int) []byte {
+	body := be.AppendUint32(nil, math.Float32bits(float32(deltaX)))
+	body = be.AppendUint32(body, math.Float32bits(float32(deltaY)))
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, phase)
+	body = be.AppendUint32(body, 0)
+	return appleEventMessage(1, 8, appendPosition(body, x, y))
+}
+
+// appleWheelContinuous frames the continuous wheel event (flags bit 1,
+// count 0) that carries the same points.
+func appleWheelContinuous(lines float64, x, y int) []byte {
+	fixed := func(v float64) uint32 { return uint32(int32(v * 65536)) }
+	points := func(v float64) uint32 { return uint32(int32(math.Round(v * applePointsPerLine))) }
+	body := be.AppendUint16(nil, uint16(clampInt16(lines)))
+	body = be.AppendUint16(body, 0)
+	body = be.AppendUint16(body, 0)
+	body = be.AppendUint32(body, fixed(lines))
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, points(lines))
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, 0)
+	body = be.AppendUint32(body, 0) // gesture phase
+	body = be.AppendUint32(body, 0) // momentum phase
+	body = be.AppendUint32(body, 0) // count: continuous
+	body = be.AppendUint32(body, 2) // flags: continuous
+	return appleEventMessage(1, 11, appendPosition(body, x, y))
+}
+
 func clampInt16(v float64) int16 {
 	return int16(max(math.MinInt16, min(math.MaxInt16, math.Round(v))))
 }

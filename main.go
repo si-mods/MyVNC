@@ -93,8 +93,7 @@ type app struct {
 	ptrX, ptrY     float32 // pointer in the screen box
 	ptrMove        bool    // a move to ptrX, ptrY waits for the next frame
 	scrollAcc      [2]float32
-	wheelPend      []uint16     // wheel clicks waiting, one pair a frame (flushPointer)
-	appleWheelPend []appleWheel // native lines waiting, one a frame (flushPointer)
+	wheelPend      []uint16 // wheel clicks waiting, one pair a frame (flushPointer)
 	wheelLast      time.Time
 	wheelAccel     float32          // 1-3, from how fast the wheel repeats
 	sysLines       int              // the system's lines per notch, as notches report
@@ -358,13 +357,6 @@ func (a *app) resizeRefused() {
 	}
 }
 
-// appleWheel is one queued native wheel event: the lines to scroll and
-// the wire pixel to scroll at.
-type appleWheel struct {
-	lines float64
-	x, y  int
-}
-
 // pointerMask maps ui buttons (primary, secondary, middle) to RFB bits.
 var pointerMask = [3]uint16{1, 4, 2}
 
@@ -393,18 +385,32 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 		a.ptrMove = true
 		return true
 	case ui.InputScroll:
-		// A Mac that takes Apple's native wheel event gets lines
-		// directly: its screensharingd scrolls about a line per wheel
-		// button click, but runs its own acceleration curve on native
-		// events, so the button bits always felt far too slow
-		// (TigerVNC #1741). Notches carry their whole distance at once;
-		// touchpads accumulate like the click path does.
+		// Apple's 0x17 wheel and gesture events parse cleanly on macOS
+		// 27.2 but screensharingd scrolls nothing for them (verified
+		// live 2026-10-20: discrete and phase-paired continuous both
+		// dead). What does reach the desktop is the button mask — and
+		// there, macOS 14.4+ scrolls about a PIXEL per click (TigerVNC
+		// #1741: 'the macOS server is not using the correct units').
+		// So a notch of the system's lines becomes lines*10 clicks, the
+		// Mac's points-per-line; WheelLines multiplies on top.
 		if a.sess.AppleWheelAvailable() {
-			if lines, x, y, ok := a.scrollLines(ev); ok {
-				a.appleWheelPend = append(a.appleWheelPend, appleWheel{lines, x, y})
+			lines, _ := a.scrollLines(ev) // signed lines, one Mac line = 10 pixels
+			n := int(math.Round(math.Abs(lines) * appleClicksPerLine * a.wheelAccelFor(ev)))
+			n = min(n, 64)
+			if n > 0 {
+				bit := uint16(8) // up
+				if lines > 0 {
+					bit = 16 // down
+				}
+				if len(a.wheelPend)+n <= 64 {
+					for range n {
+						a.wheelPend = append(a.wheelPend, bit)
+					}
+				}
 			}
 			return true
 		}
+		a.log.Debug("wheel: click path", "DY", ev.DY, "precise", ev.Precise)
 		// The click pairs go out one a frame (flushPointer): RFB's
 		// pointer is a state, so a press and release the server sees in
 		// one breath can merge into no click at all. Native wheels
@@ -425,18 +431,18 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	return true
 }
 
-// flushPointer sends the move that waits and one wheel event, for the
-// image placed at f in the screen box. The frame is the pointer's clock:
-// one wheel event a frame keeps every press and its release a separate
+// flushPointer sends the move that waits and one wheel click pair, for
+// the image placed at f in the screen box. The frame is the pointer's
+// clock: one pair a frame keeps every press and its release a separate
 // event, whatever the server merges.
 func (a *app) flushPointer(f ui.Rect, w, h int) {
-	if !a.ptrMove && len(a.wheelPend) == 0 && len(a.appleWheelPend) == 0 {
+	if !a.ptrMove && len(a.wheelPend) == 0 {
 		return
 	}
 	move := a.ptrMove
 	a.ptrMove = false
 	if a.sess == nil || a.emb == nil || a.cfg.ViewOnly {
-		a.wheelPend, a.appleWheelPend = nil, nil // nothing to scroll: drop what waits
+		a.wheelPend = nil // nothing to scroll: drop what waits
 		return
 	}
 	x, y := viewer.ToFramebuffer(a.ptrX, a.ptrY, f, w, h)
@@ -444,11 +450,8 @@ func (a *app) flushPointer(f ui.Rect, w, h int) {
 	if move {
 		a.sendPointer(x, y, a.buttons)
 	}
-	if len(a.appleWheelPend) > 0 {
-		w := a.appleWheelPend[0]
-		a.appleWheelPend = a.appleWheelPend[1:]
-		a.sess.AppleWheel(w.lines, w.x, w.y)
-	} else if len(a.wheelPend) > 0 {
+	if len(a.wheelPend) > 0 {
+		a.log.Debug("wheel: click", "bit", a.wheelPend[0])
 		a.sendPointer(x, y, a.buttons|a.wheelPend[0])
 		a.sendPointer(x, y, a.buttons)
 		a.wheelPend = a.wheelPend[1:]
@@ -473,17 +476,30 @@ func (a *app) sendPointer(x, y int, mask uint16) {
 	}
 }
 
+// appleClicksPerLine is how many button clicks stand for one Mac scroll
+// line: screensharingd moves about a pixel per click (TigerVNC #1741),
+// and a Mac line is 10 points.
+const appleClicksPerLine = 10
+
+// wheelAccelFor reads the wheel's repeat acceleration without touching
+// the click conversion.
+func (a *app) wheelAccelFor(ev ui.InputEvent) float64 {
+	now := a.wheelNow()
+	if a.wheelLast.IsZero() || now.Sub(a.wheelLast) > 200*time.Millisecond {
+		a.wheelAccel = 1
+	} else {
+		a.wheelAccel = min(a.wheelAccel+0.4, 3)
+	}
+	a.wheelLast = now
+	return float64(a.wheelAccel)
+}
+
 // scrollLines reads a scroll as the native lines the Mac's wheel event
 // takes: DY is DIPs, one scroll line is 33 of them (mygo's notch, see
-// scrollLineDIP). The lines carry the wire position in x, y; ok is false
-// when the scroll is a no-op.
-func (a *app) scrollLines(ev ui.InputEvent) (lines float64, x, y int, ok bool) {
+// scrollLineDIP); the position comes from the frame in flushPointer.
+func (a *app) scrollLines(ev ui.InputEvent) (lines float64, ok bool) {
 	lines = float64(ev.DY) / scrollLineDIP
-	if lines == 0 {
-		return 0, 0, 0, false
-	}
-	x, y = a.toFramebuffer(a.screen.Bounds(nil), ev.X, ev.Y)
-	return lines, x, y, true
+	return lines, lines != 0
 }
 
 // wheel turns a scroll into clicks of buttons 4-7.
@@ -1099,7 +1115,7 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
 	a.stats = statsSample{}
 	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
-	a.wheelPend, a.appleWheelPend = nil, nil
+	a.wheelPend = nil
 	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
 	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
 	a.hpNote, a.hpFailed = "", false

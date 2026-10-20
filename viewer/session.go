@@ -289,6 +289,22 @@ func (s *Session) AppleWheel(lines float64, x, y int) bool {
 	return true
 }
 
+// AppleScrollPhase sends the Mac a scroll of lines under the gesture
+// phase (1 began, 2 changed, 4 ended): the continuous wheel event plus
+// the gesture event, as the Mac's own trackpad path pairs them.
+func (s *Session) AppleScrollPhase(lines float64, phase uint32, x, y int) bool {
+	if deg := int(s.rotation.Load()); deg != 0 {
+		x, y = unrotatePoint(x, y, s.w, s.h, deg)
+	}
+	s.send(input{f: func(c *rfb.Client) error {
+		if !c.AppleWheelAvailable() {
+			return ErrNoAppleWheel
+		}
+		return c.AppleScrollPhase(lines, phase, x, y)
+	}})
+	return true
+}
+
 // ErrNoAppleWheel is what AppleWheel's queued callback reports when the
 // server never advertised the event; the session then falls back to the
 // paced wheel bits.

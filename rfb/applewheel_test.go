@@ -98,7 +98,8 @@ func TestClampInt16(t *testing.T) {
 }
 
 // End-to-end over dialARD: the fake Mac advertises 0x17, receives the
-// event, and the session lives on.
+// paired continuous wheel + gesture scroll events of a stroke, and the
+// session lives on.
 func TestAppleWheelE2E(t *testing.T) {
 	h := newHandler()
 	c, s := dialARD(t, h)
@@ -106,13 +107,31 @@ func TestAppleWheelE2E(t *testing.T) {
 		t.Fatal("the fake Mac does not advertise 0x17")
 	}
 	errc := make(chan error, 2)
-	go func() { errc <- c.AppleWheel(3, 10, 20) }()
-	if got := s.recv(58); len(got) != 58 || got[0] != 0x17 || binary.BigEndian.Uint16(got[6:]) != 11 {
-		t.Fatalf("event % x", got)
+	go func() { errc <- c.AppleScrollPhase(3, 1, 10, 20) }() // began
+	// The wheel event (54 total: 0x2c body) then the gesture event (26).
+	wheel := s.recv(58)
+	if wheel[0] != 0x17 || binary.BigEndian.Uint16(wheel[6:]) != 11 {
+		t.Fatalf("wheel event % x", wheel[:8])
 	}
-	go func() { errc <- c.AppleWheel(-2, 10, 20) }()
-	if got := s.recv(58); len(got) != 58 || got[0] != 0x17 {
-		t.Fatalf("second event % x", got)
+	if flags := binary.BigEndian.Uint32(wheel[50:]); flags != 2 {
+		t.Errorf("wheel flags %d, want 2 (continuous)", flags)
+	}
+	gesture := s.recv(36)
+	if gesture[0] != 0x17 || binary.BigEndian.Uint16(gesture[6:]) != 8 {
+		t.Fatalf("gesture event % x", gesture[:8])
+	}
+	if dy := math.Float32frombits(binary.BigEndian.Uint32(gesture[12:])); dy != 30 {
+		t.Errorf("gesture DY %v points, want 30", dy)
+	}
+	if phase := binary.BigEndian.Uint32(gesture[24:]); phase != 1 {
+		t.Errorf("gesture phase %d, want 1 (began)", phase)
+	}
+	go func() { errc <- c.AppleScrollPhase(-2, 4, 10, 20) }() // ended
+	if got := s.recv(58); got[0] != 0x17 || binary.BigEndian.Uint16(got[6:]) != 11 {
+		t.Fatalf("second wheel event % x", got[:8])
+	}
+	if got := s.recv(36); got[0] != 0x17 || binary.BigEndian.Uint32(got[24:]) != 4 {
+		t.Fatalf("second gesture event % x, want phase 4", got[:8])
 	}
 	// The connection survives: a display layout is processed, answered,
 	// and a key event goes out.

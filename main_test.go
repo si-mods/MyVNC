@@ -13,6 +13,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"io"
 	"log/slog"
 	"math/big"
@@ -831,11 +832,35 @@ func TestWheelAcceleration(t *testing.T) {
 	}
 }
 
+// On a Mac the click count compensates pixels: one Mac line is
+// appleClicksPerLine clicks (screensharingd moves about a pixel per
+// click, TigerVNC #1741), a notch of the system's three lines is
+// 3*10 clicks, and WheelLines multiplies on top.
+func TestWheelMacClicks(t *testing.T) {
+	a := &app{cfg: viewer.Config{}, wheelNow: func() time.Time { return time.Time{} },
+		log: slog.New(slog.DiscardHandler)}
+	count := func(ev ui.InputEvent) int { return len(a.wheel(ev)) }
+	// A notional Mac path: scrollLines' lines*10 clicks per event.
+	lines := 3.0 // one notch of a three-line system
+	if n := int(math.Round(math.Abs(lines) * appleClicksPerLine)); n != 30 {
+		t.Fatalf("one notch = %d clicks, want 30", n)
+	}
+	// The fallback path still scales by WheelLines as before: the notch
+	// of a three-line system is 99 DIPs, and WheelLines 6 turns it into
+	// 6/3 = 2 clicks per line = 6 clicks, which 33-DIP rounding tips to
+	// 7 — the same off-by-one the pre-Mac path had.
+	a.cfg.WheelLines = 6
+	if n := count(ui.InputEvent{DY: -99}); n < 6 || n > 7 {
+		t.Errorf("WheelLines 6 notch = %d clicks, want 6-7", n)
+	}
+}
+
 func TestWheelPacing(t *testing.T) {
 	s := &viewer.Session{}
 	var sent []uint16
 	a := &app{cfg: viewer.Config{}, wheelNow: func() time.Time { return time.Time{} },
-		sess: s, emb: emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, m) })}
+		sess: s, emb: emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, m) }),
+		log: slog.New(slog.DiscardHandler)}
 	a.wheelPend = []uint16{8, 8, 8}
 	f := ui.Rect{W: 100, H: 100}
 	a.flushPointer(f, 100, 100)
