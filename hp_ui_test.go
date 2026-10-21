@@ -5,10 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"net"
 	"testing"
+	"time"
 
+	"github.com/si-mods/MyVNC/internal/mf"
 	"github.com/si-mods/MyVNC/rfb"
 	"github.com/si-mods/MyVNC/viewer"
 )
@@ -112,4 +115,27 @@ func TestMediaText(t *testing.T) {
 	if got := mediaText(rfb.ErrMediaNotArrived); got != "没有收到高性能媒体流。这台电脑和 Mac 之间可能有做了 NAT 的路由器挡住了它（Mac 会把 UDP 5900/5901 发往它看到的地址）。已切换到标准模式。" {
 		t.Errorf("zh-Hans: %q", got)
 	}
+}
+
+// A reconnect after the decoder asked for 30 fps keeps asking, and the
+// HUD says so.
+func TestReconnectKeepsFrameRateLimit(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Stats, a.cfg.HighPerformance = true, true
+	server := ardServer(t)
+	a.rc = reconnect{active: true, server: server, limit30: true}
+	a.connectTo(server, true)
+	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	if !a.sess.Stats().MediaFrameRate30 {
+		t.Fatal("the reconnected session asks for 60 fps")
+	}
+	a.tt.Advance(time.Second)
+	a.sess.ShowMedia(image.NewRGBA(image.Rect(0, 0, 64, 32)), "HEVC 4:4:4 64×32", mf.Info{})
+	a.until("the media picture", func() bool { return a.sess.Media != "" })
+	a.tt.Advance(time.Second)
+	a.tt.Advance(time.Second)
+	if !a.tt.HasText("Decoder-limited: asking the Mac for 30 fps") {
+		t.Errorf("texts %q", a.tt.Texts())
+	}
+	a.disconnect()
 }

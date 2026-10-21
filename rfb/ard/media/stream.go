@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -92,6 +93,7 @@ type Stream struct {
 	closeOnce    sync.Once
 	wg           sync.WaitGroup
 	keyframe     chan struct{}
+	decodeCap    atomic.Int64 // kbit/s, 0 for none
 
 	mu       sync.Mutex
 	stats    Stats
@@ -177,6 +179,10 @@ func (s *Stream) SetVideoSize(w, h int) {
 	s.w, s.h = uint16(w), uint16(h)
 	s.mu.Unlock()
 }
+
+// SetDecodeCap limits the RCTL bandwidth estimate to kbps, the most this
+// side's decoder can take; 0 lifts it. Any goroutine.
+func (s *Stream) SetDecodeCap(kbps int) { s.decodeCap.Store(int64(max(kbps, 0))) }
 
 // RequestKeyframe asks the Mac for an IDR, as after a decoder failure.
 func (s *Stream) RequestKeyframe() {
@@ -276,6 +282,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			s.mu.Lock()
 			bytes, missing := s.stats.Video.Bytes, s.stats.Missing
 			s.mu.Unlock()
+			rateCtl.setDecodeCap(int(s.decodeCap.Load()))
 			target := rateCtl.step(now, bytes, missing, feedback.Delay())
 			feedback.SetBandwidth(target)
 			s.mu.Lock()

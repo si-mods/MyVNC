@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/si-mods/MyVNC/internal/mf"
 	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 	"github.com/si-mods/MyVNC/rfb/decode"
 )
 
@@ -120,7 +121,14 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 			}
 		}, s.ShowMedia, func(err error) {
 			s.send(input{f: func(c *rfb.Client) error { return c.StopHighPerformance(err) }})
-		}, &s.n)
+		}, func(kbps int) {
+			if st := s.c.MediaStream(); st != nil {
+				st.SetDecodeCap(kbps)
+			}
+		}, func() { s.c.LimitMediaFrameRate(true) }, &s.n)
+		if f := hp.Offer.Flags; f != 0 && f&media.Flag60FPS == 0 {
+			s.n.mediaFPS30.Store(true) // a reconnect keeping the lost session's limit
+		}
 		hp.OnUnit = s.video.push
 		hp.OnFallback = s.mediaFallback
 		opt.HighPerformance = &hp
@@ -353,46 +361,6 @@ func (s *Session) SendClipboard(text string) {
 // server with encryption up.
 func (s *Session) FileCopyAvailable() bool {
 	return s.c != nil && s.c.FileCopyAvailable()
-}
-
-// SendFiles uploads local files to remoteDir on the server and offers them
-// on its clipboard, so the server's user can paste them (Finder on macOS).
-// It runs off the UI thread; done, when set, hears the remote paths and the
-// error on the UI thread.
-func (s *Session) SendFiles(paths []string, remoteDir string, done func([]string, error)) {
-	go func() {
-		c := s.c
-		var remote []string
-		var err error
-		if c == nil {
-			err = errors.New("myvnc: no session")
-		} else {
-			remote, err = c.UploadFiles(paths, remoteDir)
-		}
-		if done != nil {
-			s.post(func() { done(remote, err) })
-		}
-	}()
-}
-
-// DownloadFile fetches remotePath (a file or a folder tree) from an ARD
-// server into localDir; done runs on the UI thread with the created
-// paths. The transfer runs on the session's read side, so it needs the
-// session to stay connected until it finishes.
-func (s *Session) DownloadFile(remotePath, localDir string, done func([]string, error)) {
-	go func() {
-		c := s.c
-		var paths []string
-		var err error
-		if c == nil {
-			err = errors.New("myvnc: no session")
-		} else {
-			paths, err = c.FileCopyDownload(context.Background(), remotePath, localDir, nil)
-		}
-		if done != nil {
-			s.post(func() { done(paths, err) })
-		}
-	}()
 }
 
 // RequestClipboard fetches the server's clipboard text, which then comes

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"image"
 	"net/netip"
 	"os"
@@ -17,12 +18,12 @@ import (
 	"github.com/egoist/mygo/i18n"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 	"github.com/si-mods/MyVNC/internal/win32"
 	"github.com/si-mods/MyVNC/locales"
 	"github.com/si-mods/MyVNC/rfb"
 	"github.com/si-mods/MyVNC/viewer"
-	"github.com/oneo-me/onevra/source/components"
-	"github.com/oneo-me/onevra/source/icons/lucide"
 )
 
 func (a *app) view(c *ui.Context) {
@@ -502,6 +503,9 @@ func (a *app) sessionView(c *ui.Context) {
 				banner(c, c.Theme().Warning, a.hpNote, locales.Dismiss(), func() { a.hpNote = "" })
 			})
 		}
+		if j := a.activeTransfer(); j != nil && !a.menuOpen {
+			a.transferChip(c, j)
+		}
 		left := float32(a.cfg.PillPos) * max(ww-pillW, 0)
 		pill := ui.Box(c).Label(locales.SessionMenu()).Absolute().Top(0).Left(left).Size(pillW, pillH).
 			Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M").Bind(&a.pillBox)
@@ -620,6 +624,9 @@ func (a *app) panel(c *ui.Context) {
 			a.dlOpen = true
 			a.menuOpen = false
 		}
+		if len(a.xfers.List) > 0 {
+			a.transfersView(c)
+		}
 		ui.Divider(c)
 		if components.Button(c, locales.SendCtrlAltDel(), components.ButtonGhost).Clicked() {
 			a.ctrlAltDel()
@@ -630,6 +637,166 @@ func (a *app) panel(c *ui.Context) {
 			a.disconnect()
 		}
 	})
+}
+
+// transfersView lists the file transfers in the session panel, newest
+// first (#43).
+func (a *app) transfersView(c *ui.Context) {
+	ui.Divider(c)
+	ui.Text(c, locales.Transfers()).Bold()
+	for i := len(a.xfers.List) - 1; i >= 0; i-- {
+		a.transferRow(c, a.xfers.List[i])
+	}
+}
+
+func (a *app) transferRow(c *ui.Context, j *viewer.Transfer) {
+	t := c.Theme()
+	ui.Column(c).Key(j.ID).Gap(4).Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			icon := lucide.Upload
+			if j.Dir == viewer.Download {
+				icon = lucide.Download
+			}
+			components.Icon(c, icon).Size(14, 14)
+			ui.Text(c, transferName(j)).SingleLine().Grow(1).MinWidth(0)
+			if a.xfers.CanResume(j) {
+				label := locales.TransferResume()
+				if j.State == viewer.TransferFailed {
+					label = locales.TransferRetry()
+				}
+				if components.Button(c, label, components.ButtonGhost).Clicked() {
+					a.xfers.Resume(j)
+				}
+			}
+			switch j.State {
+			case viewer.TransferQueued, viewer.TransferRunning, viewer.TransferAsking, viewer.TransferInterrupted:
+				if components.Button(c, locales.Cancel(), components.ButtonGhost).Clicked() {
+					a.xfers.Cancel(j)
+				}
+			default:
+				if components.Button(c, locales.Dismiss(), components.ButtonGhost).Clicked() {
+					a.xfers.Dismiss(j)
+				}
+			}
+		})
+		if j.State != viewer.TransferDone && j.State != viewer.TransferCanceled && j.State != viewer.TransferFailed {
+			components.Progress(c, j.Progress()).Label(transferName(j))
+		}
+		if d := transferDetail(j); d != "" {
+			ui.Text(c, d).FontSize(11).TextColor(t.TextMuted)
+		}
+		color := t.TextMuted
+		switch j.State {
+		case viewer.TransferFailed:
+			color = t.Danger
+		case viewer.TransferInterrupted:
+			color = t.Warning
+		}
+		ui.Text(c, transferState(j)).FontSize(11).TextColor(color).Wrap()
+	})
+}
+
+// transferChip shows the transfer under way while the panel is closed;
+// a click opens the panel.
+func (a *app) transferChip(c *ui.Context, j *viewer.Transfer) {
+	text := transferName(j)
+	if p := j.Progress(); p >= 0 && j.State == viewer.TransferRunning {
+		text += " · " + strconv.Itoa(int(p*100)) + "%"
+	}
+	icon := lucide.Upload
+	if j.Dir == viewer.Download {
+		icon = lucide.Download
+	}
+	chip := ui.ButtonBase(c).Label(locales.Transfers()).Absolute().Bottom(16).Right(16).Padding(4, 10).Radius(6).
+		Background(ui.RGBA(20, 20, 20, 0.85)).TextColor(ui.RGBA(255, 255, 255, 1))
+	chip.Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			components.Icon(c, icon).Size(12, 12)
+			ui.Text(c, text).FontSize(12).SingleLine()
+		})
+	})
+	if chip.Clicked() {
+		a.openMenu()
+	}
+}
+
+// activeTransfer is the transfer the chip shows: the one under way, else
+// the next waiting.
+func (a *app) activeTransfer() *viewer.Transfer {
+	var queued *viewer.Transfer
+	for _, j := range a.xfers.List {
+		switch j.State {
+		case viewer.TransferRunning, viewer.TransferAsking:
+			return j
+		case viewer.TransferQueued:
+			if queued == nil {
+				queued = j
+			}
+		}
+	}
+	return queued
+}
+
+func transferName(j *viewer.Transfer) string {
+	if j.Count > 1 {
+		return locales.TransferMore(j.Name, j.Count-1)
+	}
+	return j.Name
+}
+
+// transferDetail is "12.3 MB / 80.0 MB · 4.5 MB/s · 0:13 left".
+func transferDetail(j *viewer.Transfer) string {
+	if j.Total <= 0 || j.State == viewer.TransferDone || j.State == viewer.TransferCanceled {
+		return ""
+	}
+	parts := []string{locales.TransferBytes(bytesText(j.Done), bytesText(j.Total))}
+	if j.State == viewer.TransferRunning {
+		if r := j.Rate(); r > 0 {
+			parts = append(parts, locales.TransferRate(bytesText(int64(r))))
+		}
+		if d, ok := j.Left(); ok {
+			parts = append(parts, locales.TransferLeft(viewer.FormatLeft(d)))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func transferState(j *viewer.Transfer) string {
+	switch j.State {
+	case viewer.TransferQueued:
+		return locales.TransferQueued()
+	case viewer.TransferRunning:
+		if n, total := j.FileIndex(); n > 0 && total > 1 {
+			return locales.TransferFile(n, total)
+		}
+		return locales.TransferRunning()
+	case viewer.TransferAsking:
+		return locales.TransferAsking()
+	case viewer.TransferInterrupted:
+		return locales.TransferInterrupted()
+	case viewer.TransferDone:
+		if j.Dir == viewer.Upload {
+			return locales.TransferSent(j.Remote)
+		}
+		if len(j.Paths) == 0 {
+			return locales.TransferNothingSaved()
+		}
+		return locales.DownloadDone(j.Paths[0])
+	case viewer.TransferCanceled:
+		return locales.TransferCanceled()
+	}
+	var fe *viewer.FilesError
+	switch {
+	case errors.Is(j.Err, viewer.ErrNoFiles):
+		return locales.TransferNoFiles()
+	case errors.Is(j.Err, viewer.ErrTransferClosed):
+		return locales.TransferFailed(locales.TransferClosed())
+	case errors.As(j.Err, &fe):
+		return locales.TransferFilesFailed(fe.Failed, fe.Total, fe.First.Error())
+	case j.Err != nil:
+		return locales.TransferFailed(j.Err.Error())
+	}
+	return locales.TransferFailed("")
 }
 
 // statsView is the top-left HUD, refreshed each second from the
@@ -703,11 +870,18 @@ func (a *app) statsView(c *ui.Context) {
 		if len(l.Encodings) > 1 {
 			mixed = locales.StatsEncodings(encodingSummary(l.Encodings))
 		}
+		limited := ""
+		if s := a.stats.last; a.mediaLive() && s.MediaFrameRate30 {
+			limited = locales.StatsFrameRate30()
+		} else if a.mediaLive() && s.MediaDecodeCapKbps > 0 {
+			limited = locales.StatsDecodeCap(strconv.Itoa(s.MediaDecodeCapKbps))
+		}
 		for _, l := range []string{
 			locales.StatsFps(n(a.stats.fps, 0)),
 			locales.StatsDecode(n(a.stats.decodeMs, 1)),
 			locales.StatsBitrate(n(a.stats.mbps, 1)),
 			dropped,
+			limited,
 			keys,
 			encoding,
 			mixed,

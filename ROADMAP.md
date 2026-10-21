@@ -4,6 +4,31 @@ Status as of v0.0.23 (2026-10-20). Open work is tracked in GitHub issues.
 
 ## Done
 
+- v0.0.25 (unreleased):
+  - File transfers become jobs in the session panel, with a progress bar,
+    speed and time left; a chip in the session shows the one under way.
+    Dropped folders upload file by file into matching remote folders, and
+    an upload counts a file sent only when the Mac's result record says
+    so. Cancel sends Stop.
+  - Resume by file (the protocol has no byte offset): an interrupted
+    upload goes on after the automatic reconnect with the files not yet
+    sent; a download keeps its staging folder and skips the staged files
+    that are complete (their bytes still come over the network). Retry
+    after a failure, too.
+  - A download that meets an existing name asks: Overwrite, Skip or Keep
+    both, optionally for all remaining conflicts. Placing runs off the RFB
+    read loop. Upload conflicts stay the Mac's; its behavior is not
+    verified.
+  - High Performance: a GPU decoder that fails its first key picture,
+    three key pictures in a row, or a second of predicted ones gives way
+    to software for the session, and the decoder line says why. Failures
+    while waiting for a requested keyframe do not count.
+  - High Performance follows this PC's decoding capacity: three limited
+    seconds cap the RCTL bitrate at 75% of the delivered rate, ten
+    healthy seconds raise it again; a decoder that stays the bottleneck
+    asks for 30 fps (Flag60FPS cleared) in the next offer, kept across
+    the automatic reconnect. The HUD shows either limit. The Mac's
+    response to both is not verified live.
 - v0.0.24:
   - Wheel: a Mac that advertises Apple's 0x17 event gets native wheel
     messages with real scroll lines instead of button bits — the fix

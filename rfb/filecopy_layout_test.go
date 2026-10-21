@@ -232,9 +232,7 @@ func TestFileCopyUploadErrors(t *testing.T) {
 		t.Errorf("non-ARD error = %v", err)
 	}
 
-	old := fileCopyStartDelay
-	fileCopyStartDelay = 0
-	defer func() { fileCopyStartDelay = old }()
+	fastFileCopy(t)
 	c = &Client{out: io.Discard, appleARD: true, ardEnabled: true}
 	if err := c.FileCopyUpload("/x/y", bytes.NewReader([]byte("abc")), 10); err == nil {
 		t.Error("short reader did not fail")

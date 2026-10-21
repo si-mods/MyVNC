@@ -31,6 +31,25 @@ type rateControl struct {
 	lastAt      time.Time
 	lastBytes   uint64
 	lastMissing uint64
+	decodeCap   int // kbit/s, the viewer's decoder limit; 0 for none
+}
+
+// setDecodeCap limits the estimate to what the decoder can take, kbit/s;
+// 0 lifts it. The network target goes on moving underneath, so lifting
+// the cap returns to it at once.
+func (r *rateControl) setDecodeCap(kbps int) {
+	if kbps > 0 {
+		kbps = max(kbps, rateMin)
+	}
+	r.decodeCap = kbps
+}
+
+// effective is the target as capped for the decoder.
+func (r *rateControl) effective() int {
+	if r.decodeCap > 0 {
+		return min(r.target, r.decodeCap)
+	}
+	return r.target
 }
 
 // newRateControl starts at rateStart (or the cap, if lower). maxKbps 0
@@ -50,11 +69,11 @@ func newRateControl(maxKbps int) *rateControl {
 func (r *rateControl) step(now time.Time, bytes, missing uint64, owrd float64) int {
 	if r.lastAt.IsZero() {
 		r.lastAt, r.lastBytes, r.lastMissing = now, bytes, missing
-		return r.target
+		return r.effective()
 	}
 	dt := now.Sub(r.lastAt)
 	if dt < rateEvery {
-		return r.target
+		return r.effective()
 	}
 	delivered := int(float64(bytes-r.lastBytes) * 8 / 1000 / dt.Seconds())
 	loss := missing - r.lastMissing
@@ -68,5 +87,5 @@ func (r *rateControl) step(now time.Time, bytes, missing uint64, owrd float64) i
 	case delivered*10 >= r.target*7: // the sender used 70% of the budget
 		r.target = min(int(float64(r.target)*rateGain)+rateStep, r.max)
 	}
-	return r.target
+	return r.effective()
 }
