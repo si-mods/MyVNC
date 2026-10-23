@@ -14,6 +14,7 @@ import (
 	"math"
 	"net"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/si-mods/MyVNC/rfb/ard/media"
@@ -100,6 +101,8 @@ type hpState struct {
 	ports    [2]uint16
 	waitLogs bool
 	stream   *media.Stream // under c.mu
+	// limit30 is set by LimitMediaFrameRate for the offers to come.
+	limit30 atomic.Bool
 }
 
 // MediaStream is the High Performance receiver, nil until the Mac has
@@ -111,6 +114,30 @@ func (c *Client) MediaStream() *media.Stream {
 		return nil
 	}
 	return c.hp.stream
+}
+
+// LimitMediaFrameRate, when on, clears Flag60FPS in the offers made from
+// now on, which asks the Mac for 30 pictures a second (UNVERIFIED on a
+// live Mac): for a viewer whose decoder cannot take 60. It sends
+// nothing; the next offer the session makes anyway (after a display
+// change or RetryHighPerformance) carries it. Any goroutine.
+func (c *Client) LimitMediaFrameRate(on bool) {
+	if c.hp != nil {
+		c.hp.limit30.Store(on)
+	}
+}
+
+// offerFlags are the flags an offer carries: p's, or DefaultFlags, less
+// Flag60FPS when the rate is limited.
+func offerFlags(p media.Params, limit30 bool) uint32 {
+	f := p.Flags
+	if f == 0 {
+		f = media.DefaultFlags
+	}
+	if limit30 {
+		f &^= media.Flag60FPS
+	}
+	return f
 }
 
 // hpInit runs in finishInit: it sets up High Performance and returns the
@@ -245,6 +272,7 @@ func (c *Client) hpOffer() error {
 		return nil
 	}
 	p := hp.cfg.Offer
+	p.Flags = offerFlags(p, hp.limit30.Load())
 	p.Width, p.Height = c.width, c.height
 	if !c.disp.out.IsZero() {
 		p.Width, p.Height = c.disp.mode[0], c.disp.mode[1]
@@ -253,7 +281,8 @@ func (c *Client) hpOffer() error {
 	c.mu.Unlock()
 	offer := hp.secrets.Offer(p)
 	c.log.Info("rfb: High Performance: offering the media stream", "width", p.Width, "height", p.Height,
-		"bytes", len(offer), "flags", fmt.Sprintf("%#x", binary.BigEndian.Uint32(offer[6:])))
+		"bytes", len(offer), "flags", fmt.Sprintf("%#x", binary.BigEndian.Uint32(offer[6:])),
+		"limit30", hp.limit30.Load())
 	return c.write(offer)
 }
 

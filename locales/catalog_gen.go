@@ -536,13 +536,13 @@ func (msgs Messages) DownloadFile() string {
 // DownloadTitle says "Download from the remote computer"
 // in the language the app shows.
 //
-// Title of the form asking for a path on the Mac and of its result alert.
+// Title of the form asking for a path on the Mac.
 func DownloadTitle() string { return In(i18n.Locale()).DownloadTitle() }
 
 // DownloadTitle says "Download from the remote computer"
 // in the language of msgs.
 //
-// Title of the form asking for a path on the Mac and of its result alert.
+// Title of the form asking for a path on the Mac.
 func (msgs Messages) DownloadTitle() string {
 	return Catalog.Format(msgs.locale, "downloadTitle", nil)
 }
@@ -574,29 +574,423 @@ func (msgs Messages) Download() string {
 // DownloadDone says "Saved {path}"
 // in the language the app shows.
 //
-// Result alert after a file download.
+// Transfer row state after a download finished.
 func DownloadDone(path string) string { return In(i18n.Locale()).DownloadDone(path) }
 
 // DownloadDone says "Saved {path}"
 // in the language of msgs.
 //
-// Result alert after a file download.
+// Transfer row state after a download finished.
 func (msgs Messages) DownloadDone(path string) string {
 	return Catalog.Format(msgs.locale, "downloadDone", map[string]any{"path": path})
 }
 
-// DownloadFailed says "Download failed: {err}"
+// Transfers says "Transfers"
 // in the language the app shows.
 //
-// Result alert when a file download fails.
-func DownloadFailed(err string) string { return In(i18n.Locale()).DownloadFailed(err) }
+// Session panel heading over the list of file transfers.
+func Transfers() string { return In(i18n.Locale()).Transfers() }
 
-// DownloadFailed says "Download failed: {err}"
+// Transfers says "Transfers"
 // in the language of msgs.
 //
-// Result alert when a file download fails.
-func (msgs Messages) DownloadFailed(err string) string {
-	return Catalog.Format(msgs.locale, "downloadFailed", map[string]any{"err": err})
+// Session panel heading over the list of file transfers.
+func (msgs Messages) Transfers() string {
+	return Catalog.Format(msgs.locale, "transfers", nil)
+}
+
+// TransferMore says "{name} and {n} more"
+// in the language the app shows.
+//
+// Name of an upload of several dropped items.
+func TransferMore(name string, n int) string { return In(i18n.Locale()).TransferMore(name, n) }
+
+// TransferMore says "{name} and {n} more"
+// in the language of msgs.
+//
+// Name of an upload of several dropped items.
+func (msgs Messages) TransferMore(name string, n int) string {
+	return Catalog.Format(msgs.locale, "transferMore", map[string]any{"name": name, "n": n})
+}
+
+// TransferQueued says "Waiting to start"
+// in the language the app shows.
+//
+// Transfer row state: queued behind another transfer.
+func TransferQueued() string { return In(i18n.Locale()).TransferQueued() }
+
+// TransferQueued says "Waiting to start"
+// in the language of msgs.
+//
+// Transfer row state: queued behind another transfer.
+func (msgs Messages) TransferQueued() string {
+	return Catalog.Format(msgs.locale, "transferQueued", nil)
+}
+
+// TransferRunning says "Transferring"
+// in the language the app shows.
+//
+// Transfer row state: bytes are moving.
+func TransferRunning() string { return In(i18n.Locale()).TransferRunning() }
+
+// TransferRunning says "Transferring"
+// in the language of msgs.
+//
+// Transfer row state: bytes are moving.
+func (msgs Messages) TransferRunning() string {
+	return Catalog.Format(msgs.locale, "transferRunning", nil)
+}
+
+// TransferFile says "File {n} of {total}"
+// in the language the app shows.
+//
+// Transfer row: which file of an upload is being sent.
+func TransferFile(n int, total int) string { return In(i18n.Locale()).TransferFile(n, total) }
+
+// TransferFile says "File {n} of {total}"
+// in the language of msgs.
+//
+// Transfer row: which file of an upload is being sent.
+func (msgs Messages) TransferFile(n int, total int) string {
+	return Catalog.Format(msgs.locale, "transferFile", map[string]any{"n": n, "total": total})
+}
+
+// TransferAsking says "Waiting for your choice"
+// in the language the app shows.
+//
+// Transfer row state: a name conflict dialog is open.
+func TransferAsking() string { return In(i18n.Locale()).TransferAsking() }
+
+// TransferAsking says "Waiting for your choice"
+// in the language of msgs.
+//
+// Transfer row state: a name conflict dialog is open.
+func (msgs Messages) TransferAsking() string {
+	return Catalog.Format(msgs.locale, "transferAsking", nil)
+}
+
+// TransferInterrupted says "Interrupted; continues when the connection is back"
+// in the language the app shows.
+//
+// Transfer row state: the connection dropped; the transfer resumes after
+// the automatic reconnect.
+func TransferInterrupted() string { return In(i18n.Locale()).TransferInterrupted() }
+
+// TransferInterrupted says "Interrupted; continues when the connection is back"
+// in the language of msgs.
+//
+// Transfer row state: the connection dropped; the transfer resumes after
+// the automatic reconnect.
+func (msgs Messages) TransferInterrupted() string {
+	return Catalog.Format(msgs.locale, "transferInterrupted", nil)
+}
+
+// TransferSent says "Sent to {dir}"
+// in the language the app shows.
+//
+// Transfer row state after an upload finished.
+func TransferSent(dir string) string { return In(i18n.Locale()).TransferSent(dir) }
+
+// TransferSent says "Sent to {dir}"
+// in the language of msgs.
+//
+// Transfer row state after an upload finished.
+func (msgs Messages) TransferSent(dir string) string {
+	return Catalog.Format(msgs.locale, "transferSent", map[string]any{"dir": dir})
+}
+
+// TransferNothingSaved says "Nothing saved: every item was skipped"
+// in the language the app shows.
+//
+// Transfer row state: a download whose every item was skipped in the
+// conflict dialog.
+func TransferNothingSaved() string { return In(i18n.Locale()).TransferNothingSaved() }
+
+// TransferNothingSaved says "Nothing saved: every item was skipped"
+// in the language of msgs.
+//
+// Transfer row state: a download whose every item was skipped in the
+// conflict dialog.
+func (msgs Messages) TransferNothingSaved() string {
+	return Catalog.Format(msgs.locale, "transferNothingSaved", nil)
+}
+
+// TransferFailed says "Failed: {err}"
+// in the language the app shows.
+//
+// Transfer row state when a transfer fails.
+func TransferFailed(err string) string { return In(i18n.Locale()).TransferFailed(err) }
+
+// TransferFailed says "Failed: {err}"
+// in the language of msgs.
+//
+// Transfer row state when a transfer fails.
+func (msgs Messages) TransferFailed(err string) string {
+	return Catalog.Format(msgs.locale, "transferFailed", map[string]any{"err": err})
+}
+
+// TransferFilesFailed says "{n} of {total} files were not sent: {err}"
+// in the language the app shows.
+//
+// Transfer row state when some files of an upload failed.
+func TransferFilesFailed(n int, total int, err string) string {
+	return In(i18n.Locale()).TransferFilesFailed(n, total, err)
+}
+
+// TransferFilesFailed says "{n} of {total} files were not sent: {err}"
+// in the language of msgs.
+//
+// Transfer row state when some files of an upload failed.
+func (msgs Messages) TransferFilesFailed(n int, total int, err string) string {
+	return Catalog.Format(msgs.locale, "transferFilesFailed", map[string]any{"n": n, "total": total, "err": err})
+}
+
+// TransferNoFiles says "Nothing to send: no files"
+// in the language the app shows.
+//
+// Transfer row state: the dropped items held no regular files.
+func TransferNoFiles() string { return In(i18n.Locale()).TransferNoFiles() }
+
+// TransferNoFiles says "Nothing to send: no files"
+// in the language of msgs.
+//
+// Transfer row state: the dropped items held no regular files.
+func (msgs Messages) TransferNoFiles() string {
+	return Catalog.Format(msgs.locale, "transferNoFiles", nil)
+}
+
+// TransferClosed says "The connection closed"
+// in the language the app shows.
+//
+// Transfer row state: the session ended for good before the transfer
+// finished.
+func TransferClosed() string { return In(i18n.Locale()).TransferClosed() }
+
+// TransferClosed says "The connection closed"
+// in the language of msgs.
+//
+// Transfer row state: the session ended for good before the transfer
+// finished.
+func (msgs Messages) TransferClosed() string {
+	return Catalog.Format(msgs.locale, "transferClosed", nil)
+}
+
+// TransferCanceled says "Canceled"
+// in the language the app shows.
+func TransferCanceled() string { return In(i18n.Locale()).TransferCanceled() }
+
+// TransferCanceled says "Canceled"
+// in the language of msgs.
+func (msgs Messages) TransferCanceled() string {
+	return Catalog.Format(msgs.locale, "transferCanceled", nil)
+}
+
+// TransferBytes says "{done} / {total}"
+// in the language the app shows.
+//
+// Transfer row: bytes moved of the total.
+func TransferBytes(done string, total string) string {
+	return In(i18n.Locale()).TransferBytes(done, total)
+}
+
+// TransferBytes says "{done} / {total}"
+// in the language of msgs.
+//
+// Transfer row: bytes moved of the total.
+func (msgs Messages) TransferBytes(done string, total string) string {
+	return Catalog.Format(msgs.locale, "transferBytes", map[string]any{"done": done, "total": total})
+}
+
+// TransferRate says "{rate}/s"
+// in the language the app shows.
+//
+// Transfer row: speed.
+func TransferRate(rate string) string { return In(i18n.Locale()).TransferRate(rate) }
+
+// TransferRate says "{rate}/s"
+// in the language of msgs.
+//
+// Transfer row: speed.
+func (msgs Messages) TransferRate(rate string) string {
+	return Catalog.Format(msgs.locale, "transferRate", map[string]any{"rate": rate})
+}
+
+// TransferLeft says "{time} left"
+// in the language the app shows.
+//
+// Transfer row: estimated time remaining.
+func TransferLeft(time_ string) string { return In(i18n.Locale()).TransferLeft(time_) }
+
+// TransferLeft says "{time} left"
+// in the language of msgs.
+//
+// Transfer row: estimated time remaining.
+func (msgs Messages) TransferLeft(time_ string) string {
+	return Catalog.Format(msgs.locale, "transferLeft", map[string]any{"time": time_})
+}
+
+// TransferResume says "Resume"
+// in the language the app shows.
+//
+// Transfer row button: go on with an interrupted transfer now.
+func TransferResume() string { return In(i18n.Locale()).TransferResume() }
+
+// TransferResume says "Resume"
+// in the language of msgs.
+//
+// Transfer row button: go on with an interrupted transfer now.
+func (msgs Messages) TransferResume() string {
+	return Catalog.Format(msgs.locale, "transferResume", nil)
+}
+
+// TransferRetry says "Retry"
+// in the language the app shows.
+//
+// Transfer row button: send the files that failed again; a download keeps
+// the files it already has.
+func TransferRetry() string { return In(i18n.Locale()).TransferRetry() }
+
+// TransferRetry says "Retry"
+// in the language of msgs.
+//
+// Transfer row button: send the files that failed again; a download keeps
+// the files it already has.
+func (msgs Messages) TransferRetry() string {
+	return Catalog.Format(msgs.locale, "transferRetry", nil)
+}
+
+// TransferRenamed says "Saved as “{name}” (the name was taken)"
+// in the language the app shows.
+//
+// Transfer row note: the Mac cannot overwrite, so it stored an uploaded
+// file under a free name.
+func TransferRenamed(name string) string { return In(i18n.Locale()).TransferRenamed(name) }
+
+// TransferRenamed says "Saved as “{name}” (the name was taken)"
+// in the language of msgs.
+//
+// Transfer row note: the Mac cannot overwrite, so it stored an uploaded
+// file under a free name.
+func (msgs Messages) TransferRenamed(name string) string {
+	return Catalog.Format(msgs.locale, "transferRenamed", map[string]any{"name": name})
+}
+
+// TransferRenamedMore says "{n} files saved under other names (the names were taken)"
+// in the language the app shows.
+//
+// Transfer row note: the Mac stored several uploaded files under free
+// names; n is 2 or more.
+func TransferRenamedMore(n int) string { return In(i18n.Locale()).TransferRenamedMore(n) }
+
+// TransferRenamedMore says "{n} files saved under other names (the names were taken)"
+// in the language of msgs.
+//
+// Transfer row note: the Mac stored several uploaded files under free
+// names; n is 2 or more.
+func (msgs Messages) TransferRenamedMore(n int) string {
+	return Catalog.Format(msgs.locale, "transferRenamedMore", map[string]any{"n": n})
+}
+
+// TransferPartial says "Incomplete copy left on the Mac: {name}"
+// in the language the app shows.
+//
+// Transfer row note: a file whose upload was interrupted or canceled stays
+// on the Mac, incomplete.
+func TransferPartial(name string) string { return In(i18n.Locale()).TransferPartial(name) }
+
+// TransferPartial says "Incomplete copy left on the Mac: {name}"
+// in the language of msgs.
+//
+// Transfer row note: a file whose upload was interrupted or canceled stays
+// on the Mac, incomplete.
+func (msgs Messages) TransferPartial(name string) string {
+	return Catalog.Format(msgs.locale, "transferPartial", map[string]any{"name": name})
+}
+
+// TransferPartialMore says "{n} incomplete copies left on the Mac"
+// in the language the app shows.
+//
+// Transfer row note: several interrupted or canceled uploads stay on the
+// Mac, incomplete; n is 2 or more.
+func TransferPartialMore(n int) string { return In(i18n.Locale()).TransferPartialMore(n) }
+
+// TransferPartialMore says "{n} incomplete copies left on the Mac"
+// in the language of msgs.
+//
+// Transfer row note: several interrupted or canceled uploads stay on the
+// Mac, incomplete; n is 2 or more.
+func (msgs Messages) TransferPartialMore(n int) string {
+	return Catalog.Format(msgs.locale, "transferPartialMore", map[string]any{"n": n})
+}
+
+// ConflictTitle says "An item with this name already exists"
+// in the language the app shows.
+func ConflictTitle() string { return In(i18n.Locale()).ConflictTitle() }
+
+// ConflictTitle says "An item with this name already exists"
+// in the language of msgs.
+func (msgs Messages) ConflictTitle() string {
+	return Catalog.Format(msgs.locale, "conflictTitle", nil)
+}
+
+// ConflictMessage says "“{name}” already exists in {dir}."
+// in the language the app shows.
+//
+// Name conflict dialog while placing a download.
+func ConflictMessage(name string, dir string) string {
+	return In(i18n.Locale()).ConflictMessage(name, dir)
+}
+
+// ConflictMessage says "“{name}” already exists in {dir}."
+// in the language of msgs.
+//
+// Name conflict dialog while placing a download.
+func (msgs Messages) ConflictMessage(name string, dir string) string {
+	return Catalog.Format(msgs.locale, "conflictMessage", map[string]any{"name": name, "dir": dir})
+}
+
+// ConflictOverwrite says "Overwrite"
+// in the language the app shows.
+func ConflictOverwrite() string { return In(i18n.Locale()).ConflictOverwrite() }
+
+// ConflictOverwrite says "Overwrite"
+// in the language of msgs.
+func (msgs Messages) ConflictOverwrite() string {
+	return Catalog.Format(msgs.locale, "conflictOverwrite", nil)
+}
+
+// ConflictSkip says "Skip"
+// in the language the app shows.
+func ConflictSkip() string { return In(i18n.Locale()).ConflictSkip() }
+
+// ConflictSkip says "Skip"
+// in the language of msgs.
+func (msgs Messages) ConflictSkip() string {
+	return Catalog.Format(msgs.locale, "conflictSkip", nil)
+}
+
+// ConflictKeepBoth says "Keep both"
+// in the language the app shows.
+//
+// Name conflict button: save the download as “name (2)”.
+func ConflictKeepBoth() string { return In(i18n.Locale()).ConflictKeepBoth() }
+
+// ConflictKeepBoth says "Keep both"
+// in the language of msgs.
+//
+// Name conflict button: save the download as “name (2)”.
+func (msgs Messages) ConflictKeepBoth() string {
+	return Catalog.Format(msgs.locale, "conflictKeepBoth", nil)
+}
+
+// ConflictApplyAll says "Apply to all remaining conflicts"
+// in the language the app shows.
+func ConflictApplyAll() string { return In(i18n.Locale()).ConflictApplyAll() }
+
+// ConflictApplyAll says "Apply to all remaining conflicts"
+// in the language of msgs.
+func (msgs Messages) ConflictApplyAll() string {
+	return Catalog.Format(msgs.locale, "conflictApplyAll", nil)
 }
 
 // Input says "Input"
@@ -1285,6 +1679,38 @@ func StatsRecovery(ms string) string { return In(i18n.Locale()).StatsRecovery(ms
 // in the language of msgs.
 func (msgs Messages) StatsRecovery(ms string) string {
 	return Catalog.Format(msgs.locale, "statsRecovery", map[string]any{"ms": ms})
+}
+
+// StatsDecodeCap says "Decoder-limited: bitrate capped at {kbps} kbit/s"
+// in the language the app shows.
+//
+// HUD line while High Performance caps the bitrate because this PC's
+// decoder cannot keep up.
+func StatsDecodeCap(kbps string) string { return In(i18n.Locale()).StatsDecodeCap(kbps) }
+
+// StatsDecodeCap says "Decoder-limited: bitrate capped at {kbps} kbit/s"
+// in the language of msgs.
+//
+// HUD line while High Performance caps the bitrate because this PC's
+// decoder cannot keep up.
+func (msgs Messages) StatsDecodeCap(kbps string) string {
+	return Catalog.Format(msgs.locale, "statsDecodeCap", map[string]any{"kbps": kbps})
+}
+
+// StatsFrameRate30 says "Decoder-limited: asking the Mac for 30 fps"
+// in the language the app shows.
+//
+// HUD line once the viewer asks for 30 pictures a second from the next
+// media offer on.
+func StatsFrameRate30() string { return In(i18n.Locale()).StatsFrameRate30() }
+
+// StatsFrameRate30 says "Decoder-limited: asking the Mac for 30 fps"
+// in the language of msgs.
+//
+// HUD line once the viewer asks for 30 pictures a second from the next
+// media offer on.
+func (msgs Messages) StatsFrameRate30() string {
+	return Catalog.Format(msgs.locale, "statsFrameRate30", nil)
 }
 
 // StatsCache says "Tile cache {hits} hit/{misses} miss, CopyRect {copy}, cursor {cursor}"

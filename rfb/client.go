@@ -213,7 +213,7 @@ type Client struct {
 	rawTap       io.Writer         // test-only: tee of the decrypted ARD stream (#43)
 	fcServer     func(body []byte) // test/impl hook: an inbound 0x22 file-copy record body (#43)
 	fcMu         sync.Mutex        // serialises file copy; sessionID is fixed (#43)
-	fcIn         *fileCopyDownload // active download consuming inbound 0x22 records (#43)
+	fcIn         fileCopySink      // active transfer consuming inbound 0x22 records (#43)
 	fcInMu       sync.Mutex        // guards fcIn; the read side must not take fcMu
 	hp           *hpState
 	name         string
@@ -242,7 +242,8 @@ type Client struct {
 	lastPing     time.Time
 
 	mu          sync.Mutex // serialises writes and guards the fields below
-	out         io.Writer
+	out         io.Writer  // the send queue's after the handshake
+	sq          *sendQueue // nil in the handshake; see writeLocked
 	width       int
 	height      int
 	ardEnabled  bool
@@ -317,18 +318,28 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 		conn.Close()
 		return nil, err
 	}
+	c.sq = newSendQueue()
+	go c.sq.run(c.out)
 	return c, nil
 }
 
 // Close closes the connection; Run then returns nil.
 func (c *Client) Close() error {
 	c.closed.Store(true)
-	c.abortFileCopy(errors.New("rfb: connection closed"))
-	// Close the connection first: a writer blocked on a stalled network
-	// holds c.mu, which hpStop needs.
+	c.abortFileCopy(ErrFileCopyInterrupted)
+	// Close the connection first: it ends a write the send queue is
+	// blocked in on a stalled network.
 	err := c.conn.Close()
+	c.stopSend()
 	c.hpStop()
 	return err
+}
+
+// stopSend ends the send queue's goroutine; later writes fail.
+func (c *Client) stopSend() {
+	if c.sq != nil {
+		c.sq.stop(net.ErrClosed)
+	}
 }
 
 // Framebuffer returns the framebuffer; see the package comment.
@@ -358,6 +369,7 @@ func (c *Client) Run() error {
 		}
 	}()
 	defer c.dm.shutdown()
+	defer c.stopSend()
 	c.h.Name(c.name)
 	b := c.fb.Bounds()
 	c.h.Resize(b.Dx(), b.Dy())

@@ -184,7 +184,7 @@ func (c *Client) updateEndLocked() error {
 			ar = io.TeeReader(ar, c.rawTap)
 		}
 		c.rd.r = bufio.NewReader(ar)
-		c.out = ard.NewWriter(c.out, k[0], k[1])
+		c.wrapOutLocked(func(w io.Writer) io.Writer { return ard.NewWriter(w, k[0], k[1]) })
 		c.ardEnabled = true
 		c.log.Info("rfb: ARD session encryption active", "afterUpdate", c.updates+1)
 	}

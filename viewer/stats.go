@@ -29,6 +29,13 @@ type Stats struct {
 	MediaSinceKey   int   // pictures since the last key picture
 	MediaRecoveries int64 // loss episodes ended by a key picture
 	MediaRecoveryMs int64 // the last recovery, in milliseconds
+	// MediaDecodeLimited says the decoder cannot keep up and the bitrate
+	// is capped for it, at MediaDecodeCapKbps.
+	MediaDecodeLimited bool
+	MediaDecodeCapKbps int
+	// MediaFrameRate30 says the next offers ask the Mac for 30 pictures a
+	// second, as the decoder cannot take 60.
+	MediaFrameRate30 bool
 }
 
 type counters struct {
@@ -36,6 +43,8 @@ type counters struct {
 	encoding                 atomic.Int32
 
 	mediaDecoded, mediaDecodeNs, mediaShown, mediaBytes atomic.Int64
+	mediaCapKbps                                        atomic.Int64 // the decode cap, 0 for none
+	mediaLimited, mediaFPS30                            atomic.Bool
 }
 
 // Stats returns the totals so far; any goroutine.
@@ -43,7 +52,8 @@ func (s *Session) Stats() Stats {
 	st := Stats{Updates: s.n.updates.Load(), DecodeNs: s.n.decodeNs.Load(),
 		Bytes: s.n.bytes.Load(), Encoding: s.n.encoding.Load(),
 		MediaDecoded: s.n.mediaDecoded.Load(), MediaDecodeNs: s.n.mediaDecodeNs.Load(),
-		MediaShown: s.n.mediaShown.Load(), MediaBytes: s.n.mediaBytes.Load()}
+		MediaShown: s.n.mediaShown.Load(), MediaBytes: s.n.mediaBytes.Load(),
+		MediaDecodeLimited: s.n.mediaLimited.Load(), MediaDecodeCapKbps: int(s.n.mediaCapKbps.Load()), MediaFrameRate30: s.n.mediaFPS30.Load()}
 	if m := s.c.MediaStream(); m != nil {
 		ms := m.Stats()
 		st.MediaKeys, st.MediaKeyBytes, st.MediaSinceKey = int64(ms.Keys), int64(ms.KeyBytes), ms.SinceKey

@@ -320,6 +320,73 @@ Finder info, text encoding, node flags) — not permissions — so the mode fiel
 in NewItem is informational and the created item gets the receiver's default
 umask mode (0644 here).
 
+## Transfers in the viewer: progress, resume, name conflicts
+
+`viewer.Transfers` (`viewer/transfer.go`) turns each drop and each
+"Download a file…" into a job that the session panel lists with a progress
+bar, bytes, speed (a weighted mean over 1 s windows) and the time left. Jobs
+run one at a time, because the Mac's file copy has one fixed session ID. They
+live for the app's run only; nothing is written to disk about them.
+
+### Upload
+
+- A dropped folder is walked (`rfb.PlanUpload`). Every regular file inside is
+  **its own** `StartFileReceive` session, whose destination folder is the
+  file's remote subfolder; the Mac creates that folder if it is missing.
+  Symbolic links, special files and empty folders inside a dropped folder are
+  skipped. Verified live: one missing folder level is created. Whether the
+  receiver also creates missing **intermediate** folders (a/b/c for a file
+  deep in a new tree) is not verified yet.
+- After `EndSession` the viewer waits (up to a minute) for the Mac's result
+  record (see [FileCopy status / result](#filecopy-status--result-0x22-mac--viewer)).
+  `00 c8` (200) marks the file sent; any other code fails that file only.
+  The wait is checked against the captured success record. It is not yet
+  checked against a live failure, and no failure code has been seen live.
+  When no result comes, the file counts as sent (every record went out) and
+  the job counts it as unconfirmed.
+- Cancel sends Stop (cmd 5, the command framing above, with the destination
+  folder as the path) before the next chunk. The viewer then swallows records
+  until the Mac's answer or 2 s, so that a late record does not reach the
+  next transfer, which reuses the session ID. What the receiver does with a
+  partly received item after Stop is not verified live.
+- **Name conflicts are the Mac's.** The viewer cannot list the destination
+  folder, and the Mac does not ask. What `MoveItemsToDestinationFolder` does
+  with an existing name (replace, rename or fail) has not been decoded or
+  observed. MyVNC does not guess.
+
+### Resume (file granularity)
+
+The protocol has **no byte offset**: a sender always streams a whole item, so
+a transfer resumes by file, never inside a file.
+
+- **Upload:** a job keeps the state of each file. When the connection drops,
+  the job waits as interrupted. The automatic reconnect to the same server
+  (or Resume) sends only the files that the Mac did not confirm. The file that
+  was in flight starts again from byte 0. Retry after a failure sends only the
+  failed files.
+- **Download:** the staging folder (`.myvnc-download-*` in the local
+  Downloads folder) is kept when a transfer fails or the connection drops. A
+  resume asks for the same remote path again and stages into the same folder.
+  A staged file counts as complete when its size equals NewItem's data size
+  and its modification time equals NewItem's content date. The viewer sets
+  that date only once every byte of the file is written. The bytes of a
+  complete file **still come over the network**, because the Mac cannot be
+  told to skip an item; they are discarded and counted as skipped. Any other
+  staged file is written again. Staged items that the remote tree no longer
+  has are removed. The staging folder is removed when the job finishes, is
+  canceled or dismissed, or when the session ends for good (Disconnect, no
+  automatic reconnect, or reconnecting gave up).
+
+### Download name conflicts
+
+Placing the staged items runs on the transfer's own goroutine, **not** on the
+RFB read loop (`rfb.DownloadOptions.Place`): the read side only completes the
+staging. Folders merge with existing folders of the same name. Any other item
+whose name exists asks the user: Overwrite, Skip or Keep both (`name (2)`),
+with "apply to all remaining conflicts". Closing the dialog skips the rest.
+Overwrite never puts a file in place of an existing folder; in that case
+both are kept.
+
 ## Drag (`0x0e`, `0x20`)
 
 - `0x0e` DragEvent (viewer → Mac): drag type/motion while a drag is in flight.
@@ -415,8 +482,8 @@ a path on it. The drop handler uses the plain upload.
 
 `rfb/filecopy_test.go` `TestMacFileCopyUpload` (env `MYVNC_FILECOPY_UPLOAD=1`,
 `MYVNC_E2E_PASS`) uploads a 200000-byte file through the real
-`Client.FileCopyUpload` and logs the SHA-256; verify it on the Mac. It prints
-every inbound `0x22` result body.
+`Client.FileCopyUploadContext`, waits for the Mac's result record (it fails
+unless the Mac answers 200) and logs the SHA-256; verify it on the Mac.
 
 `TestMacFileCopyDownload` (env `MYVNC_FILECOPY_DOWNLOAD=1`, `MYVNC_E2E_PASS`,
 `MYVNC_FC_PATH` defaulting to `/Users/jdoe/myvnc-drag-test/dl_dir`) runs the

@@ -6,9 +6,12 @@ package rfb
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/si-mods/MyVNC/internal/text"
@@ -27,9 +30,151 @@ func (c *Client) write(b []byte) error {
 	return c.writeLocked(b)
 }
 
+// writeLocked sends b, in the handshake at once, after it through the
+// send queue without waiting: the read loop must never wait on the
+// network (a Mac that stops reading us while we stop reading it). An
+// error is the first one the queue met.
 func (c *Client) writeLocked(b []byte) error {
-	_, err := c.out.Write(b)
-	return err
+	if c.sq == nil {
+		_, err := c.out.Write(b)
+		return err
+	}
+	return c.sq.push(sendItem{b: b})
+}
+
+// Flush waits until the messages sent so far are on the wire, or the
+// connection closes. Sends only queue them; a caller that wants the
+// network's backpressure (input that should coalesce while the link
+// stalls) flushes after each.
+func (c *Client) Flush() error { return c.writeWait(context.Background(), nil) }
+
+// writeWait sends b and waits, without c.mu, until it is on the wire,
+// ctx is done or the connection closes: bulk data (file copy) keeps the
+// network's backpressure instead of piling up in the queue. On ctx the
+// message stays queued and goes out whole. Empty b only waits.
+func (c *Client) writeWait(ctx context.Context, b []byte) error {
+	c.mu.Lock()
+	if c.sq == nil {
+		defer c.mu.Unlock()
+		if len(b) == 0 {
+			return nil
+		}
+		return c.writeLocked(b)
+	}
+	done := make(chan error, 1)
+	err := c.sq.push(sendItem{b: b, done: done})
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-c.sq.stopped:
+		return c.sq.error()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// wrapOutLocked switches the output stream to wrap(out) after what is
+// queued, as ARD session encryption does at a precise point.
+func (c *Client) wrapOutLocked(wrap func(io.Writer) io.Writer) {
+	if c.sq == nil {
+		c.out = wrap(c.out)
+		return
+	}
+	c.sq.push(sendItem{wrap: wrap})
+}
+
+// sendQueue funnels messages, in order, to the goroutine that owns the
+// output stream after the handshake.
+// ponytail: unbounded for small messages; only file copy waits. Bound it
+// if input or clipboard ever floods a stalled link.
+type sendQueue struct {
+	mu      sync.Mutex
+	cond    sync.Cond
+	q       []sendItem
+	err     error         // sticky: the first write error, or the close
+	stopped chan struct{} // closed with err set
+}
+
+type sendItem struct {
+	b    []byte
+	wrap func(io.Writer) io.Writer // switches the stream at this point
+	done chan error                // hears the outcome, when set
+}
+
+func newSendQueue() *sendQueue {
+	s := &sendQueue{stopped: make(chan struct{})}
+	s.cond.L = &s.mu
+	return s
+}
+
+func (s *sendQueue) push(it sendItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.q = append(s.q, it)
+	s.cond.Signal()
+	return nil
+}
+
+func (s *sendQueue) error() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// stop fails what is queued and ends run; the first error sticks.
+func (s *sendQueue) stop(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return
+	}
+	s.err = err
+	for _, it := range s.q {
+		if it.done != nil {
+			it.done <- err
+		}
+	}
+	s.q = nil
+	close(s.stopped)
+	s.cond.Broadcast()
+}
+
+// run writes the queue to w until stop or a write error.
+func (s *sendQueue) run(w io.Writer) {
+	for {
+		s.mu.Lock()
+		for len(s.q) == 0 && s.err == nil {
+			s.cond.Wait()
+		}
+		if s.err != nil {
+			s.mu.Unlock()
+			return
+		}
+		it := s.q[0]
+		s.q[0] = sendItem{}
+		s.q = s.q[1:]
+		s.mu.Unlock()
+		var err error
+		if it.wrap != nil {
+			w = it.wrap(w)
+		} else if len(it.b) > 0 {
+			_, err = w.Write(it.b)
+		}
+		if it.done != nil {
+			it.done <- err
+		}
+		if err != nil {
+			s.stop(err)
+			return
+		}
+	}
 }
 
 func setPixelFormat(pf *pixel.Format) []byte {

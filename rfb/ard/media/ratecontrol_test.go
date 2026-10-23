@@ -93,3 +93,27 @@ func TestRateControlCap(t *testing.T) {
 		t.Errorf("tiny cap: target %d max %d, want %d", rc.target, rc.max, rateMin)
 	}
 }
+
+// The decode cap bounds what is reported, not the network target under
+// it, and lifting it returns to that target.
+func TestRateControlDecodeCap(t *testing.T) {
+	r := newRateControl(0)
+	t0 := time.Unix(100, 0)
+	r.step(t0, 0, 0, 0)
+	r.setDecodeCap(3000)
+	if got := r.step(t0.Add(time.Second), 0, 0, 0); got != 3000 || r.target != rateStart {
+		t.Errorf("capped %d, target %d; want 3000 and %d", got, r.target, rateStart)
+	}
+	r.setDecodeCap(1) // under the floor
+	if got := r.effective(); got != rateMin {
+		t.Errorf("capped to %d, want the floor %d", got, rateMin)
+	}
+	r.setDecodeCap(20000) // above the target
+	if got := r.effective(); got != rateStart {
+		t.Errorf("effective %d, want the target %d", got, rateStart)
+	}
+	r.setDecodeCap(0)
+	if got := r.effective(); got != rateStart {
+		t.Errorf("effective %d after lifting", got)
+	}
+}

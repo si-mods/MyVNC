@@ -64,20 +64,111 @@
   "downloadFile": "Download a file…",
   "@downloadFile": { "description": "Session menu button: opens the remote-path form for an ARD file download." },
   "downloadTitle": "Download from the remote computer",
-  "@downloadTitle": { "description": "Title of the form asking for a path on the Mac and of its result alert." },
+  "@downloadTitle": { "description": "Title of the form asking for a path on the Mac." },
   "remotePath": "Remote path",
   "@remotePath": { "description": "Text field label: absolute path of the file or folder to download." },
   "download": "Download",
   "downloadDone": "Saved {path}",
   "@downloadDone": {
-    "description": "Result alert after a file download.",
+    "description": "Transfer row state after a download finished.",
     "placeholders": { "path": { "type": "String", "example": "C:\\Users\\jdoe\\Downloads\\report.pdf" } }
   },
-  "downloadFailed": "Download failed: {err}",
-  "@downloadFailed": {
-    "description": "Result alert when a file download fails.",
+  "transfers": "Transfers",
+  "@transfers": { "description": "Session panel heading over the list of file transfers." },
+  "transferMore": "{name} and {n} more",
+  "@transferMore": {
+    "description": "Name of an upload of several dropped items.",
+    "placeholders": { "name": { "type": "String", "example": "report.pdf" }, "n": { "type": "int", "example": "3" } }
+  },
+  "transferQueued": "Waiting to start",
+  "@transferQueued": { "description": "Transfer row state: queued behind another transfer." },
+  "transferRunning": "Transferring",
+  "@transferRunning": { "description": "Transfer row state: bytes are moving." },
+  "transferFile": "File {n} of {total}",
+  "@transferFile": {
+    "description": "Transfer row: which file of an upload is being sent.",
+    "placeholders": { "n": { "type": "int", "example": "3" }, "total": { "type": "int", "example": "12" } }
+  },
+  "transferAsking": "Waiting for your choice",
+  "@transferAsking": { "description": "Transfer row state: a name conflict dialog is open." },
+  "transferInterrupted": "Interrupted; continues when the connection is back",
+  "@transferInterrupted": { "description": "Transfer row state: the connection dropped; the transfer resumes after the automatic reconnect." },
+  "transferSent": "Sent to {dir}",
+  "@transferSent": {
+    "description": "Transfer row state after an upload finished.",
+    "placeholders": { "dir": { "type": "String", "example": "/Users/jdoe/Downloads" } }
+  },
+  "transferNothingSaved": "Nothing saved: every item was skipped",
+  "@transferNothingSaved": { "description": "Transfer row state: a download whose every item was skipped in the conflict dialog." },
+  "transferFailed": "Failed: {err}",
+  "@transferFailed": {
+    "description": "Transfer row state when a transfer fails.",
     "placeholders": { "err": { "type": "String", "example": "rfb: file copy ended with error 5" } }
   },
+  "transferFilesFailed": "{n} of {total} files were not sent: {err}",
+  "@transferFilesFailed": {
+    "description": "Transfer row state when some files of an upload failed.",
+    "placeholders": {
+      "n": { "type": "int", "example": "2" },
+      "total": { "type": "int", "example": "12" },
+      "err": { "type": "String", "example": "open report.pdf: access denied" }
+    }
+  },
+  "transferNoFiles": "Nothing to send: no files",
+  "@transferNoFiles": { "description": "Transfer row state: the dropped items held no regular files." },
+  "transferClosed": "The connection closed",
+  "@transferClosed": { "description": "Transfer row state: the session ended for good before the transfer finished." },
+  "transferCanceled": "Canceled",
+  "transferBytes": "{done} / {total}",
+  "@transferBytes": {
+    "description": "Transfer row: bytes moved of the total.",
+    "placeholders": { "done": { "type": "String", "example": "12.3 MB" }, "total": { "type": "String", "example": "80.0 MB" } }
+  },
+  "transferRate": "{rate}/s",
+  "@transferRate": {
+    "description": "Transfer row: speed.",
+    "placeholders": { "rate": { "type": "String", "example": "4.5 MB" } }
+  },
+  "transferLeft": "{time} left",
+  "@transferLeft": {
+    "description": "Transfer row: estimated time remaining.",
+    "placeholders": { "time": { "type": "String", "example": "0:13" } }
+  },
+  "transferResume": "Resume",
+  "@transferResume": { "description": "Transfer row button: go on with an interrupted transfer now." },
+  "transferRetry": "Retry",
+  "@transferRetry": { "description": "Transfer row button: send the files that failed again; a download keeps the files it already has." },
+  "transferRenamed": "Saved as “{name}” (the name was taken)",
+  "@transferRenamed": {
+    "description": "Transfer row note: the Mac cannot overwrite, so it stored an uploaded file under a free name.",
+    "placeholders": { "name": { "type": "String", "example": "report 2.pdf" } }
+  },
+  "transferRenamedMore": "{n} files saved under other names (the names were taken)",
+  "@transferRenamedMore": {
+    "description": "Transfer row note: the Mac stored several uploaded files under free names; n is 2 or more.",
+    "placeholders": { "n": { "type": "int", "example": "3" } }
+  },
+  "transferPartial": "Incomplete copy left on the Mac: {name}",
+  "@transferPartial": {
+    "description": "Transfer row note: a file whose upload was interrupted or canceled stays on the Mac, incomplete.",
+    "placeholders": { "name": { "type": "String", "example": "report.pdf" } }
+  },
+  "transferPartialMore": "{n} incomplete copies left on the Mac",
+  "@transferPartialMore": {
+    "description": "Transfer row note: several interrupted or canceled uploads stay on the Mac, incomplete; n is 2 or more.",
+    "placeholders": { "n": { "type": "int", "example": "2" } }
+  },
+  "conflictTitle": "An item with this name already exists",
+  "conflictMessage": "“{name}” already exists in {dir}.",
+  "@conflictMessage": {
+    "description": "Name conflict dialog while placing a download.",
+    "placeholders": { "name": { "type": "String", "example": "report.pdf" }, "dir": { "type": "String", "example": "C:\\Users\\jdoe\\Downloads" } }
+  },
+  "conflictOverwrite": "Overwrite",
+  "conflictSkip": "Skip",
+  "conflictKeepBoth": "Keep both",
+  "@conflictKeepBoth": { "description": "Name conflict button: save the download as “name (2)”." },
+  "conflictApplyAll": "Apply to all remaining conflicts",
   "input": "Input",
   "video": "Video",
   "interface": "Interface",
@@ -157,6 +248,10 @@
   "statsLinkState": "Link state: {state}",
   "statsKeys": "Keyframes {keys}, {mb} MB",
   "statsRecovery": "recovered in {ms} ms",
+  "statsDecodeCap": "Decoder-limited: bitrate capped at {kbps} kbit/s",
+  "@statsDecodeCap": { "description": "HUD line while High Performance caps the bitrate because this PC's decoder cannot keep up." },
+  "statsFrameRate30": "Decoder-limited: asking the Mac for 30 fps",
+  "@statsFrameRate30": { "description": "HUD line once the viewer asks for 30 pictures a second from the next media offer on." },
   "statsCache": "Tile cache {hits} hit/{misses} miss, CopyRect {copy}, cursor {cursor}",
   "statsEncodings": "Encodings: {summary}",
   "@statsLink": { "description": "Throughput estimate and fence round trip; rtt is a dash before one is measured." },

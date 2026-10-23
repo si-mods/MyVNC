@@ -26,6 +26,57 @@ ARD High Performance has its own receiver-side RCTL loop in
 cuts the bitrate, a clean link raises it only when the sender uses at
 least 70% of the budget. The viewer does not override the Mac's encoder.
 
+## Decode capacity (High Performance)
+
+The network loop above sees only the link. `viewer/decodelimit.go` adds
+the client's decoder as a second limit. The media pipe measures each
+second: units received and dropped for a full queue, decode time, and
+the queue depth when each unit is taken.
+
+- Decode-limited: units dropped, or mean decode time over 90% of the
+  interval between units, or most pictures taken with `unseenBehind`
+  others queued. Three such seconds in a row cut a decode cap to 75% of
+  the delivered rate (floor 200 kbit/s; a further cut starts from the
+  lower of delivered and cap).
+- Healthy: no drops, queue at most 1, decode time under 60% of the
+  interval. After ten such seconds the cap rises by 10% a second, and is
+  cleared once above 60 Mbit/s. Any other second resets both runs; a
+  second with no units says nothing.
+- The cap goes through `media.Stream.SetDecodeCap` to the rate controller,
+  which reports `min(network target, cap)` in the RCTL bandwidth field.
+  The Mac's encoder follows that estimate; whether it holds a target
+  below the cap is the Mac's choice. The HUD counters carry the state
+  (`Stats.MediaDecodeLimited`, `MediaDecodeCapKbps`).
+- Frame rate: when decoding is the bottleneck whatever the bitrate (two
+  cuts and still limited, or mean decode time over 1/60 s for three
+  seconds while over 45 units/s arrive), the pipe calls
+  `rfb.Client.LimitMediaFrameRate(true)`, once and for the rest of the
+  Session. It sends nothing: `hpOffer` clears `Flag60FPS` (0x1) in the
+  offers made from then on (after a display change or
+  `RetryHighPerformance`), and logs `limit30`. A mid-session offer is
+  unsafe (the Mac names its ports first, and a second offer while the
+  capture runs can fail it: remotex didStart error 32000), so none is
+  forced. That the Mac then sends 30 fps is UNVERIFIED live. A new
+  Session after a reconnect starts at 60 again. `Stats.MediaFrameRate30`
+  shows the state.
+
+A hardware decoder that keeps failing falls back too. Predicted pictures
+fail in any decoder while a lost one is awaited, so only key pictures
+count: the first key picture failing, or three in a row after one
+decoded, or 60 predicted pictures failing in a row after a key picture
+decoded (about a second), closes it, and the pipe decodes in software
+for the rest of its life (also from forced Hardware mode, as a frozen
+picture is worse). The decoder's `Info.Fallback` then says "hardware
+decode failed, using software". Software that keeps failing is not
+replaced; each error asks for a keyframe as before.
+
+On the Standard path the next incremental FramebufferUpdateRequest goes
+out when an update's header is read, before it is decoded
+(`rfb/reader.go` near line 80), so one update is in flight while the
+last decodes; the read loop blocks in the decoder, and TCP pushes back.
+With ContinuousUpdates (`rfb/reader.go` near line 196) the server pushes
+without asking and only TCP pushes back. Nothing there is changed.
+
 ## Profiles
 
 `viewer.Config.ApplyProfile` sets a coherent preset:

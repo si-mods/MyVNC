@@ -30,6 +30,7 @@ import (
 	"github.com/si-mods/MyVNC/internal/win32"
 	"github.com/si-mods/MyVNC/locales"
 	"github.com/si-mods/MyVNC/rfb"
+	"github.com/si-mods/MyVNC/rfb/ard/media"
 	"github.com/si-mods/MyVNC/viewer"
 	"github.com/si-mods/MyVNC/viewer/emulatemb"
 	"github.com/si-mods/MyVNC/viewer/keymap"
@@ -78,42 +79,42 @@ type app struct {
 	thumbs             map[string]*ui.Bitmap // by server, nil for none
 
 	// The session view.
-	sess           *viewer.Session
-	addr           string // of sess
-	sessServer     string // what the user chose, as in Config.Servers
-	emb            *emulatemb.Emulator
-	pill           pillDrag
-	stats          statsSample
-	sessPass       string // kept for reconnecting, never written anywhere
-	secType        uint32
-	name           string
-	title          string // shown in the title bar
-	screen         ui.Handle
-	buttons        uint16
-	ptrX, ptrY     float32 // pointer in the screen box
-	ptrMove        bool    // a move to ptrX, ptrY waits for the next frame
-	scrollAcc      [2]float32
-	wheelPend      []uint16 // wheel clicks waiting, one pair a frame (flushPointer)
-	wheelLast      time.Time
-	wheelAccel     float32          // 1-3, from how fast the wheel repeats
-	sysLines       int              // the system's lines per notch, as notches report
-	wheelNow       func() time.Time // injectable, for the tests
-	svc            ui.Services
-	menuOpen       bool
-	focused        bool
-	ungrabbed      bool // the user released the grab with the shortcut keys
-	pxScale        float32
-	srvLED         uint32
-	dyn            viewer.Resizer
-	dynUrgent      bool       // the next size goes at once: a new session, full screen, another monitor
-	dynRefused     bool       // the server cannot resize: the session scales to fit instead
-	dynHint        bool       // the session panel says so, until dismissed
-	hpNote         string     // why High Performance fell back, shown until dismissed
-	hpFailed       bool       // it fell back: the panel offers a retry
-	rdp            *win32.RDP // an embedded Remote Desktop session, if one runs
-	rdpAddr        string
-	rdpResize      *time.Timer
-	rdpW, rdpH     int32
+	sess       *viewer.Session
+	addr       string // of sess
+	sessServer string // what the user chose, as in Config.Servers
+	emb        *emulatemb.Emulator
+	pill       pillDrag
+	stats      statsSample
+	sessPass   string // kept for reconnecting, never written anywhere
+	secType    uint32
+	name       string
+	title      string // shown in the title bar
+	screen     ui.Handle
+	buttons    uint16
+	ptrX, ptrY float32 // pointer in the screen box
+	ptrMove    bool    // a move to ptrX, ptrY waits for the next frame
+	scrollAcc  [2]float32
+	wheelPend  []uint16 // wheel clicks waiting, one pair a frame (flushPointer)
+	wheelLast  time.Time
+	wheelAccel float32          // 1-3, from how fast the wheel repeats
+	sysLines   int              // the system's lines per notch, as notches report
+	wheelNow   func() time.Time // injectable, for the tests
+	svc        ui.Services
+	menuOpen   bool
+	focused    bool
+	ungrabbed  bool // the user released the grab with the shortcut keys
+	pxScale    float32
+	srvLED     uint32
+	dyn        viewer.Resizer
+	dynUrgent  bool       // the next size goes at once: a new session, full screen, another monitor
+	dynRefused bool       // the server cannot resize: the session scales to fit instead
+	dynHint    bool       // the session panel says so, until dismissed
+	hpNote     string     // why High Performance fell back, shown until dismissed
+	hpFailed   bool       // it fell back: the panel offers a retry
+	rdp        *win32.RDP // an embedded Remote Desktop session, if one runs
+	rdpAddr    string
+	rdpResize  *time.Timer
+	rdpW, rdpH int32
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -129,11 +130,12 @@ type app struct {
 	certMsg            string
 	certReply          chan int
 
-	// ARD file download (#43).
-	dlOpen bool
-	dlPath string
-	dlDone bool
-	dlMsg  string
+	// ARD file transfer (#43).
+	dlOpen      bool
+	dlPath      string
+	xfers       *viewer.Transfers
+	conflictAll bool // the name-clash dialog's "apply to all"
+	conflictOn  bool // the dialog shows; Escape clears it
 
 	// Platform hooks; nil in tests but post.
 	post          func(func())
@@ -162,7 +164,8 @@ type reconnect struct {
 	active  bool
 	attempt int // of the next try, from 0
 	server  string
-	gen     int // invalidates the timers of canceled tries
+	gen     int  // invalidates the timers of canceled tries
+	limit30 bool // the lost session's decoder asked for 30 fps; the next keeps it
 	timer   *time.Timer
 }
 
@@ -186,6 +189,8 @@ func newApp(dir string) *app {
 		step: locales.StepConnecting, wheelNow: time.Now,
 	}
 	a.initTouch()
+	// a.post is the window's, set once it exists.
+	a.xfers = viewer.NewTransfers(func(f func()) { a.post(f) })
 	cfg, err := viewer.LoadConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		log.Print(err)
@@ -613,7 +618,7 @@ func (a *app) flushAltGr() {
 
 // modal reports whether a dialog takes the keyboard from the session.
 func (a *app) modal() bool {
-	return a.menuOpen || a.authOpen || a.keyOpen || a.warnOpen || a.certOpen || a.dlOpen || a.dlDone
+	return a.menuOpen || a.authOpen || a.keyOpen || a.warnOpen || a.certOpen || a.dlOpen || a.xfers.Asking() != nil
 }
 
 // updateGrab grabs the system keys while a session has the keyboard.
@@ -642,21 +647,17 @@ func (a *app) sendClipboard() {
 	a.sess.SendClipboard(a.svc.ReadClipboard())
 }
 
-// sendFiles uploads dropped files to the Mac's Downloads folder. Only an
-// explicit drop transfers files; copying on Windows leaves the clipboard
-// to text.
+// sendFiles queues dropped files and folders for the Mac's Downloads
+// folder; the session panel shows the transfer. Only an explicit drop
+// transfers files; copying on Windows leaves the clipboard to text.
 func (a *app) sendFiles(files []string) {
-	if a.user == "" || !a.sess.FileCopyAvailable() {
+	if a.user == "" || len(files) == 0 || !a.sess.FileCopyAvailable() {
 		return
 	}
 	dir := "/Users/" + a.user + "/Downloads"
-	a.sess.SendFiles(files, dir, func(remote []string, err error) {
-		if err != nil {
-			a.log.Warn("file transfer", "err", err)
-			return
-		}
-		a.log.Info("file transfer: uploaded", "files", len(remote), "dir", dir)
-	})
+	a.xfers.Attach(a.sess, a.sessServer)
+	a.xfers.Upload(files, dir)
+	a.log.Info("file transfer: queued", "items", len(files), "dir", dir)
 }
 
 // dropFiles takes files dropped from Explorer on the session window and
@@ -669,32 +670,31 @@ func (a *app) dropFiles(paths []string) {
 	a.sendFiles(paths)
 }
 
-// startDownload fetches the remote path in the download form into the
-// local Downloads folder. It is the viewer-initiated half of the ARD file
-// transfer; the Mac streams the records over the session (#43).
+// startDownload queues the remote path in the download form for the
+// local Downloads folder; the session panel shows the transfer. It is the
+// viewer-initiated half of the ARD file transfer; the Mac streams the
+// records over the session (#43).
 func (a *app) startDownload() {
 	p := strings.TrimSpace(a.dlPath)
 	a.dlOpen = false
-	if p == "" || a.sess == nil {
+	if p == "" || a.sess == nil || !a.sess.FileCopyAvailable() {
 		return
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		a.dlMsg, a.dlDone = locales.DownloadFailed(err.Error()), true
+		a.log.Warn("download", "err", err)
 		return
 	}
 	dir := filepath.Join(home, "Downloads")
 	a.log.Info("download", "path", p, "dir", dir)
-	a.sess.DownloadFile(p, dir, func(paths []string, err error) {
-		if err != nil {
-			a.dlMsg = locales.DownloadFailed(err.Error())
-		} else if len(paths) == 1 {
-			a.dlMsg = locales.DownloadDone(paths[0])
-		} else {
-			a.dlMsg = locales.DownloadDone(strings.Join(paths, ", "))
-		}
-		a.dlDone = true
-	})
+	a.xfers.Attach(a.sess, a.sessServer)
+	a.xfers.Download(p, dir)
+}
+
+// answerConflict answers the name clash the asking transfer shows.
+func (a *app) answerConflict(j *viewer.Transfer, act viewer.ConflictAction, all bool) {
+	a.xfers.Answer(j, viewer.Resolution{Action: act, All: all})
+	a.conflictAll, a.conflictOn = false, false
 }
 
 func (a *app) blur() {
@@ -842,8 +842,9 @@ func (a *app) connectTo(server string, again bool) {
 		})
 	}
 	cfg, user, pass := a.cfg, a.user, a.pass
+	limit30 := false
 	if again {
-		pass = a.sessPass
+		pass, limit30 = a.sessPass, a.rc.limit30
 	}
 	lg := a.log.With("addr", addr)
 	lg.Info("connecting", "server", server, "reconnect", again)
@@ -902,6 +903,9 @@ func (a *app) connectTo(server string, again bool) {
 		if cfg.HighPerformance {
 			opt.HighPerformance = &rfb.HighPerformance{ // only an ARD server takes it
 				MaxKbps: cfg.MaxKbps, GOP: cfg.GOP, MaxFPS: cfg.MaxFPS,
+			}
+			if limit30 {
+				opt.HighPerformance.Offer.Flags = media.DefaultFlags &^ media.Flag60FPS
 			}
 		}
 		s, err := viewer.Connect(ctx, addr, opt, cfg.DecoderMode(), a.post)
@@ -1070,10 +1074,27 @@ func (a *app) prompts(c *ui.Context) {
 	}).Dismissed() {
 		a.dlOpen = false
 	}
-	if a.dlDone {
-		ui.AlertDialog(c, &a.dlDone, locales.DownloadTitle(), a.dlMsg, locales.Ok())
-		if !a.dlDone {
-			a.dlMsg = ""
+	if j := a.xfers.Asking(); j != nil && j.Conflict != nil {
+		a.conflictOn = true
+		if ui.Modal(c, &a.conflictOn, func() {
+			ui.Text(c, locales.ConflictTitle()).Bold()
+			p := j.Conflict.Path
+			ui.Text(c, locales.ConflictMessage(filepath.Base(p), filepath.Dir(p))).Wrap()
+			components.Checkbox(c, &a.conflictAll, locales.ConflictApplyAll())
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if ui.Button(c, locales.ConflictSkip()).Clicked() {
+					a.answerConflict(j, viewer.Skip, a.conflictAll)
+				}
+				if ui.Button(c, locales.ConflictKeepBoth()).Clicked() {
+					a.answerConflict(j, viewer.KeepBoth, a.conflictAll)
+				}
+				if ui.PrimaryButton(c, locales.ConflictOverwrite()).Clicked() {
+					a.answerConflict(j, viewer.Overwrite, a.conflictAll)
+				}
+			})
+		}).Dismissed() {
+			// Escape or a click outside: skip this and the rest.
+			a.answerConflict(j, viewer.Skip, true)
 		}
 	}
 	answer(c, &a.keyOpen, &a.keyReply, locales.HostKeyTitle(), a.keyMsg, locales.Reject(), locales.Accept())
@@ -1098,11 +1119,13 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 			a.scheduleReconnect()
 		} else {
 			a.cancelReconnect()
+			a.xfers.GiveUp()
 		}
 		return
 	}
 	if s == nil {
 		a.cancelReconnect()
+		a.xfers.GiveUp()
 		return // canceled
 	}
 	a.cancelReconnect()
@@ -1127,6 +1150,9 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 			if encrypted {
 				a.sendClipboard() // files copied before the session came up
 			}
+			if s.FileCopyAvailable() {
+				a.xfers.Attach(s, server) // resumes interrupted transfers
+			}
 		}
 	}
 	s.OnClipboard = func(text string) {
@@ -1138,6 +1164,9 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	s.OnLED = a.serverLED
 	s.OnResizeRefused = a.resizeRefused
 	s.OnMediaFallback = a.mediaFallback
+	if s.FileCopyAvailable() {
+		a.xfers.Attach(s, server)
+	}
 	a.sendClipboard()
 	a.fullScreen(a.cfg.FullScreen)
 	a.updateGrab()
@@ -1150,6 +1179,7 @@ func (a *app) disconnect() {
 		a.sess.Close()
 		a.endSession()
 	}
+	a.xfers.GiveUp()
 }
 
 // connectRDP starts an embedded Microsoft Remote Desktop session. The
@@ -1260,6 +1290,7 @@ func rdpTarget(server string) (host string, port int, err error) {
 func (a *app) endSession() {
 	a.saveThumbnail(a.sessServer, a.sess.Shown)
 	a.sess, a.emb = nil, nil
+	a.xfers.Detach()
 	if a.sc != nil {
 		a.sc.Reset() // the server is gone: nothing to release
 	}
@@ -1276,12 +1307,15 @@ func (a *app) disconnected(s *viewer.Session, err error) {
 	server := a.sessServer
 	a.endSession()
 	if err == nil {
+		a.xfers.GiveUp()
 		return
 	}
 	a.errText = locales.Disconnected(errorText(err))
 	if a.cfg.Reconnect {
-		a.rc = reconnect{server: server, gen: a.rc.gen}
+		a.rc = reconnect{server: server, gen: a.rc.gen, limit30: s.Stats().MediaFrameRate30}
 		a.scheduleReconnect()
+	} else {
+		a.xfers.GiveUp()
 	}
 }
 
@@ -1291,6 +1325,7 @@ func (a *app) scheduleReconnect() {
 	if !ok {
 		a.log.Info("giving up reconnecting", "server", a.rc.server)
 		a.cancelReconnect()
+		a.xfers.GiveUp()
 		return
 	}
 	a.rc.active = true
@@ -1465,10 +1500,14 @@ func main() {
 			Content:   ui.View(a.view),
 		})
 		a.win, a.post = win, win.Update
+		a.xfers.Log = a.log
 		if err := win32.RegisterFileDrop(win.NativeHandle(), a.dropFiles); err != nil {
 			a.log.Warn("file drop", "err", err)
 		}
-		win.OnClosed(func() { win32.UnregisterFileDrop() })
+		win.OnClosed(func() {
+			win32.UnregisterFileDrop()
+			a.xfers.Close() // staged downloads go; nothing is kept across runs
+		})
 		a.setLocale = mygo.App.SetLocale
 		mygo.App.OnLocaleChanged(func(string) {
 			a.title = "" // said again in the new language

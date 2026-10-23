@@ -6,12 +6,17 @@ package rfb
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -205,38 +210,90 @@ func (c *Client) ClipboardFiles(u string) error {
 	return c.write(ardPasteboardFiles(fileURLString(u)))
 }
 
-// UploadFiles sends local regular files to remoteDir on an ARD server and
-// returns the remote paths it created. Directories are skipped. It does
+// UploadFile is one local regular file of an upload and the path it
+// lands at on the Mac.
+type UploadFile struct {
+	Local   string
+	Remote  string
+	Size    int64
+	ModTime time.Time
+}
+
+// PlanUpload lists the regular files paths name for an upload to
+// remoteDir. A folder is walked: each file inside lands in the matching
+// subfolder of remoteDir, which the Mac's receiver creates. Every file is
+// its own transfer, so an interrupted upload can go on with the files it
+// has not sent. Symbolic links and special files inside a folder are
+// skipped, and so are empty folders (no file creates them on the Mac); a
+// path named directly is followed, as the user chose it.
+func PlanUpload(paths []string, remoteDir string) ([]UploadFile, error) {
+	if !path.IsAbs(remoteDir) {
+		return nil, errors.New("rfb: remote directory must be an absolute path")
+	}
+	var files []UploadFile
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil {
+			return files, err
+		}
+		base := filepath.Base(p)
+		switch {
+		case st.Mode().IsRegular():
+			files = append(files, UploadFile{p, path.Join(remoteDir, base), st.Size(), st.ModTime()})
+		case st.IsDir():
+			err := filepath.WalkDir(p, func(q string, e fs.DirEntry, err error) error {
+				if err != nil {
+					if e != nil && e.IsDir() && q != p {
+						return fs.SkipDir // an unreadable subfolder
+					}
+					return err
+				}
+				if !e.Type().IsRegular() {
+					return nil // folders are walked; links and devices skipped
+				}
+				fi, err := e.Info()
+				if err != nil {
+					return nil // gone since the listing
+				}
+				rel, err := filepath.Rel(p, q)
+				if err != nil {
+					return err
+				}
+				files = append(files, UploadFile{q, path.Join(remoteDir, base, filepath.ToSlash(rel)), fi.Size(), fi.ModTime()})
+				return nil
+			})
+			if err != nil {
+				return files, err
+			}
+		}
+	}
+	return files, nil
+}
+
+// UploadFiles sends local files and folders to remoteDir on an ARD
+// server (see PlanUpload) and returns the remote paths it created, as
+// the Mac reports them (it renames a file whose name is taken). It does
 // not touch the server's pasteboard; call ClipboardFiles for that.
 func (c *Client) UploadFiles(paths []string, remoteDir string) ([]string, error) {
 	if !c.appleARD || !c.Encrypted() {
 		return nil, ErrFileCopyUnsupported
 	}
-	if !path.IsAbs(remoteDir) {
-		return nil, errors.New("rfb: remote directory must be an absolute path")
+	files, err := PlanUpload(paths, remoteDir)
+	if err != nil {
+		return nil, err
 	}
-	remote := make([]string, 0, len(paths))
-	for _, p := range paths {
-		f, err := os.Open(p)
+	remote := make([]string, 0, len(files))
+	for _, u := range files {
+		f, err := os.Open(u.Local)
 		if err != nil {
 			return remote, err
 		}
-		st, err := f.Stat()
-		if err != nil {
-			f.Close()
-			return remote, err
-		}
-		if !st.Mode().IsRegular() {
-			f.Close()
-			continue
-		}
-		dest := path.Join(remoteDir, filepath.Base(p))
-		err = c.FileCopyUpload(dest, f, st.Size())
+		got, err := c.FileCopyUploadPath(context.Background(), u.Remote, f, u.Size, UploadOptions{ModTime: u.ModTime, Wait: time.Minute})
 		f.Close()
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrFileCopyNoResult) {
 			return remote, err
 		}
-		remote = append(remote, dest)
+		remote = append(remote, got)
 	}
 	if len(remote) == 0 {
 		return nil, errors.New("rfb: no regular files to upload")
@@ -254,16 +311,83 @@ func ardFileCopyEndSession(sessionID uint32) []byte {
 // StartFileReceive; the Mac's own viewer leaves the same gap.
 var fileCopyStartDelay = 300 * time.Millisecond
 
-// FileCopyUpload uploads one regular file to destPath on an ARD server.
-// The viewer must be connected to an encrypted macOS Screen Sharing
-// session; the Mac's SSFileCopyReceiver creates the item and writes the
-// bytes. size must be the exact number of bytes r yields.
+// UploadOptions tunes FileCopyUploadContext.
+type UploadOptions struct {
+	// ModTime stamps the remote item; zero is now.
+	ModTime time.Time
+	// Progress, when set, hears the bytes of the file sent so far after
+	// each chunk, on the uploading goroutine.
+	Progress func(sent int64)
+	// Wait is how long to wait for the Mac's result record after
+	// EndSession; 0 returns once the records are on the wire.
+	Wait time.Duration
+}
+
+// ErrFileCopyInterrupted says a transfer ended because the connection
+// did: a record could not be written or the session closed.
+var ErrFileCopyInterrupted = errors.New("rfb: file copy interrupted: the connection closed")
+
+// ErrFileCopyNoResult says the Mac sent no result record within
+// UploadOptions.Wait. Every record was written, so the file most likely
+// arrived.
+var ErrFileCopyNoResult = errors.New("rfb: no file-copy result from the server")
+
+// FileCopyResultError is a result record from the Mac with a code other
+// than success (200). Only 200 has been seen live; other codes are
+// reported as they come.
+type FileCopyResultError struct{ Code int }
+
+func (e *FileCopyResultError) Error() string {
+	return fmt.Sprintf("rfb: the server reported file-copy status %d", e.Code)
+}
+
+// fileCopyResultOK is the code of the Mac's success record.
+const fileCopyResultOK = 200
+
+// fileCopyResultProgress is the code of the Mac's progress record during
+// an upload: a float64 fraction follows the sessionID (seen live).
+const fileCopyResultProgress = 300
+
+// fileCopyDrainWait bounds the wait for the Mac's answer to Stop. The
+// sessionID is fixed, so a late record must not reach the next transfer.
+var fileCopyDrainWait = 2 * time.Second
+
+// FileCopyUpload uploads one regular file to destPath on an ARD server
+// and returns once the records are on the wire; FileCopyUploadContext
+// can wait for the Mac's result.
+func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error {
+	return c.FileCopyUploadContext(context.Background(), destPath, r, size, UploadOptions{})
+}
+
+// FileCopyUploadContext uploads one regular file to destPath on an ARD
+// server. The viewer must be connected to an encrypted macOS Screen
+// Sharing session; the Mac's SSFileCopyReceiver creates the item and
+// writes the bytes. size must be the exact number of bytes r yields.
 //
 // destPath is the full destination path on the Mac; its base name is the
-// name the receiver creates. The call returns once the records are on the
-// wire, not when the Mac has finished moving the file: the result comes
-// back as a 0x22 EndSession record on the read side.
-func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error {
+// name the receiver creates. With opt.Wait the call waits for the Mac's
+// result record, which the read side (Run) delivers; without it the call
+// returns once the records are on the wire.
+//
+// Canceling ctx sends Stop (cmd 5) before the next chunk. The protocol
+// has no byte offset, so a stopped file starts again from its first byte.
+func (c *Client) FileCopyUploadContext(ctx context.Context, destPath string, r io.Reader, size int64, opt UploadOptions) error {
+	_, err := c.FileCopyUploadPath(ctx, destPath, r, size, opt)
+	return err
+}
+
+// FileCopyUploadPath is FileCopyUploadContext that also returns the path
+// the Mac created. The protocol cannot overwrite: when the name is taken
+// the Mac picks a free one ("same.bin" -> "same 2.bin") and reports it in
+// the result record, so this differs from destPath only with opt.Wait. A
+// stopped or interrupted file stays on the Mac, partial, at destPath.
+func (c *Client) FileCopyUploadPath(ctx context.Context, destPath string, r io.Reader, size int64, opt UploadOptions) (string, error) {
+	err := c.fileCopyUpload(ctx, destPath, r, size, opt, &destPath)
+	return destPath, err
+}
+
+// fileCopyUpload is FileCopyUploadPath; *dest becomes the reported path.
+func (c *Client) fileCopyUpload(ctx context.Context, destPath string, r io.Reader, size int64, opt UploadOptions, dest *string) error {
 	if !c.appleARD || !c.Encrypted() {
 		return ErrFileCopyUnsupported
 	}
@@ -288,19 +412,35 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 	// session after EndSession.
 	const sessionID = fileCopySessionID
 
-	if err := c.write(ardFileCopyCmd(fileCopyStartReceive, sessionID, 0, dir)); err != nil {
+	// The result sink goes in first: an early refusal (a bad destination)
+	// may come back before EndSession.
+	var res *fileCopyResult
+	if opt.Wait > 0 {
+		res = newFileCopyResult()
+		c.setFileCopySink(res)
+		defer c.setFileCopySink(nil)
+	}
+	if err := c.fcWrite(context.Background(), ardFileCopyCmd(fileCopyStartReceive, sessionID, 0, dir)); err != nil {
 		return err
 	}
 	// screensharingd spawns SSFileCopyReceiver asynchronously after the
 	// StartFileReceive; the content records must find it listening. The
 	// Mac's own viewer leaves the same gap between the two phases.
-	time.Sleep(fileCopyStartDelay)
+	select {
+	case <-time.After(fileCopyStartDelay):
+	case <-ctx.Done():
+		c.fileCopyStop(dir)
+		return ctx.Err()
+	}
 
-	now := time.Now()
-	if err := c.write(ardFileCopyItemInfo(sessionID, size)); err != nil {
+	now := opt.ModTime
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if err := c.fcWrite(context.Background(), ardFileCopyItemInfo(sessionID, size)); err != nil {
 		return err
 	}
-	if err := c.write(ardFileCopyNewItem(sessionID, name, size, now)); err != nil {
+	if err := c.fcWrite(context.Background(), ardFileCopyNewItem(sessionID, name, size, now)); err != nil {
 		return err
 	}
 
@@ -309,11 +449,20 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 	zw, _ := zlib.NewWriterLevel(comp, zlib.BestCompression)
 	var sent int64
 	for sent < size {
+		if ctx.Err() != nil {
+			c.fileCopyStop(dir)
+			return ctx.Err()
+		}
+		if ok, err := res.peek(); ok && err != nil {
+			return err // the Mac gave up on this transfer
+		}
 		n := size - sent
 		if n > int64(len(buf)) {
 			n = int64(len(buf))
 		}
 		if _, err := io.ReadFull(r, buf[:n]); err != nil {
+			// The receiver would wait for bytes that do not come.
+			c.fileCopyStop(dir)
 			return err
 		}
 		chunk := buf[:n]
@@ -343,10 +492,148 @@ func (c *Client) FileCopyUpload(destPath string, r io.Reader, size int64) error 
 				rec = ardFileCopyCompressedData(sessionID, comp.Bytes(), int(n))
 			}
 		}
-		if err := c.write(rec); err != nil {
+		if err := c.fcWrite(ctx, rec); err != nil {
+			if ctx.Err() != nil {
+				c.fileCopyStop(dir) // queued behind the chunk
+			}
 			return err
 		}
 		sent += n
+		if opt.Progress != nil {
+			opt.Progress(sent)
+		}
 	}
-	return c.write(ardFileCopyEndSession(sessionID))
+	if err := c.fcWrite(context.Background(), ardFileCopyEndSession(sessionID)); err != nil {
+		return err
+	}
+	if res == nil {
+		return nil
+	}
+	t := time.NewTimer(opt.Wait)
+	defer t.Stop()
+	select {
+	case err := <-res.ch:
+		if n := res.name(); n != "" {
+			*dest = path.Join(dir, n)
+		}
+		return err
+	case <-t.C:
+		return ErrFileCopyNoResult
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// fcWrite writes a file-copy record and waits until it is on the wire
+// (see writeWait); a failed write is the connection's.
+func (c *Client) fcWrite(ctx context.Context, b []byte) error {
+	if err := c.writeWait(ctx, b); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: %v", ErrFileCopyInterrupted, err)
+	}
+	return nil
+}
+
+// fileCopyStop sends Stop (cmd 5) and swallows what the Mac still sends
+// for the session until its answer, so the next transfer, which reuses
+// the sessionID, does not take those records for its own. The Mac
+// answers a Stop command with a cmd 5 record (seen live).
+func (c *Client) fileCopyStop(p string) {
+	dr := newFileCopyResult()
+	c.setFileCopySink(dr)
+	defer c.setFileCopySink(nil)
+	if c.write(ardFileCopyCmd(fileCopyStop, fileCopySessionID, 0, p)) != nil {
+		return
+	}
+	t := time.NewTimer(fileCopyDrainWait)
+	defer t.Stop()
+	select {
+	case <-dr.ch:
+	case <-t.C:
+	}
+}
+
+// fileCopyResult waits for the Mac's result record of a transfer. A
+// sender's content records (0x64-0x68, still arriving after a Stop) are
+// swallowed. handle runs on the read goroutine.
+type fileCopyResult struct {
+	ch   chan error // gets the first result only
+	mu   sync.Mutex
+	got  bool
+	last error
+	made string // the name a success reports
+}
+
+// fileCopyResultName is the item name in a success record: a u32 length
+// and the name after the sessionID, a NUL after it (seen live: "same
+// 2.bin" for a taken "same.bin"). "" when absent or malformed.
+func fileCopyResultName(body []byte) string {
+	if len(body) < 12 {
+		return ""
+	}
+	n := be.Uint32(body[8:])
+	if n == 0 || n > 1024 || uint64(len(body)-12) < uint64(n) {
+		return ""
+	}
+	name := string(body[12 : 12+n])
+	if i := strings.IndexByte(name, 0); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+		return ""
+	}
+	return name
+}
+
+func (r *fileCopyResult) name() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.made
+}
+
+func newFileCopyResult() *fileCopyResult { return &fileCopyResult{ch: make(chan error, 1)} }
+
+func (r *fileCopyResult) handle(body []byte) {
+	if len(body) < 8 || be.Uint32(body[4:]) != fileCopySessionID {
+		return
+	}
+	// A result reuses the cmd slot for its code: 00 c8 for success.
+	switch code := be.Uint16(body[2:]); {
+	case code >= fileCopyCmdItemInfo && code <= fileCopyCmdEndSess:
+	case code == fileCopyResultProgress:
+	case code == fileCopyResultOK:
+		r.mu.Lock()
+		if !r.got {
+			r.made = fileCopyResultName(body)
+		}
+		r.mu.Unlock()
+		r.set(nil)
+	default:
+		r.set(&FileCopyResultError{Code: int(code)})
+	}
+}
+
+func (r *fileCopyResult) abort(err error) { r.set(err) }
+
+func (r *fileCopyResult) set(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.got {
+		return
+	}
+	r.got, r.last = true, err
+	r.ch <- err
+}
+
+// peek reports the result if one came, leaving it in ch; a nil receiver
+// has none.
+func (r *fileCopyResult) peek() (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.got, r.last
 }

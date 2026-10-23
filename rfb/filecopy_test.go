@@ -336,12 +336,18 @@ func TestMacFileCopyUpload(t *testing.T) {
 	}
 	h.settle(2 * time.Second)
 
-	if err := c.FileCopyUpload(dest, bytes.NewReader(data), int64(len(data))); err != nil {
-		t.Fatalf("upload: %v", err)
+	// Wait for the Mac's result record, as the viewer's transfers do: nil
+	// means it answered 200.
+	var sent int64
+	err = c.FileCopyUploadContext(ctx, dest, bytes.NewReader(data), int64(len(data)), UploadOptions{
+		Progress: func(n int64) { sent = n }, Wait: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("upload: %v (sent %d)", err, sent)
 	}
-	// The receiver's EndSession status arrives as a 0x22 record; give the
-	// Mac time to move the item and report.
-	deadline := time.Now().Add(20 * time.Second)
+	t.Logf("result: success, %d bytes reported by progress", sent)
+	// Leave the Mac time to finish logging.
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		h.settle(time.Second)
 		select {

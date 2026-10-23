@@ -58,13 +58,20 @@ func fcEnd(code uint32) []byte {
 
 func newTestDownload(t *testing.T) (*fileCopyDownload, string) {
 	t.Helper()
-	final := t.TempDir()
-	return &fileCopyDownload{
-		tempDir:    t.TempDir(),
-		finalDir:   final,
-		remoteBase: "tree",
-		done:       make(chan struct{}),
-	}, final
+	return newFileCopyDownload(t.TempDir(), "tree", nil), t.TempDir()
+}
+
+// result waits for the staging to end and places it in final as
+// FileCopyDownload does.
+func result(d *fileCopyDownload, final string) ([]string, error) {
+	<-d.done
+	d.mu.Lock()
+	err := d.err
+	d.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return fileCopyPlace(d.tempDir, final, d.remoteBase)
 }
 
 func feed(t *testing.T, d *fileCopyDownload, bodies ...[]byte) {
@@ -93,11 +100,7 @@ func TestFileCopyDownloadTree(t *testing.T) {
 		fcData([]byte("1234567")),
 		fcEnd(0),
 	)
-	<-d.done
-	d.mu.Lock()
-	err := d.err
-	paths := append([]string(nil), d.paths...)
-	d.mu.Unlock()
+	paths, err := result(d, final)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,11 +151,7 @@ func TestFileCopyDownloadCompressed(t *testing.T) {
 		fcCompressed(second, comp2),
 		fcEnd(0),
 	)
-	<-d.done
-	d.mu.Lock()
-	err := d.err
-	d.mu.Unlock()
-	if err != nil {
+	if _, err := result(d, final); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(final, "tree"))
@@ -207,22 +206,5 @@ func TestFileCopyDownloadSizeMismatch(t *testing.T) {
 	d.mu.Unlock()
 	if err == nil || !strings.Contains(err.Error(), "declared") {
 		t.Fatalf("err = %v, want a size mismatch", err)
-	}
-}
-
-func TestFileCopyDownloadAbortCleansUp(t *testing.T) {
-	d, final := newTestDownload(t)
-	feed(t, d, fcNewItem(1, 0, "tree", 100, time.Time{}))
-	d.abort(os.ErrDeadlineExceeded)
-	<-d.done
-	d.mu.Lock()
-	err := d.err
-	d.mu.Unlock()
-	if err != os.ErrDeadlineExceeded {
-		t.Errorf("err = %v", err)
-	}
-	ents, _ := os.ReadDir(final)
-	if len(ents) != 0 {
-		t.Errorf("final dir has %d entries after abort", len(ents))
 	}
 }
