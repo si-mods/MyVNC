@@ -138,6 +138,26 @@
   "@transferResume": { "description": "Transfer row button: go on with an interrupted transfer now." },
   "transferRetry": "Retry",
   "@transferRetry": { "description": "Transfer row button: send the files that failed again; a download keeps the files it already has." },
+  "transferRenamed": "Saved as “{name}” (the name was taken)",
+  "@transferRenamed": {
+    "description": "Transfer row note: the Mac cannot overwrite, so it stored an uploaded file under a free name.",
+    "placeholders": { "name": { "type": "String", "example": "report 2.pdf" } }
+  },
+  "transferRenamedMore": "{n} files saved under other names (the names were taken)",
+  "@transferRenamedMore": {
+    "description": "Transfer row note: the Mac stored several uploaded files under free names; n is 2 or more.",
+    "placeholders": { "n": { "type": "int", "example": "3" } }
+  },
+  "transferPartial": "Incomplete copy left on the Mac: {name}",
+  "@transferPartial": {
+    "description": "Transfer row note: a file whose upload was interrupted or canceled stays on the Mac, incomplete.",
+    "placeholders": { "name": { "type": "String", "example": "report.pdf" } }
+  },
+  "transferPartialMore": "{n} incomplete copies left on the Mac",
+  "@transferPartialMore": {
+    "description": "Transfer row note: several interrupted or canceled uploads stay on the Mac, incomplete; n is 2 or more.",
+    "placeholders": { "n": { "type": "int", "example": "2" } }
+  },
   "conflictTitle": "An item with this name already exists",
   "conflictMessage": "“{name}” already exists in {dir}.",
   "@conflictMessage": {

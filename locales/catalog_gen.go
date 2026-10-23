@@ -859,6 +859,70 @@ func (msgs Messages) TransferRetry() string {
 	return Catalog.Format(msgs.locale, "transferRetry", nil)
 }
 
+// TransferRenamed says "Saved as “{name}” (the name was taken)"
+// in the language the app shows.
+//
+// Transfer row note: the Mac cannot overwrite, so it stored an uploaded
+// file under a free name.
+func TransferRenamed(name string) string { return In(i18n.Locale()).TransferRenamed(name) }
+
+// TransferRenamed says "Saved as “{name}” (the name was taken)"
+// in the language of msgs.
+//
+// Transfer row note: the Mac cannot overwrite, so it stored an uploaded
+// file under a free name.
+func (msgs Messages) TransferRenamed(name string) string {
+	return Catalog.Format(msgs.locale, "transferRenamed", map[string]any{"name": name})
+}
+
+// TransferRenamedMore says "{n} files saved under other names (the names were taken)"
+// in the language the app shows.
+//
+// Transfer row note: the Mac stored several uploaded files under free
+// names; n is 2 or more.
+func TransferRenamedMore(n int) string { return In(i18n.Locale()).TransferRenamedMore(n) }
+
+// TransferRenamedMore says "{n} files saved under other names (the names were taken)"
+// in the language of msgs.
+//
+// Transfer row note: the Mac stored several uploaded files under free
+// names; n is 2 or more.
+func (msgs Messages) TransferRenamedMore(n int) string {
+	return Catalog.Format(msgs.locale, "transferRenamedMore", map[string]any{"n": n})
+}
+
+// TransferPartial says "Incomplete copy left on the Mac: {name}"
+// in the language the app shows.
+//
+// Transfer row note: a file whose upload was interrupted or canceled stays
+// on the Mac, incomplete.
+func TransferPartial(name string) string { return In(i18n.Locale()).TransferPartial(name) }
+
+// TransferPartial says "Incomplete copy left on the Mac: {name}"
+// in the language of msgs.
+//
+// Transfer row note: a file whose upload was interrupted or canceled stays
+// on the Mac, incomplete.
+func (msgs Messages) TransferPartial(name string) string {
+	return Catalog.Format(msgs.locale, "transferPartial", map[string]any{"name": name})
+}
+
+// TransferPartialMore says "{n} incomplete copies left on the Mac"
+// in the language the app shows.
+//
+// Transfer row note: several interrupted or canceled uploads stay on the
+// Mac, incomplete; n is 2 or more.
+func TransferPartialMore(n int) string { return In(i18n.Locale()).TransferPartialMore(n) }
+
+// TransferPartialMore says "{n} incomplete copies left on the Mac"
+// in the language of msgs.
+//
+// Transfer row note: several interrupted or canceled uploads stay on the
+// Mac, incomplete; n is 2 or more.
+func (msgs Messages) TransferPartialMore(n int) string {
+	return Catalog.Format(msgs.locale, "transferPartialMore", map[string]any{"n": n})
+}
+
 // ConflictTitle says "An item with this name already exists"
 // in the language the app shows.
 func ConflictTitle() string { return In(i18n.Locale()).ConflictTitle() }

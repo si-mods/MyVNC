@@ -242,7 +242,8 @@ type Client struct {
 	lastPing     time.Time
 
 	mu          sync.Mutex // serialises writes and guards the fields below
-	out         io.Writer
+	out         io.Writer  // the send queue's after the handshake
+	sq          *sendQueue // nil in the handshake; see writeLocked
 	width       int
 	height      int
 	ardEnabled  bool
@@ -317,6 +318,8 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 		conn.Close()
 		return nil, err
 	}
+	c.sq = newSendQueue()
+	go c.sq.run(c.out)
 	return c, nil
 }
 
@@ -324,11 +327,19 @@ func NewClient(ctx context.Context, conn net.Conn, serverName string, opt Option
 func (c *Client) Close() error {
 	c.closed.Store(true)
 	c.abortFileCopy(ErrFileCopyInterrupted)
-	// Close the connection first: a writer blocked on a stalled network
-	// holds c.mu, which hpStop needs.
+	// Close the connection first: it ends a write the send queue is
+	// blocked in on a stalled network.
 	err := c.conn.Close()
+	c.stopSend()
 	c.hpStop()
 	return err
+}
+
+// stopSend ends the send queue's goroutine; later writes fail.
+func (c *Client) stopSend() {
+	if c.sq != nil {
+		c.sq.stop(net.ErrClosed)
+	}
 }
 
 // Framebuffer returns the framebuffer; see the package comment.
@@ -358,6 +369,7 @@ func (c *Client) Run() error {
 		}
 	}()
 	defer c.dm.shutdown()
+	defer c.stopSend()
 	c.h.Name(c.name)
 	b := c.fb.Bounds()
 	c.h.Resize(b.Dx(), b.Dy())

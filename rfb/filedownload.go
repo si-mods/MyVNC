@@ -132,7 +132,7 @@ func (c *Client) fileCopyReceive(ctx context.Context, remotePath, stage string, 
 	c.setFileCopySink(d)
 	defer c.setFileCopySink(nil)
 
-	if err := c.fcWrite(ardFileCopyCmd(fileCopyStartSend, fileCopySessionID, fileCopyFlagStartSending, remotePath)); err != nil {
+	if err := c.fcWrite(context.Background(), ardFileCopyCmd(fileCopyStartSend, fileCopySessionID, fileCopyFlagStartSending, remotePath)); err != nil {
 		d.abort(err)
 		return err
 	}

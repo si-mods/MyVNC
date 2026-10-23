@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/si-mods/MyVNC/rfb"
 	"github.com/si-mods/MyVNC/viewer"
 )
 
@@ -23,6 +24,17 @@ func TestTransferPanelAndConflictDialog(t *testing.T) {
 			t.Errorf("panel: no %q in %q", s, a.tt.Texts())
 		}
 	}
+	// What an upload left on the Mac: a taken name, a partial copy.
+	j.Files = []viewer.TransferFile{{UploadFile: rfb.UploadFile{Remote: "/Users/me/same.bin"},
+		State: viewer.FileSent, Made: "/Users/me/same 2.bin"}}
+	j.Partials = []string{"/Users/me/same.bin"}
+	a.tt.Frame()
+	for _, s := range []string{"Saved as “same 2.bin” (the name was taken)", "Incomplete copy left on the Mac: same.bin"} {
+		if !a.tt.HasText(s) {
+			t.Errorf("panel: no %q in %q", s, a.tt.Texts())
+		}
+	}
+	j.Files, j.Partials = nil, nil
 	a.menuOpen = false
 	j.State, j.Conflict = viewer.TransferAsking, &viewer.Conflict{Path: filepath.Join(dir, "report.pdf")}
 	a.tt.Frame()

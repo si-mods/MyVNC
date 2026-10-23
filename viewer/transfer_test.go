@@ -45,32 +45,45 @@ func (u *uiLoop) until(t *testing.T, what string, cond func() bool) {
 type fakeConn struct {
 	mu     sync.Mutex
 	sent   []string
-	drop   string           // the upload of this remote path drops the connection
-	refuse map[string]error // these uploads fail once, the connection stays
+	drop   string            // the upload of this remote path drops the connection
+	refuse map[string]error  // these uploads fail once, the connection stays
+	rename map[string]string // the Mac stores these uploads under another path
+	hold   string            // the upload of this remote path waits for its cancel
+	held   chan struct{}     // closed once hold's upload waits
 	dl     func(ctx context.Context, opt rfb.DownloadOptions) ([]string, error)
 	done   chan struct{}
 }
 
-func newFakeConn() *fakeConn { return &fakeConn{done: make(chan struct{}), refuse: map[string]error{}} }
+func newFakeConn() *fakeConn {
+	return &fakeConn{done: make(chan struct{}), refuse: map[string]error{}, rename: map[string]string{}, held: make(chan struct{})}
+}
 
-func (f *fakeConn) upload(ctx context.Context, u rfb.UploadFile, r io.Reader, progress func(int64)) error {
+func (f *fakeConn) upload(ctx context.Context, u rfb.UploadFile, r io.Reader, progress func(int64)) (string, error) {
+	if u.Remote == f.hold {
+		close(f.held)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if u.Remote == f.drop {
 		close(f.done)
-		return fmt.Errorf("%w: write: broken pipe", rfb.ErrFileCopyInterrupted)
+		return "", fmt.Errorf("%w: write: broken pipe", rfb.ErrFileCopyInterrupted)
 	}
 	if err := f.refuse[u.Remote]; err != nil {
 		delete(f.refuse, u.Remote)
-		return err
+		return "", err
 	}
 	b, err := io.ReadAll(r)
 	if err != nil {
-		return err
+		return "", err
 	}
 	progress(int64(len(b)))
 	f.sent = append(f.sent, u.Remote)
-	return nil
+	if p, ok := f.rename[u.Remote]; ok {
+		return p, nil
+	}
+	return u.Remote, nil
 }
 
 func (f *fakeConn) download(ctx context.Context, remote, local string, opt rfb.DownloadOptions) ([]string, string, error) {
@@ -146,8 +159,19 @@ func TestUploadResumesRemainingFiles(t *testing.T) {
 	})
 
 	c2 := newFakeConn()
+	// The interrupted b stays on the Mac, so the resent one is renamed.
+	c2.rename[remote+"/b"] = remote + "/b 2"
 	u.do(func() { tr.attach(c2, "mac") })
 	u.until(t, "the resumed upload", func() bool { return j.State == TransferDone })
+	u.do(func() {
+		if want := []string{remote + "/b"}; !slices.Equal(j.Partials, want) {
+			t.Errorf("partials = %q, want %q", j.Partials, want)
+		}
+		r := j.Renamed()
+		if len(r) != 1 || r[0].Remote != remote+"/b" || r[0].Made != remote+"/b 2" {
+			t.Errorf("renamed = %+v, want b stored as b 2", r)
+		}
+	})
 	if got, want := c1.uploads(), []string{remote + "/a"}; !slices.Equal(got, want) {
 		t.Errorf("first session sent %q, want %q", got, want)
 	}
@@ -192,6 +216,34 @@ func TestUploadRetrySendsFailedOnly(t *testing.T) {
 	if got := c.uploads(); !slices.Equal(got, want) {
 		t.Errorf("sent %q, want %q", got, want)
 	}
+}
+
+// TestUploadCancelLeavesPartial: the file under way when the user
+// cancels stays on the Mac, incomplete; nothing is renamed.
+func TestUploadCancelLeavesPartial(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"a": "a", "b": "bb"})
+	const remote = "/Users/jdoe/Downloads"
+	u := &uiLoop{}
+	tr := NewTransfers(u.post)
+	c := newFakeConn()
+	c.hold = remote + "/b"
+	var j *Transfer
+	u.do(func() {
+		tr.attach(c, "mac")
+		j = tr.Upload([]string{filepath.Join(dir, "a"), filepath.Join(dir, "b")}, remote)
+	})
+	<-c.held
+	u.until(t, "b under way", func() bool { return len(j.Files) == 2 && j.Files[1].State == FileSending })
+	u.do(func() {
+		tr.Cancel(j)
+		if want := []string{remote + "/b"}; !slices.Equal(j.Partials, want) {
+			t.Errorf("partials = %q, want %q", j.Partials, want)
+		}
+		if r := j.Renamed(); len(r) != 0 {
+			t.Errorf("renamed = %+v, want none", r)
+		}
+	})
 }
 
 // TestTransfersGiveUp: without a session to come back, waiting jobs fail

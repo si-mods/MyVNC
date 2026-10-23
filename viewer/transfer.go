@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -61,6 +62,7 @@ type TransferFile struct {
 	rfb.UploadFile
 	State FileState
 	Err   error
+	Made  string // the remote path the Mac reports, once sent; it renames a taken name
 }
 
 // ErrNoFiles fails an upload with nothing a Mac can receive (only empty
@@ -103,6 +105,7 @@ type Transfer struct {
 	Started     time.Time // of the current run
 	Conflict    *Conflict // the clash asked about, while Asking
 	Unconfirmed int       // uploaded files the Mac sent no result for
+	Partials    []string  // remote paths of incomplete copies left on the Mac
 
 	paths  []string // the local paths of an upload, until planned
 	stage  string   // a download's staging folder, kept for a resume
@@ -127,6 +130,26 @@ func (j *Transfer) Progress() float64 {
 		return -1
 	}
 	return min(float64(j.Done)/float64(j.Total), 1)
+}
+
+// Renamed lists the uploaded files the Mac stored under another name:
+// the protocol cannot overwrite, so a taken name becomes "name 2.ext".
+func (j *Transfer) Renamed() []TransferFile {
+	var out []TransferFile
+	for _, f := range j.Files {
+		if f.State == FileSent && f.Made != "" && f.Made != f.Remote {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// leftPartial notes that file i stays on the Mac incomplete: the
+// protocol has no delete, and a resend lands beside it as "name 2.ext".
+func (j *Transfer) leftPartial(i int) {
+	if p := j.Files[i].Remote; !slices.Contains(j.Partials, p) {
+		j.Partials = append(j.Partials, p)
+	}
 }
 
 // FileIndex is the 1-based number of the file under way and the count,
@@ -199,7 +222,7 @@ func FormatLeft(d time.Duration) string {
 
 // transferConn is what a transfer needs of a session; Session is one.
 type transferConn interface {
-	upload(ctx context.Context, f rfb.UploadFile, r io.Reader, progress func(int64)) error
+	upload(ctx context.Context, f rfb.UploadFile, r io.Reader, progress func(int64)) (string, error)
 	download(ctx context.Context, remote, local string, opt rfb.DownloadOptions) ([]string, string, error)
 	closed() <-chan struct{}
 }
@@ -208,8 +231,8 @@ type transferConn interface {
 // last record. The records may still sit in the network's buffers.
 const uploadResultWait = time.Minute
 
-func (s *Session) upload(ctx context.Context, f rfb.UploadFile, r io.Reader, progress func(int64)) error {
-	return s.c.FileCopyUploadContext(ctx, f.Remote, r, f.Size, rfb.UploadOptions{
+func (s *Session) upload(ctx context.Context, f rfb.UploadFile, r io.Reader, progress func(int64)) (string, error) {
+	return s.c.FileCopyUploadPath(ctx, f.Remote, r, f.Size, rfb.UploadOptions{
 		ModTime: f.ModTime, Progress: progress, Wait: uploadResultWait,
 	})
 }
@@ -314,6 +337,13 @@ func (t *Transfers) Cancel(j *Transfer) {
 		return
 	}
 	running := j.cancel != nil
+	for i, f := range j.Files {
+		if f.State == FileSending {
+			// ponytail: a cancel inside the start delay, before NewItem,
+			// leaves nothing; the UI cannot tell and lists it anyway.
+			j.leftPartial(i)
+		}
+	}
 	if running {
 		j.cancel() // the goroutine removes the stage once it lets go
 		j.cancel = nil
@@ -587,7 +617,7 @@ func (r *runner) upload(files []TransferFile, paths []string, remoteDir string) 
 		}
 		name := path.Base(f.Remote)
 		r.update(func(j *Transfer) { j.Files[i].State, j.Current = FileSending, name })
-		err := r.uploadOne(f, func(n int64) { r.progress(base+n, 0, 0, name) })
+		made, err := r.uploadOne(f, func(n int64) { r.progress(base+n, 0, 0, name) })
 		switch {
 		case err == nil || errors.Is(err, rfb.ErrFileCopyNoResult):
 			// Without the Mac's result every record still went out;
@@ -596,7 +626,7 @@ func (r *runner) upload(files []TransferFile, paths []string, remoteDir string) 
 			base += f.Size
 			f.State = FileSent
 			r.update(func(j *Transfer) {
-				j.Files[i].State, j.Done = FileSent, base
+				j.Files[i].State, j.Files[i].Made, j.Done = FileSent, made, base
 				if unconfirmed {
 					j.Unconfirmed++
 				}
@@ -606,6 +636,7 @@ func (r *runner) upload(files []TransferFile, paths []string, remoteDir string) 
 		case r.interrupted(err):
 			r.end(TransferInterrupted, err, func(j *Transfer) {
 				j.Files[i].State, j.Done = FilePending, base
+				j.leftPartial(i)
 			})
 			return
 		default:
@@ -625,15 +656,15 @@ func (r *runner) upload(files []TransferFile, paths []string, remoteDir string) 
 
 // uploadOne sends one file. An error that is not the connection's (a
 // local file that went away, the Mac refusing it) fails that file only.
-func (r *runner) uploadOne(f *TransferFile, progress func(int64)) error {
+func (r *runner) uploadOne(f *TransferFile, progress func(int64)) (string, error) {
 	file, err := os.Open(f.Local)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer file.Close()
 	st, err := file.Stat()
 	if err != nil {
-		return err
+		return "", err
 	}
 	u := f.UploadFile
 	u.ModTime = st.ModTime()

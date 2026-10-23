@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -358,5 +360,104 @@ func TestFileCopyDownloadStaged(t *testing.T) {
 		if e.Name() != "f.txt" {
 			t.Errorf("FileCopyDownload left %q", e.Name())
 		}
+	}
+}
+
+// Result records as captured from macOS 27: success naming the created
+// item, and a progress record (code 300, a float64 fraction).
+const (
+	liveResultRenamed = "000100c8000000010000000a73616d6520322e62696e00" // "same 2.bin"
+	liveResultPlain   = "000100c8000000010000000a6e6f776169742e62696e00" // "nowait.bin"
+	liveProgress15    = "0001012c000000013fc399999999999a"               // 0.15
+)
+
+func unhex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestFileCopyResultName(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{liveResultRenamed, "same 2.bin"},
+		{liveResultPlain, "nowait.bin"},
+		{"000100c8000000010000000a73616d6520322e62696e", "same 2.bin"}, // no NUL
+		{"000100c80000000100000004612f6200", ""},                       // a path
+		{"000100c8000000010000000b73616d6520322e62696e", ""},           // too long
+		{"000100c80000000100000000", ""},
+		{"000100c800000001", ""},
+		{"000100c80000000100000004000000000000", ""},
+	} {
+		if got := fileCopyResultName(unhex(t, tc.body)); got != tc.want {
+			t.Errorf("%s: name %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
+// TestFileCopyUploadProgressRecords: the Mac's progress records (300)
+// during an upload are not a failure; the 200 after them names the item
+// it made, which a taken name changes.
+func TestFileCopyUploadProgressRecords(t *testing.T) {
+	fastFileCopy(t)
+	data := make([]byte, 200000)
+	for _, tc := range []struct{ dest, result, want string }{
+		{"/Users/jdoe/same.bin", liveResultRenamed, "/Users/jdoe/same 2.bin"},
+		{"/Users/jdoe/nowait.bin", liveResultPlain, "/Users/jdoe/nowait.bin"},
+	} {
+		c := &Client{out: io.Discard, appleARD: true, ardEnabled: true}
+		deliverWhenWaiting(c, unhex(t, liveProgress15), unhex(t, "0001012c000000013fe0000000000000"), unhex(t, tc.result))
+		got, err := c.FileCopyUploadPath(context.Background(), tc.dest,
+			bytes.NewReader(data), int64(len(data)), UploadOptions{Wait: time.Second})
+		if err != nil || got != tc.want {
+			t.Errorf("upload = %q, %v; want %q", got, err, tc.want)
+		}
+	}
+}
+
+// TestUploadDoesNotStallReadLoop: a Mac that stops reading us until we
+// read its burst of updates. Writing under the lock that the read loop
+// needs per update deadlocked both sides; the send queue keeps the read
+// loop off the network's writes.
+func TestUploadDoesNotStallReadLoop(t *testing.T) {
+	fastFileCopy(t)
+	h := &testHandler{ev: make(chan event, 1024)}
+	c, s := dialARD(t, h)
+	c.mu.Lock()
+	c.secure = true // file copy needs an encrypted session
+	c.mu.Unlock()
+
+	up := make(chan error, 1)
+	go func() {
+		data := make([]byte, 1<<20)
+		rand.Read(data)
+		up <- c.FileCopyUpload("/Users/jdoe/big.bin", bytes.NewReader(data), int64(len(data)))
+	}()
+	go func() {
+		// A burst of 64x32 raw updates before reading anything.
+		pix := make([]byte, 64*32*4)
+		for range 50 {
+			var b bytes.Buffer
+			b.Write([]byte{msgFramebufferUpdate, 0, 0, 1})
+			for _, v := range []uint16{0, 0, 64, 32} {
+				b.Write(be.AppendUint16(nil, v))
+			}
+			b.Write(be.AppendUint32(nil, uint32(EncodingRaw)))
+			b.Write(pix)
+			if _, err := s.w.Write(b.Bytes()); err != nil {
+				return
+			}
+		}
+		io.Copy(io.Discard, s.r)
+	}()
+	select {
+	case err := <-up:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the upload and the read loop deadlocked")
 	}
 }

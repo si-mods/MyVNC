@@ -250,6 +250,9 @@ func (s *Session) writer() {
 			} else {
 				err = in.f(s.c)
 			}
+			if err == nil {
+				err = s.c.Flush() // a stalled link keeps the rest here
+			}
 			if err != nil {
 				s.fail(err)
 				return

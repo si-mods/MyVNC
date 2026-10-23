@@ -10,6 +10,7 @@ import (
 	"image"
 	"net/netip"
 	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -693,7 +694,31 @@ func (a *app) transferRow(c *ui.Context, j *viewer.Transfer) {
 			color = t.Warning
 		}
 		ui.Text(c, transferState(j)).FontSize(11).TextColor(color).Wrap()
+		for _, n := range transferNotes(j) {
+			ui.Text(c, n).FontSize(11).TextColor(t.TextMuted).Wrap()
+		}
 	})
+}
+
+// transferNotes says what an upload left on the Mac besides the files
+// asked for: names it took instead, partial copies it could not remove.
+func transferNotes(j *viewer.Transfer) []string {
+	var notes []string
+	switch r := j.Renamed(); len(r) {
+	case 0:
+	case 1:
+		notes = append(notes, locales.TransferRenamed(path.Base(r[0].Made)))
+	default:
+		notes = append(notes, locales.TransferRenamedMore(len(r)))
+	}
+	switch len(j.Partials) {
+	case 0:
+	case 1:
+		notes = append(notes, locales.TransferPartial(path.Base(j.Partials[0])))
+	default:
+		notes = append(notes, locales.TransferPartialMore(len(j.Partials)))
+	}
+	return notes
 }
 
 // transferChip shows the transfer under way while the panel is closed;
