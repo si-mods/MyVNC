@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
+	"github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/si-mods/MyVNC/internal/mf"
@@ -1481,6 +1483,9 @@ func main() {
 	}
 	setThemeSource(a.cfg.Theme)
 	mygo.App.SetLocale(a.cfg.Language) // the setting is the config's
+	if perf == nil {                   // perf runs never check for updates
+		mygo.Use(native.New(updater.Options{Language: a.cfg.Language}))
+	}
 	mygo.App.WhenReady(func() {
 		if argErr != nil {
 			a.log.Error("command line", "err", argErr)
