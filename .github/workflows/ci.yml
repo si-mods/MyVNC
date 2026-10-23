@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: read
@@ -68,7 +68,16 @@ jobs:
         run: go tool mygo build
         env:
           CGO_ENABLED: "0"
+          MYGO_UPDATER_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MYGO_UPDATER_PRIVATE_KEY || '' }}
           MYGO_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      - name: Check the update manifest exists
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          if [ ! -f build/windows-amd64/update-windows-amd64.json ]; then
+            echo "No update manifest; is the MYGO_UPDATER_PRIVATE_KEY secret set?"; exit 1
+          fi
 
       - name: Verify signature
         if: steps.sign.outputs.signed == 'true'
@@ -94,8 +103,10 @@ jobs:
           New-Item -ItemType Directory -Force ../release | Out-Null
           Copy-Item (Get-ChildItem -Filter '*Setup*.exe' | Select-Object -First 1) "../release/MyVNC-Setup-$v-amd64.exe"
           Copy-Item MyVNC.exe "../release/MyVNC-$v-amd64.exe"
+          # Update files keep the names the manifest's URLs point at.
+          Copy-Item update-*.json, *.tar.gz, *.delta ../release -ErrorAction SilentlyContinue
           Set-Location ../release
-          Get-ChildItem *.exe | ForEach-Object {
+          Get-ChildItem -File | Where-Object Name -ne SHA256SUMS.txt | ForEach-Object {
             "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
           } | Set-Content SHA256SUMS.txt -Encoding ascii
 
@@ -119,8 +130,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Created as a draft, so releases/latest never lacks the manifest.
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --verify-tag --title "MyVNC $GITHUB_REF_NAME" --generate-notes
+              --draft --verify-tag --title "MyVNC $GITHUB_REF_NAME" --generate-notes
           fi
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber release/*
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

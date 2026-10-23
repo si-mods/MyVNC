@@ -1,15 +1,17 @@
 # Releasing MyVNC
 
-Workflow: `.github/workflows/ci.yml`. Push to `master` and PRs run gofmt, `go vet`
+Workflow: `.github/workflows/ci.yml`. Push to `main` and PRs run gofmt, `go vet`
 (`CGO_ENABLED=0`), `go test`, `go tool mygo build`, an installer test, and upload the
-build as an artifact. A `v*` tag also creates a **pre-release** with
-`MyVNC-Setup-<ver>-amd64.exe`, `MyVNC-<ver>-amd64.exe` and `SHA256SUMS.txt`.
+build as an artifact. A `v*` tag also publishes a release with
+`MyVNC-Setup-<ver>-amd64.exe`, `MyVNC-<ver>-amd64.exe`, the update files and `SHA256SUMS.txt`.
 
 ## Cut a release
 
-1. Bump `version` in `mygo.json`, commit, merge to `master`.
-2. `git tag vX.Y.Z && git push origin vX.Y.Z`. The build fails if the tag differs from `mygo.json`.
-3. Check the pre-release, then promote it by hand if wanted.
+1. Bump `version` in `mygo.json` and add a `## <version>` section to `CHANGELOG.md`
+   (the build fails without it). Commit, merge to `main`.
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`. The build fails if the tag differs from `mygo.json`,
+   or if the update manifest was not produced.
+3. CI creates the release as a draft, uploads all files, then publishes it as the latest.
 
 ## Installer test
 
@@ -42,26 +44,21 @@ for example `signtool sign /v /fd sha256 /tr http://timestamp.acs.microsoft.com 
 `certificate` and `signCommand` exclude each other. Needs an Azure subscription, a validated
 identity and an OIDC federated credential; details in mygo `docs/distribution.md` (Code signing).
 
-## Auto-update: decision needed
+## Auto-update
 
-mygo updates read signed manifests from a public GitHub repo (`updates.github`) or an HTTPS/S3
-feed (`updates.url` / `updates.s3`). `si-mods/MyVNC` is public, so its releases can serve
-update manifests, but nothing is configured yet. Choose one:
+Installed copies update themselves (native update window, daily check) from signed releases in
+this repo (`updates.github: si-mods/MyVNC`).
 
-- **A. Public release repo** (for example `si-mods/MyVNC-releases`): CI uploads the release there; the
-  source repo can stay separate. Needs a token secret with write access to that repo.
-- **B. HTTPS/S3 feed** (for example an S3 bucket behind CloudFront, or Cloudflare R2): needs a bucket,
-  its credentials as secrets, and a URL.
-- **C. No auto-update**: users download new installers manually.
-
-Either A or B also needs an update signing key, generated once by the owner:
-
-```sh
-go tool mygo keygen        # writes mygo-update.key (secret) and mygo-update.pub
-gh secret set MYGO_UPDATER_PRIVATE_KEY -R si-mods/MyVNC < mygo-update.key
-```
-
-Then add `updates.publicKey` (contents of `mygo-update.pub`) and `updates.github` or `updates.url`
-to `mygo.json`, pass `MYGO_UPDATER_PRIVATE_KEY` to the build step, build with `-upload` (see mygo
-`docs/updates.md` and `docs/github-actions.md`), and register `updater.Plugin` in the app. Keep the
-secret key out of the repo; losing it strands installed copies.
+- Tag builds sign with the `MYGO_UPDATER_PRIVATE_KEY` repo secret; other builds get no key and
+  skip the update files. The public key is `updates.publicKey` in `mygo.json`.
+- Next to the installers mygo writes `update-windows-amd64.json` (the manifest), the app archive
+  `myvnc-<ver>-windows-amd64.tar.gz` and delta updates `myvnc-<old>-to-<ver>-windows-amd64.delta`.
+  CI uploads them under these names and adds them to `SHA256SUMS.txt`.
+- Deltas need the earlier release to be published; the first release has none.
+- `CHANGELOG.md` must have a `## <version>` section for every release: it becomes the release notes
+  in the update window.
+- The release job creates a draft, uploads everything, then publishes it with `--latest`, so
+  `releases/latest` never lacks the manifest.
+- Losing the signing key strands installed copies (they accept only updates signed with it). The
+  owner keeps a backup in a password manager; the local copy is in mygo's `update-keys` config dir.
+- The first version with the updater (0.0.26) must be installed by hand; older copies cannot update.

@@ -1,7 +1,11 @@
 {
   "name": "MyVNC",
-  "identifier": "dev.kyya.myvnc",
-  "version": "0.0.25",
+  "identifier": "simods.myvnc",
+  "version": "0.0.26",
   "out": "build",
-  "i18n": { "dir": "locales", "source": "en" }
+  "i18n": { "dir": "locales", "source": "en" },
+  "updates": {
+    "publicKey": "9wWMa0q+yNdjDXqipomMP9FiEbz+jdh7Q29ym77qEW0=",
+    "github": "si-mods/MyVNC"
+  }
 }

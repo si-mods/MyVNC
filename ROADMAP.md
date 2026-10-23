@@ -1,9 +1,14 @@
 # Roadmap
 
-Status as of v0.0.25 (2026-10-23). Open work is tracked in GitHub issues.
+Status as of v0.0.26 (2026-10-23). Open work is tracked in GitHub issues.
 
 ## Done
 
+- v0.0.26:
+  - Automatic updates (mygo updater, native window): a daily check of
+    this repo's signed GitHub releases, release notes from CHANGELOG.md,
+    delta updates. Identifier renamed to simods.myvnc. Verified locally
+    end to end (0.0.90 -> 0.0.91 through a 17 KB delta).
 - v0.0.25:
   - File transfers become jobs in the session panel, with a progress bar,
     speed and time left; a chip in the session shows the one under way.

@@ -5,7 +5,7 @@ param(
   [string]$InstallDir = (Join-Path ([IO.Path]::GetTempPath()) "myvnc-installer-test")
 )
 $ErrorActionPreference = 'Stop'
-$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\dev.kyya.myvnc'
+$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\simods.myvnc'
 if (Test-Path $key) { throw "MyVNC is already installed for this user; refusing to touch it." }
 if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
 
