@@ -3,6 +3,14 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Apple "Mac Authentication" (security type 33): the client now negotiates the type-33
+  handshake macOS Screen Sharing offers alongside type 30 — RSA1 capability request with the
+  security byte bundled into the same write, RSA-PKCS1v15 exchange of a random AES session
+  key, and AES-ECB encrypted credentials, following rootshell-vnc's MacAuthenticator. The
+  session key is stored like the ARD DH key; the DH and SRP sub-modes remain unimplemented.
+
 ## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
