@@ -136,7 +136,7 @@
   "decoderSoftware": "软件",
   "decoderFallback": "软件（硬件不可用）",
   "hpOtherViewer": "高性能模式不可用：另一台设备正在以高性能模式连接这台 Mac，已切换到标准模式。",
-  "hpNoMedia": "没有收到高性能媒体流。这台电脑和 Mac 之间可能有做了 NAT 的路由器挡住了它（Mac 会把 UDP 5900/5901 发往它看到的地址）。已切换到标准模式。",
+  "hpNoMedia": "没有收到高性能媒体流。这台电脑和 Mac 之间可能有做了 NAT 的路由器挡住了它（Mac 会把 UDP 5900/5901 发往它看到的地址）；SSH 隧道也无法承载它。高性能模式需要直连 UDP 通路。已切换到标准模式。",
   "hpNoDecoder": "高性能模式不可用：这台电脑没有 {codec} 解码器（HEVC 请安装 HEVC 视频扩展）。已切换到标准模式。",
   "hpRefused": "高性能模式不可用：Mac 拒绝了媒体流（错误类型 {type}，子代码 {code}）。已切换到标准模式。",
   "hpUnavailable": "高性能模式不可用：{reason}。已切换到标准模式。",

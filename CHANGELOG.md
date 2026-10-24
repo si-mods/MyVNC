@@ -3,6 +3,15 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.29 Unreleased
+
+- High Performance fallback is now reported as a warning with a hint that it needs a direct
+  UDP path: an SSH tunnel or a restricted network cannot carry the media, and the session
+  falls back to Standard mode (the user banner's no-media note says the same). No dialer
+  configuration was added: Tailscale and other virtual networks already work through the
+  default system routing, and only an SSH direct-tcpip tunnel would need
+  `media.StreamConfig.Dialer` injection, which the SSH tunnel cannot provide for UDP anyway.
+
 ## 0.0.28
 
 - Media UDP legs now always dial the TCP connection's peer IP literal with a pinned address

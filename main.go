@@ -310,7 +310,8 @@ func (a *app) followWindow(p *ui.Painter, r ui.Rect) {
 // mediaFallback tells the user why High Performance gave way to Standard
 // mode, and offers a retry.
 func (a *app) mediaFallback(err error) {
-	a.log.Info("High Performance fell back", "err", err)
+	a.log.Warn("High Performance fell back to Standard mode", "err", err,
+		"hint", "High Performance needs a direct UDP path; over an SSH tunnel or a restricted network it cannot arrive")
 	a.hpNote, a.hpFailed = mediaText(err), true
 }
 
