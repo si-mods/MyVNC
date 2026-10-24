@@ -10,6 +10,12 @@ from it and fails when the file exists but has no section for the version in `my
   four above it, summing every requested display's area as the Mac counts its
   capture budget. An explicit Offer.Tiles still wins, and MYVNC_TILES_PER_FRAME
   (1..4) overrides both.
+- High Performance fallback is now reported as a warning with a hint that it needs a direct
+  UDP path: an SSH tunnel or a restricted network cannot carry the media, and the session
+  falls back to Standard mode (the user banner's no-media note says the same). No dialer
+  configuration was added: Tailscale and other virtual networks already work through the
+  default system routing, and only an SSH direct-tcpip tunnel would need
+  `media.StreamConfig.Dialer` injection, which the SSH tunnel cannot provide for UDP anyway.
 
 ## 0.0.28
 

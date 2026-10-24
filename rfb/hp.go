@@ -60,7 +60,10 @@ type HighPerformance struct {
 	OnFallback func(err error)
 	// MediaTimeout is how long after the answer the first authentic RTP
 	// packet may take; zero is 5 seconds. A NAT between this side and the
-	// Mac drops the media: the Mac sends to the address it sees.
+	// Mac drops the media: the Mac sends to the address it sees. An SSH
+	// tunnel cannot carry this UDP either; only media.StreamConfig.Dialer
+	// (which dials the legs through e.g. direct-tcpip) restores it — Tailscale
+	// and other virtual networks need no injection, the default dial routes.
 	MediaTimeout time.Duration
 	// MaxKbps caps the adaptive RCTL bandwidth estimate; 0 is the Mac's
 	// 60 Mbit/s ceiling.

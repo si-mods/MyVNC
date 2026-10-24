@@ -66,7 +66,8 @@ func TestHighPerformanceFallbackBanner(t *testing.T) {
 		t.Fatalf("High Performance %v, texts %q", a.sess.HighPerformance(), a.tt.Texts())
 	}
 	nat := "High Performance media did not arrive. A router with NAT between this PC and the Mac is likely blocking it " +
-		"(the Mac sends UDP 5900/5901 to the address it sees). Using Standard mode."
+		"(the Mac sends UDP 5900/5901 to the address it sees); an SSH tunnel cannot carry it either. " +
+		"High Performance needs a direct UDP path. Using Standard mode."
 	a.sess.OnMediaFallback(rfb.ErrMediaNotArrived) // as the session's rfb.HighPerformance.OnFallback does
 	a.tt.Frame()
 	if !a.tt.HasText(nat) {
@@ -112,7 +113,7 @@ func TestMediaText(t *testing.T) {
 	}
 	testLocale = "zh-Hans"
 	defer func() { testLocale = "en" }()
-	if got := mediaText(rfb.ErrMediaNotArrived); got != "没有收到高性能媒体流。这台电脑和 Mac 之间可能有做了 NAT 的路由器挡住了它（Mac 会把 UDP 5900/5901 发往它看到的地址）。已切换到标准模式。" {
+	if got := mediaText(rfb.ErrMediaNotArrived); got != "没有收到高性能媒体流。这台电脑和 Mac 之间可能有做了 NAT 的路由器挡住了它（Mac 会把 UDP 5900/5901 发往它看到的地址）；SSH 隧道也无法承载它。高性能模式需要直连 UDP 通路。已切换到标准模式。" {
 		t.Errorf("zh-Hans: %q", got)
 	}
 }

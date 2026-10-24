@@ -234,7 +234,7 @@
   "decoderFallback": "software (hardware unavailable)",
   "@decoderFallback": { "description": "Video decoding was asked of the GPU but falls back to the CPU." },
   "hpOtherViewer": "High Performance unavailable: another viewer is using this Mac's High Performance stream. Using Standard mode.",
-  "hpNoMedia": "High Performance media did not arrive. A router with NAT between this PC and the Mac is likely blocking it (the Mac sends UDP 5900/5901 to the address it sees). Using Standard mode.",
+  "hpNoMedia": "High Performance media did not arrive. A router with NAT between this PC and the Mac is likely blocking it (the Mac sends UDP 5900/5901 to the address it sees); an SSH tunnel cannot carry it either. High Performance needs a direct UDP path. Using Standard mode.",
   "hpNoDecoder": "High Performance unavailable: this PC has no {codec} decoder (for HEVC, install the HEVC Video Extensions). Using Standard mode.",
   "@hpNoDecoder": { "placeholders": { "codec": { "type": "String", "example": "HEVC" } } },
   "hpRefused": "High Performance unavailable: the Mac refused the media stream (error type {type}, sub-code {code}). Using Standard mode.",
