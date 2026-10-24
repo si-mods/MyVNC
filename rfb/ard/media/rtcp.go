@@ -119,6 +119,10 @@ type RateFeedback struct {
 	lastSR    map[uint32]lastSRAt
 	delay     oneWayDelay
 	bandwidth uint16 // kbit/s; 0 means defaultBandwidth
+	// queueTarget is Report's byte 13, in 20 ms units; 0 is live-verified.
+	queueTarget uint8
+	// maxPending is the reorder buffer's peak depth since last drained.
+	maxPending int
 }
 
 // NewRateFeedback starts the report's 1/1024 s clock at epoch.
@@ -143,6 +147,34 @@ func (f *RateFeedback) SetBandwidth(kbps int) {
 	f.bandwidth = uint16(min(max(kbps, 1), 65535))
 }
 
+// SetQueueTarget sets the RCTL receive queue target, in milliseconds. The
+// wire encodes it as 20 ms units in Report's byte 13 — the slot the
+// reference viewer's 20-byte payload calls byte 1, "not a loss percentage"
+// (AppleMediaRCTLFeedback.swift). The Mac is verified to accept 0 here, so
+// callers may keep it unset; a non-zero target asks the sender to pace so
+// the receiver's queue stays under the given depth.
+func (f *RateFeedback) SetQueueTarget(ms int) {
+	f.queueTarget = uint8(min(max(ms, 0)/20, 255))
+}
+
+// QueueTargetMs is the queue target in milliseconds as last set, 0 if none.
+func (f *RateFeedback) QueueTargetMs() int { return int(f.queueTarget) * 20 }
+
+// NoteReorder notes the reorder buffer's pending depth: packets waiting
+// behind a gap. It is a receiver queue-depth indicator for the queue
+// target's future sender-side use, reported as a peak between rate ticks.
+func (f *RateFeedback) NoteReorder(pending int) {
+	if pending > f.maxPending {
+		f.maxPending = pending
+	}
+}
+
+// ReorderPeak is the largest pending count seen since last drained.
+func (f *RateFeedback) ReorderPeak() int { return f.maxPending }
+
+// ResetReorderPeak clears the reorder-depth peak after a rate tick reads it.
+func (f *RateFeedback) ResetReorderPeak() { f.maxPending = 0 }
+
 // Report is the RCTL APP packet from ssrc at now, or nil before any
 // picture packet arrived. The Mac takes it only alone in its datagram.
 //
@@ -155,6 +187,34 @@ func (f *RateFeedback) SetBandwidth(kbps int) {
 //	+26 u16 one-way delay * 8192
 //	+28 u16 loss (top 4 bits, 0) | packets received mod 4096
 //	+30 u16 bandwidth estimate, kbit/s
+//
+// Byte 13 is the 20 ms-unit receive queue target: the same logical slot as
+// byte 1 of the reference viewer's 20-byte payload. It stays 0 unless
+// SetQueueTarget is called; the live-verified packets all carried 0.
+//
+// The reference viewer's 20-byte serialized() payload (AppleMediaRCTLFeedback,
+// "the public-code equivalents of the fields Apple serializes") is:
+//
+//	+0  descriptor 0x85
+//	+1  receiveQueueTargetMilliseconds / 20 (20 ms units; their sender
+//	    passes 100, so byte 1 = 5). Their comment: "byte 1 is the receive
+//	    queue target in 20 ms units -- it is not a loss percentage."
+//	+2  u16 0x0004, the rate-control section bitmap = our +14..15
+//	+4  u16 echo timestamp (RTP ts >> 8)            = our +16..17
+//	+6  u16 total received KB                       = (we send 0 at +18..21)
+//	+8  u16 audio loss<<12 | audio packets & 0xfff  = (we send 0 at +18..21)
+//	+10 u16 queuing delay ms (peak ingress wait)    ≈ our +22..23
+//	+12 u16 send timestamp, 1/1024 s                = our +24..25
+//	+14 u16 owrd * 8192 (Q13)                       = our +26..27
+//	+16 u16 video loss<<12 | video packets & 0xfff  = our +28..29
+//	+18 u16 bandwidth estimate kbit/s               = our +30..31
+//
+// The two generations agree on the echo, the clock, OWRD's Q13 scaling and
+// the packed receive-statistic word; the 32-byte form widens +18 into a
+// zero u32 (KB and audio counts unset) and leaves out the audio count. A
+// live Mac accepts this 32-byte form — the stream stays up — so it is kept
+// byte for byte; SetQueueTarget exists to fill the queue-target slot once a
+// derived depth metric is trusted against a live Mac.
 func (f *RateFeedback) Report(ssrc uint32, now time.Time) []byte {
 	if !f.have {
 		return nil
@@ -163,7 +223,7 @@ func (f *RateFeedback) Report(ssrc uint32, now time.Time) []byte {
 	copy(b, []byte{0x80, 204, 0, 7})
 	binary.BigEndian.PutUint32(b[4:], ssrc)
 	copy(b[8:], "RCTL")
-	copy(b[12:], []byte{0x85, 0, 0, 4})
+	copy(b[12:], []byte{0x85, f.queueTarget, 0, 4})
 	binary.BigEndian.PutUint16(b[16:], uint16(f.lastTS>>8))
 	binary.BigEndian.PutUint16(b[22:], uint16(min(now.Sub(f.lastAt).Milliseconds(), 0xffff)))
 	binary.BigEndian.PutUint16(b[24:], uint16(int64(now.Sub(f.epoch).Seconds()*1024)))
