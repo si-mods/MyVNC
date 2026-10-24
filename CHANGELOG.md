@@ -33,6 +33,10 @@ from it and fails when the file exists but has no section for the version in `my
   security byte bundled into the same write, RSA-PKCS1v15 exchange of a random AES session
   key, and AES-ECB encrypted credentials, following rootshell-vnc's MacAuthenticator. The
   session key is stored like the ARD DH key; the DH and SRP sub-modes remain unimplemented.
+- Injectable media UDP transport: `media.StreamConfig.Dialer` (a `media.UDPDialer`) dials the
+  audio and video legs instead of the host's own UDP sockets, so the High Performance media
+  path can flow through an application-owned tunnel such as an SSH direct-tcpip channel.
+  Nil (the default) keeps the plain UDP behavior.
 
 ## 0.0.27
 

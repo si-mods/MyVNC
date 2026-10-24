@@ -142,3 +142,117 @@ func TestDialLegPeerLiteral(t *testing.T) {
 		t.Errorf("remote %v; want 127.0.0.1", ra.IP)
 	}
 }
+
+// pipeDialer is an injected UDPDialer handing back net.Pipe conns: the
+// test holds the far end of each leg.
+type pipeDatagram struct {
+	c    net.Conn
+	data []byte
+}
+
+type pipeDialer struct {
+	t     *testing.T
+	ports []int
+	far   map[int]net.Conn
+	reads chan pipeDatagram // forwarded datagrams, one leg's far end tagged
+}
+
+func (p *pipeDialer) Dial(local, peer net.IP, port, rcvbuf int) (net.Conn, error) {
+	c1, c2 := net.Pipe()
+	p.far[port] = c2
+	p.ports = append(p.ports, port)
+	// Listen sends an empty datagram per leg before the offer; net.Pipe
+	// is synchronous, so take those now and forward every datagram to a
+	// buffered channel: a second reader would race the drain for the
+	// pipe's next read and deadlock.
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, err := c2.Read(buf)
+			if err != nil {
+				return
+			}
+			dg := append([]byte(nil), buf[:n]...)
+			select {
+			case p.reads <- pipeDatagram{c: c2, data: dg}:
+			default:
+			}
+		}
+	}()
+	return c1, nil
+}
+
+// TestStreamInjectedDialer runs the whole loop through a fake dialer, no
+// host UDP anywhere: feed SRTP packets into the piped legs, expect units
+// out and SRTCP feedback back.
+func TestStreamInjectedDialer(t *testing.T) {
+	sec := testSecrets()
+	units := make(chan *Unit, 4)
+	d := &pipeDialer{t: t, far: map[int]net.Conn{}, reads: make(chan pipeDatagram, 16)}
+	// net.Pipe is synchronous; a pipe per direction keeps the reads and
+	// the feedback writes from deadlocking each other.
+	s, err := Listen(StreamConfig{Local: net.IPv4(127, 0, 0, 1), Peer: net.IPv4(127, 0, 0, 2),
+		AudioPort: 5004, VideoPort: 5006, Secrets: sec, Dialer: d,
+		OnUnit: func(u *Unit) { units <- u }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if len(d.ports) != 2 || d.ports[0] != 5004 || d.ports[1] != 5006 {
+		t.Fatalf("dialer used for %v", d.ports)
+	}
+	if s.audio.LocalAddr() == nil {
+		t.Error("injected leg has no local address")
+	}
+	keys := newSessionKeys(&sec.Video.Down, 0)
+	seq := uint16(10)
+	video := d.far[5006]
+	send := func(marker bool, payload []byte) {
+		b := []byte{0x80, 100, byte(seq >> 8), byte(seq), 0, 0, 0x10, 0, 0xca, 0xfe, 0, 1}
+		if marker {
+			b[1] |= 0x80
+		}
+		seq++
+		if _, err := video.Write(protectRTP(keys, 0, append(b, payload...))); err != nil {
+			t.Error(err)
+		}
+	}
+	send(false, ap(hevcNAL(32, 1), hevcNAL(33, 2), hevcNAL(34, 3)))
+	send(true, hevcNAL(19, 4, 5, 6))
+	select {
+	case u := <-units:
+		if !u.Key || u.SSRC != 0xcafe0001 || len(u.NALs) != 4 {
+			t.Errorf("unit %+v", u)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no unit; stats %+v", s.Stats())
+	}
+
+	// Feedback: the ack and receiver report must come out the video pipe;
+	// the drain goroutine announces each datagram on d.reads.
+	auth := NewSRTCPReceiver(&sec.Video.Up)
+	var sawRR, sawAck bool
+	for !(sawRR && sawAck) {
+		var p []byte
+		select {
+		case dg := <-d.reads:
+			p = dg.data
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no feedback %v; stats %+v", map[string]bool{"rr": sawRR, "ack": sawAck}, s.Stats())
+		}
+		n := len(p)
+		if len(p) < 2 || auth.Authenticate(p) != nil {
+			continue
+		}
+		switch {
+		case p[1] == 201:
+			sawRR = true
+		case p[1] == 204 && n == 16+4+TagLen:
+			sawAck = true
+		}
+	}
+	st := s.Stats()
+	if st.Video.SRTPOK != 2 || st.Units != 1 || st.Keys != 1 || st.Acks == 0 || st.RR == 0 {
+		t.Errorf("stats %+v", st)
+	}
+}
