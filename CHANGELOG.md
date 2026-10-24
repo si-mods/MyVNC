@@ -3,6 +3,13 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- A/V presentation sync: the media legs' RTCP sender reports (PT 200) are now parsed and feed a
+  presentation clock mapping RTP timestamps to wall time, so video frames get an absolute
+  presentation deadline aligned with the audio playback clock. Visible as the ClockSyncs counter
+  in the media stats; `Stream.PresentationClock()` or `StreamConfig.OnClock` hands the clock out.
+
 ## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of

@@ -56,6 +56,9 @@ type StreamConfig struct {
 	// leg (payload 101) on the receiver's goroutine; nil drops audio, as
 	// it is by default. Hand it to a queue rather than decoding here.
 	OnAudio func(*AudioUnit)
+	// OnClock, when set, receives the picture-leg presentation clock
+	// before receiving starts; SRs from the RTCP leg keep it anchored.
+	OnClock func(*PresentationClock)
 	// MaxKbps caps the adaptive RCTL bandwidth estimate; 0 is the Mac's
 	// 60 Mbit/s ceiling.
 	MaxKbps int
@@ -94,6 +97,7 @@ type Stats struct {
 	NACK          uint64 // retransmission requests sent
 	FrameLossSent uint64 // Apple type-6 damaged-frame reports
 	FIRSent       uint64 // full intra requests after unanswered PLIs
+	ClockSyncs    uint64 // RTCP sender reports absorbed by the clock
 	TargetKbps    int    // adaptive RCTL bandwidth estimate
 	Acks          uint64
 	SendErrors    uint64
@@ -131,6 +135,7 @@ type Stream struct {
 	// answer's Tiles; loop reads both between packets.
 	bands  *compound
 	bandN  int
+	clock  *PresentationClock // RTP-to-wall mapping from SRs
 }
 
 // frameDamage is a frame that ended with packets missing.
@@ -145,7 +150,10 @@ type frameDamage struct {
 // the same ports on cfg.Peer, and starts receiving. Bind it before the
 // offer goes out: the Mac sends as soon as it has answered.
 func Listen(cfg StreamConfig) (*Stream, error) {
-	s := &Stream{cfg: cfg, log: cfg.Logger, done: make(chan struct{}), keyframe: make(chan struct{}, 1)}
+	s := &Stream{cfg: cfg, log: cfg.Logger, done: make(chan struct{}), keyframe: make(chan struct{}, 1), clock: NewPresentationClock(videoClockRate)}
+	if cfg.OnClock != nil {
+		cfg.OnClock(s.clock)
+	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
@@ -210,6 +218,10 @@ func (s *Stream) Stats() Stats {
 	defer s.mu.Unlock()
 	return s.stats
 }
+
+// PresentationClock returns the clock fed by the legs' sender reports,
+// for computing a frame's absolute presentation time. Any goroutine.
+func (s *Stream) PresentationClock() *PresentationClock { return s.clock }
 
 // SetVideoSize sets the picture size a refresh request names, from the
 // answer; without it a loss asks for a keyframe.
@@ -652,6 +664,12 @@ func (s *Stream) count(st *LegStats, h RTPHeader, err error, rtcp *SRTCPReceiver
 	case ErrRTCP:
 		if rtcp.Authenticate(d) == nil {
 			st.RTCPOK++
+			if ssrc, ntpSec, ntpFrac, rtpTS, ok := ParseSenderReport(d); ok {
+				s.clock.Note(ssrc, ntpSec, ntpFrac, rtpTS)
+				s.mu.Lock()
+				s.stats.ClockSyncs++
+				s.mu.Unlock()
+			}
 		} else {
 			st.RTCPForged++
 		}
