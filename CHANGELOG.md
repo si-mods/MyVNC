@@ -32,6 +32,9 @@ from it and fails when the file exists but has no section for the version in `my
   the video leg's datagram and SRTP tallies, pictures since the last key,
   the RCTL bandwidth estimate and the losses — so a teardown explains
   itself.
+- The AVC media message 1 (0x3f2) inside an encoding-1010 rectangle now enters High Performance:
+  password-only Macs that skip the 1103 exchange name their UDP ports this way instead (rootshell
+  TransportSession.swift:5243). It drives the same offer flow as a kind-1 reply.
 
 ## 0.0.28
 

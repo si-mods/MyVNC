@@ -387,6 +387,13 @@ func (c *Client) hpReply(payload []byte) error {
 		return nil
 	}
 	r, err := media.ParseReply(payload)
+	if err == nil && r.Kind == 0 {
+		// Not a kind 1/2/3 reply: an AVC media message (rootshell
+		// TransportSession.swift:5243-5305). Message type 1 names the
+		// server's UDP ports and drives the same offer flow a kind-1
+		// reply does, so parse it as one; anything else stays kind 0.
+		r, err = media.ParseAVCMessage(payload)
+	}
 	if err != nil {
 		c.log.Warn("rfb: unreadable media-stream reply", "err", err, "bytes", len(payload))
 		return nil

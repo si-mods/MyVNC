@@ -64,6 +64,51 @@ func (a *Answer) String() string {
 		a.AudioSSRC, a.VideoSSRC, a.Width, a.Height, a.Tiles, a.PayloadType)
 }
 
+// AVC message constants, from the reference client's
+// findAppleAVCMediaMessage (rootshell TransportSession.swift:5401).
+const (
+	AVCMessageMarker    = 0x000003f2 // pseudo-rectangle prefix
+	AVCMessageTypeOffer = 1          // body names the server's UDP ports
+)
+
+// ParseAVCMessage reads an encoding-1010 payload holding the Mac's AVC
+// media message (rootshell TransportSession.swift:5243-5305): the 4-byte
+// 0x000003f2 marker, a u16 body length, then the body. Message type 1 is
+// the offer; its body places the per-stream UDP ports at the same offsets
+// as a kind-1 reply (appleMediaServerPorts, TransportSession.swift:5420,
+// and AppleMediaStreamOffer, AppleMessages.swift:131-136: audio at 8,
+// video at 14, second video at 20), so the message parses as a ReplyPorts.
+// Only type 1 is parsed; other types return the header without ports.
+func ParseAVCMessage(payload []byte) (Reply, error) {
+	var r Reply
+	if len(payload) < 8 || binary.BigEndian.Uint32(payload[2:]) != AVCMessageMarker {
+		return r, errors.New("media: not an AVC media message")
+	}
+	n := int(binary.BigEndian.Uint16(payload[6:]))
+	if n < 4 || 8+n > len(payload) {
+		return r, fmt.Errorf("media: AVC message body of %d bytes", n)
+	}
+	b := payload[8 : 8+n]
+	r.Kind, r.Version = binary.BigEndian.Uint16(b[2:]), binary.BigEndian.Uint16(b)
+	if r.Kind != AVCMessageTypeOffer {
+		r.Kind = 0 // an unknown AVC message type: no ports to act on
+		return r, nil
+	}
+	if len(b) < 26 {
+		return r, fmt.Errorf("media: AVC offer of %d bytes", len(b))
+	}
+	u32 := func(at int) uint32 { return binary.BigEndian.Uint32(b[at:]) }
+	if u32(10)&u32(16)&1 == 0 {
+		return r, errors.New("media: AVC offer did not enable audio and video")
+	}
+	r.Kind = ReplyPorts
+	r.AudioPort, r.VideoPort = binary.BigEndian.Uint16(b[8:]), binary.BigEndian.Uint16(b[14:])
+	if u32(22)&1 != 0 {
+		r.Video2Port = binary.BigEndian.Uint16(b[20:])
+	}
+	return r, nil
+}
+
 // ParseReply reads an encoding-1010 payload as rfb.ARDMediaHandler gets
 // it: a u16 length, then the body.
 func ParseReply(payload []byte) (Reply, error) {

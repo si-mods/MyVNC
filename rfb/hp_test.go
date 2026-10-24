@@ -459,3 +459,51 @@ func TestHPTilesAuto(t *testing.T) {
 		t.Fatalf("hpInit two displays: tiles = %v, want 1", c.hp)
 	}
 }
+
+// TestHighPerformanceAVCMessage1: the Mac's AVC media message 1 (the
+// 0x000003f2 pseudo-rectangle inside encoding 1010, rootshell
+// TransportSession.swift:5243) names its UDP ports and drives the same
+// offer flow as a kind-1 reply: the ports are bound and the offer goes
+// out. A non-offer AVC message type does nothing.
+func TestHighPerformanceAVCMessage1(t *testing.T) {
+	replies := make(chan media.Reply, 4)
+	c, s := hpSession(t, &HighPerformance{
+		OnReply: func(r media.Reply) { replies <- r },
+	})
+
+	ap, vp := freeUDPPort(t), freeUDPPort(t)
+	body := make([]byte, 36)
+	copy(body, []byte{0, 1, // version 1
+		0, 1, // message type 1 (the offer)
+		0, 0, 0, 0,
+		byte(ap >> 8), byte(ap), 0, 0, 0, 1,
+		byte(vp >> 8), byte(vp), 0, 0, 0, 1})
+	// mediaRect supplies the rect's u16 length; the data is the marker,
+	// the body length and the body — readRect re-prefixes the length and
+	// hpReply sees the whole thing.
+	payload := append([]byte{0x00, 0x00, 0x03, 0xf2}, binary.BigEndian.AppendUint16(nil, uint16(len(body)))...)
+	payload = append(payload, body...)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(payload)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	if r := <-replies; r.Kind != media.ReplyPorts || r.AudioPort != ap || r.VideoPort != vp {
+		t.Fatalf("AVC message 1 parsed as %+v", r)
+	}
+	// OnReply fires inside hpReply before hpListen has stored the stream,
+	// so the stream may need a moment to appear.
+	deadline := time.Now().Add(2 * time.Second)
+	for c.MediaStream() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("no media stream after AVC message 1")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.expectOffer()
+
+	// A non-offer AVC message type does nothing and does not fall back.
+	other := append([]byte{0x00, 0x00, 0x03, 0xf2}, binary.BigEndian.AppendUint16(nil, 8)...)
+	other = append(other, 0, 1, 0, 7, 0, 0, 0, 0)
+	s.send(append([]any{[]byte{msgFramebufferUpdate, 0}, uint16(1)}, mediaRect(other)...)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+}
