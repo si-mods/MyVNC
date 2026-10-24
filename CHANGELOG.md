@@ -28,6 +28,10 @@ from it and fails when the file exists but has no section for the version in `my
   default 0) and a reorder-depth metric (`reorder.Waiting`, `RateFeedback.NoteReorder`)
   from which a queue target can later be derived; neither is emitted by default. New tests
   lock the 32-byte golden layout, per-field slots and queue-target encoding.
+- viewer: High Performance sessions log a heartbeat every thirty seconds —
+  the video leg's datagram and SRTP tallies, pictures since the last key,
+  the RCTL bandwidth estimate and the losses — so a teardown explains
+  itself.
 
 ## 0.0.28
 
