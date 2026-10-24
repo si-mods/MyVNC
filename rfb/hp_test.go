@@ -6,9 +6,13 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net"
+	"os"
 	"testing"
+
+	"image"
 	"time"
 
 	"github.com/si-mods/MyVNC/rfb/ard"
@@ -369,4 +373,89 @@ func TestHighPerformanceOfferNotHeld(t *testing.T) {
 	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
 	s.expect(ardAutoFBUpdate(true, 1, 1))
 	call(t, s, func() error { return c.KeyEvent(0x61, true) }, []byte{msgKeyEvent, 1, 0, 0, 0, 0, 0, 0x61})
+}
+
+func TestNegotiatedTiles(t *testing.T) {
+	// Boundaries: within the level-5.1 budget one tile, above it four;
+	// an unknown surface is four (AppleMediaNegotiation.swift:148-156).
+	for _, tt := range []struct {
+		samples, want int
+	}{
+		{0, 4},
+		{-1, 4},
+		{1, 1},
+		{level51MaxLumaSamples, 1},
+		{level51MaxLumaSamples + 1, 4},
+	} {
+		if got := negotiatedTiles(tt.samples); got != tt.want {
+			t.Errorf("negotiatedTiles(%d) = %d, want %d", tt.samples, got, tt.want)
+		}
+	}
+}
+
+func TestNegotiatedTilesEnv(t *testing.T) {
+	old, had := os.LookupEnv("MYVNC_TILES_PER_FRAME")
+	defer func() {
+		if had {
+			os.Setenv("MYVNC_TILES_PER_FRAME", old)
+		} else {
+			os.Unsetenv("MYVNC_TILES_PER_FRAME")
+		}
+	}()
+	for _, tt := range []struct {
+		env  string
+		want int
+	}{
+		{"1", 1}, {"2", 2}, {"3", 3}, {"4", 4},
+		{"0", 1}, {"5", 1}, {"-1", 1}, {"", 1}, {"two", 1}, {"2.5", 1},
+	} {
+		os.Setenv("MYVNC_TILES_PER_FRAME", tt.env)
+		if got := negotiatedTiles(1); got != tt.want {
+			t.Errorf("negotiatedTiles(1) with MYVNC_TILES_PER_FRAME=%q = %d, want %d", tt.env, got, tt.want)
+		}
+	}
+}
+
+func TestHPTilesExplicitWins(t *testing.T) {
+	// The user's explicit Offer.Tiles is kept even where the area would
+	// pick differently.
+	c := &Client{opt: Options{HighPerformance: &HighPerformance{
+		Size:  image.Pt(2000, 1200), // 2.4M samples, area picks 1
+		Offer: media.Params{Tiles: 4},
+	}}, appleARD: true, log: slog.New(slog.DiscardHandler)}
+	c.hpInit()
+	if c.hp == nil || c.hp.tiles != 4 {
+		t.Fatalf("hpInit: tiles = %v, want 4", c.hp)
+	}
+}
+
+func TestHPTilesAuto(t *testing.T) {
+	// Without explicit Tiles the area picks: 3840x2160 (the dynamic
+	// maximum, a 4K virtual display) is 8.3M samples, one tile; the
+	// 5120x2880 ask clamps to it. Two displays sum their areas
+	// (TransportSession.swift:3185-3190): 2 x 4K is over the budget,
+	// four tiles.
+	for _, tt := range []struct {
+		w, h, want int
+	}{
+		{3840, 2160, 1},
+		{5120, 2880, 1}, // clamped to 3840x2160 by hpInit
+		{1920, 1080, 1},
+	} {
+		c := &Client{opt: Options{HighPerformance: &HighPerformance{
+			Size: image.Pt(tt.w, tt.h),
+		}}, appleARD: true, ardCommands: [16]byte{0x1d >> 3: 0x80 >> (0x1d & 7)}, log: slog.New(slog.DiscardHandler)}
+		c.hpInit()
+		if c.hp == nil || c.hp.tiles != tt.want {
+			t.Fatalf("hpInit %dx%d: tiles = %v, want %d", tt.w, tt.h, c.hp, tt.want)
+		}
+	}
+	// Two displays: the areas sum (TransportSession.swift:3185-3190).
+	c := &Client{opt: Options{HighPerformance: &HighPerformance{
+		Displays: TwoVirtual(image.Pt(1280, 800)), // 2 x 1.024M
+	}}, appleARD: true, ardCommands: [16]byte{0x1d >> 3: 0x80 >> (0x1d & 7)}, log: slog.New(slog.DiscardHandler)}
+	c.hpInit()
+	if c.hp == nil || c.hp.tiles != 1 {
+		t.Fatalf("hpInit two displays: tiles = %v, want 1", c.hp)
+	}
 }
