@@ -13,7 +13,9 @@ import (
 	"image"
 	"math"
 	"net"
+	"os"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -120,9 +122,38 @@ func (e *MediaRefusedError) Error() string {
 	return fmt.Sprintf("rfb: the Mac refused the media stream (error type %d, sub-code %d)", e.Type, e.Code)
 }
 
+// level51MaxLumaSamples is HEVC level 5.1's maximum luma-picture size;
+// at or below it the Mac can send one ordinary full-frame 60-fps picture,
+// above it the four-source subframe profile
+// (AppleMediaNegotiation.swift:101-104).
+const level51MaxLumaSamples = 8_912_896
+
+// negotiatedTiles picks the tiles-per-frame to offer for totalLumaSamples
+// pixels of capture surface: four when the surface is unknown or too big
+// for a level-5.1 full frame, one otherwise
+// (AppleMediaNegotiation.swift:148-156, totalLumaSamples <= 0 else 4,
+// <= level51MaxLumaSamples then 1 else 4). MYVNC_TILES_PER_FRAME
+// overrides it, 1 to 4, as the peer's ROOTSHELL_VNC_TILES_PER_FRAME does
+// (AppleMediaNegotiation.swift:113-120); an invalid value is ignored.
+func negotiatedTiles(totalLumaSamples int) int {
+	if v := os.Getenv("MYVNC_TILES_PER_FRAME"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && 1 <= n && n <= 4 {
+			return n
+		}
+	}
+	if totalLumaSamples <= 0 {
+		return 4
+	}
+	if totalLumaSamples <= level51MaxLumaSamples {
+		return 1
+	}
+	return 4
+}
+
 type hpState struct {
 	cfg      *HighPerformance
 	secrets  *media.Secrets
+	tiles    int  // the offer's tiles-per-frame
 	asked    bool // the SetEncodings with 1010 first went out
 	invited  bool // ports named, no offer made on them yet
 	pending  bool // an offer is out, unanswered
@@ -183,7 +214,7 @@ func (c *Client) hpInit() [][]byte {
 		c.log.Warn("rfb: High Performance disabled", "err", err)
 		return nil
 	}
-	c.hp = &hpState{cfg: cfg, secrets: s}
+	c.hp = &hpState{cfg: cfg, secrets: s, tiles: cfg.Offer.Tiles}
 	if cfg.Mirror {
 		c.log.Info("rfb: High Performance on the Mac's main display")
 		return nil
@@ -202,11 +233,29 @@ func (c *Client) hpInit() [][]byte {
 		for _, d := range dsp { // the desktop spans the displays
 			w = max(w, d.Origin.X+max(d.PixelW, d.PointW))
 		}
+		// Area, as the Mac counts its capture budget: every display's
+		// luma samples summed (TransportSession.swift:3185-3190), so a
+		// two-display Retina desktop still gets four tiles. The user's
+		// explicit Tiles wins; otherwise the area picks, as the peer's
+		// selectedAppleMediaTilesPerFrame does
+		// (TransportSession.swift:5190-5211, AppleMediaNegotiation.swift:148-156).
+		if cfg.Offer.Tiles == 0 {
+			area := 0
+			for _, d := range dsp {
+				area += max(d.PixelW, d.PointW) * max(d.PixelH, d.PointH)
+			}
+			c.hp.tiles = negotiatedTiles(area)
+		}
 		c.log.Info("rfb: asking for virtual displays", "count", len(dsp))
 		c.disp.mode = [3]int{w, size.Y, 1}
 		return [][]byte{BuildDisplayConfiguration(dsp)}
 	}
 	size.X, size.Y = min(max(size.X, 1), dynamicMaxWidth), min(max(size.Y, 1), dynamicMaxHeight)
+	// One virtual display: the area picks the tiles unless the user set
+	// Tiles (see the Displays branch above).
+	if cfg.Offer.Tiles == 0 {
+		c.hp.tiles = negotiatedTiles(size.X * size.Y)
+	}
 	c.log.Info("rfb: asking for a virtual display", "width", size.X, "height", size.Y)
 	c.disp.mode = [3]int{size.X, size.Y, 1}
 	return [][]byte{ardSetDisplayConfiguration(size.X, size.Y, 1)}
@@ -313,6 +362,7 @@ func (c *Client) hpOffer() error {
 		return nil
 	}
 	p := hp.cfg.Offer
+	p.Tiles = hp.tiles
 	p.Flags = offerFlags(p, hp.limit30.Load())
 	p.Width, p.Height = c.width, c.height
 	if !c.disp.out.IsZero() {

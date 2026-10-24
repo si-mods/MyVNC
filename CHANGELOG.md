@@ -3,6 +3,14 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.29 Unreleased
+
+- High Performance now picks the offer's tiles-per-frame from the virtual display's
+  area: one tile while the picture fits HEVC level 5.1's 8,912,896 luma samples,
+  four above it, summing every requested display's area as the Mac counts its
+  capture budget. An explicit Offer.Tiles still wins, and MYVNC_TILES_PER_FRAME
+  (1..4) overrides both.
+
 ## 0.0.28
 
 - Media UDP legs now always dial the TCP connection's peer IP literal with a pinned address
