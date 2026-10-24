@@ -26,6 +26,14 @@ const (
 	// drops one made within a second of its last keyframe, so a request
 	// stays owed and is made again.
 	keyframeInterval = 500 * time.Millisecond
+	// nackRetries is the most times a sequence number is asked for; the
+	// gaps reorder gave up are covered by Refresh if that is not enough.
+	nackRetries = 3
+	// nackMinGap is the least time between asks for one sequence number.
+	nackMinGap = 200 * time.Millisecond
+	// nackGiveUp: after this a sequence is too old to retransmit; the
+	// keyframe path takes over.
+	nackGiveUp = 2 * time.Second
 )
 
 // StreamConfig configures Listen.
@@ -78,7 +86,8 @@ type Stats struct {
 	Late, Missing uint64
 	RR, RCTL      uint64 // feedback sent
 	PLI, Refresh  uint64
-	TargetKbps    int // adaptive RCTL bandwidth estimate
+	NACK          uint64 // retransmission requests sent
+	TargetKbps    int    // adaptive RCTL bandwidth estimate
 	Acks          uint64
 	SendErrors    uint64
 	LastSendError string
@@ -233,6 +242,65 @@ const (
 	askKeyframe
 )
 
+// nackTracker tracks per-sequence retransmission asks.
+type nackTracker struct {
+	first, last time.Time // first loss, last ask
+	retries     int
+}
+
+// nackState holds sequences awaiting retransmission. Callers hold s.mu.
+type nackState struct {
+	pending map[uint16]*nackTracker
+}
+
+func (n *nackState) add(now time.Time, seqs []uint16) {
+	if len(seqs) == 0 {
+		return
+	}
+	if n.pending == nil {
+		n.pending = map[uint16]*nackTracker{}
+	}
+	for _, s := range seqs {
+		if _, ok := n.pending[s]; !ok {
+			n.pending[s] = &nackTracker{first: now, last: now}
+		}
+	}
+}
+
+// send builds one NACK for the sequences due now and drops those given
+// up on; it returns the packet's sequence list, nil when none is due.
+func (n *nackState) send(now time.Time) []uint16 {
+	if len(n.pending) == 0 {
+		return nil
+	}
+	var seqs []uint16
+	for s, t := range n.pending {
+		if now.Sub(t.first) > nackGiveUp {
+			delete(n.pending, s)
+		} else if t.retries < nackRetries && now.Sub(t.last) >= nackMinGap {
+			seqs = append(seqs, s)
+			t.retries++
+			t.last = now
+		}
+	}
+	return seqs
+}
+
+// arrived stops asking for a sequence a NACK recovered.
+func (n *nackState) arrived(seq uint16) { delete(n.pending, seq) }
+
+// seqRange lists first..last-1.
+func seqRange(first, last uint16) []uint16 {
+	if first == last {
+		return nil
+	}
+	out := make([]uint16, 0, int(last-first))
+	for s := first; s != last; s++ {
+		out = append(out, s)
+	}
+	return out
+}
+
 func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 	defer s.wg.Done()
 	sec := s.cfg.Secrets
@@ -255,6 +323,9 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		rate       = time.NewTicker(rateInterval)
 		firstVideo = true
 		firstAudio = true
+		nacks      nackState
+		lastSeq    uint16
+		haveSeq    bool
 	)
 	defer report.Stop()
 	defer rate.Stop()
@@ -296,7 +367,12 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			}
 			s.mu.Lock()
 			s.stats.Missing = order.Missing
+			nacks.add(now, order.Gaps())
+			due := nacks.send(now)
 			s.mu.Unlock()
+			if len(due) > 0 {
+				send(s.video, videoOut.Protect(NACK(sec.VideoSSRC, mediaSSRC, due)), &s.stats.NACK)
+			}
 		case <-s.keyframe:
 			dep.Resync()
 			owed = askKeyframe
@@ -331,7 +407,24 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			feedback.Received(h.SSRC, h.Timestamp, time.Now())
 			if h.SSRC != mediaSSRC {
 				mediaSSRC, owed = h.SSRC, askNone // a new stream starts with its own IDR
+				haveSeq = false
+				nacks = nackState{}
 			}
+			// A packet that arrives right after a NACK stops the asks.
+			s.mu.Lock()
+			nacks.arrived(h.Sequence)
+			s.mu.Unlock()
+			if haveSeq && h.Sequence != lastSeq+1 {
+				// A gap appeared at push time; ask at the next rate tick
+				// if reorder does not fill it first.
+				gap := int16(h.Sequence-lastSeq) - 1
+				if gap > 0 {
+					s.mu.Lock()
+					nacks.add(time.Now(), seqRange(lastSeq+1, h.Sequence))
+					s.mu.Unlock()
+				}
+			}
+			lastSeq, haveSeq = h.Sequence, true
 			for _, p := range order.push(h, d[h.Payload[0]:h.Payload[1]]) {
 				s.depacketize(&dep, p, &owed, &unacked)
 			}

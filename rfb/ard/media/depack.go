@@ -341,6 +341,8 @@ type reorder struct {
 	expired bool // the gap was there at the last Expire
 	// Late counts gaps a late packet filled; Missing, packets given up.
 	Late, Missing uint64
+	// gaps are sequence numbers given up since last taken by Gaps.
+	gaps []uint16
 }
 
 // push takes a packet and returns the packets now in order.
@@ -392,9 +394,20 @@ func (r *reorder) skip() []orderedPacket {
 		first = min(first, s-r.next)
 	}
 	r.Missing += uint64(first)
+	for i := range first {
+		r.gaps = append(r.gaps, r.next+uint16(i))
+	}
 	r.next += first
 	r.expired = false
 	return r.drain(nil)
+}
+
+// Gaps returns the sequence numbers given up since the last call. The
+// NACK sender re-asks for these.
+func (r *reorder) Gaps() []uint16 {
+	g := r.gaps
+	r.gaps = nil
+	return g
 }
 
 func (r *reorder) drain(out []orderedPacket) []orderedPacket {
