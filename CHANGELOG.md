@@ -3,6 +3,16 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Apple curtain (session visibility, message type 12): the client can hide the remote session
+  (Mac shows its lock screen with an optional note, trimmed to 512 bytes on a grapheme boundary)
+  and restore it while keeping control, via `Client.Curtain`. Plus `rfb/apple`, a port of
+  rootshell's Apple clipboard protocol: packed-scrap encode/decode (zlib at the native
+  sync-flush boundary, text-flavor extraction including UTF-16), request and auto-pasteboard
+  messages, `Client.SetAppleClipboard` (gated on the packed-scrap capability bit) and an
+  `Options.OnAppleClipboard` callback that receives the Mac's pushed pasteboard text.
+
 ## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
