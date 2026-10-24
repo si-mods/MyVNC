@@ -3,7 +3,7 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
-## Unreleased
+## 0.0.28
 
 - Media UDP legs now always dial the TCP connection's peer IP literal with a pinned address
   family: `dialLeg` normalizes v4-mapped v6 peers and rejects a local/peer family mismatch,
@@ -37,6 +37,10 @@ from it and fails when the file exists but has no section for the version in `my
   audio and video legs instead of the host's own UDP sockets, so the High Performance media
   path can flow through an application-owned tunnel such as an SSH direct-tcpip channel.
   Nil (the default) keeps the plain UDP behavior.
+- Fixed a crash on the first video packet of any single-tile High Performance stream: the
+  compound depacketizer was not created until the answer named the band count, and the packet
+  path dereferenced it nil. It now serves as the single-band depacketizer until the answer
+  arrives.
 
 ## 0.0.27
 
