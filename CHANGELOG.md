@@ -13,6 +13,9 @@ from it and fails when the file exists but has no section for the version in `my
   presentation clock mapping RTP timestamps to wall time, so video frames get an absolute
   presentation deadline aligned with the audio playback clock. Visible as the ClockSyncs counter
   in the media stats; `Stream.PresentationClock()` or `StreamConfig.OnClock` hands the clock out.
+- The video leg's RTCP receiver report now carries a report block (RFC 3550 §6.4.1): fraction
+  and cumulative loss from the feedback tally, plus the LSR/DLSR pair echoed from the Mac's
+  latest sender report once SR parsing feeds `RateFeedback.LastSR`.
 
 ## 0.0.27
 

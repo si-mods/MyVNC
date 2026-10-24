@@ -431,7 +431,8 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			return
 		case <-report.C:
 			send(s.audio, audioOut.Protect(ReceiverReport(sec.AudioSSRC)), &s.stats.RR)
-			send(s.video, videoOut.Protect(ReceiverReport(sec.VideoSSRC)), &s.stats.RR)
+			send(s.video, videoOut.Protect(ReceiverReportWithBlocks(sec.VideoSSRC,
+				[]ReportBlock{feedback.ReportBlock(sec.VideoSSRC, time.Now())})), &s.stats.RR)
 		case now := <-rate.C:
 			s.mu.Lock()
 			bytes, missing := s.stats.Video.Bytes, s.stats.Missing

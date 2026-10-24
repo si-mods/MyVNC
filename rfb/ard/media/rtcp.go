@@ -115,6 +115,8 @@ type RateFeedback struct {
 	lastTS    uint32
 	lastAt    time.Time
 	received  uint32
+	lost      uint32
+	lastSR    map[uint32]lastSRAt
 	delay     oneWayDelay
 	bandwidth uint16 // kbit/s; 0 means defaultBandwidth
 }
@@ -125,7 +127,7 @@ func NewRateFeedback(epoch time.Time) *RateFeedback { return &RateFeedback{epoch
 // Received notes an authentic picture packet; a new SSRC starts over.
 func (f *RateFeedback) Received(ssrc, timestamp uint32, at time.Time) {
 	if ssrc != f.ssrc {
-		*f = RateFeedback{epoch: f.epoch, ssrc: ssrc}
+		*f = RateFeedback{epoch: f.epoch, ssrc: ssrc, lastSR: f.lastSR}
 	}
 	f.have, f.lastTS, f.lastAt = true, timestamp, at
 	f.received++
@@ -235,4 +237,73 @@ func ParseSenderReport(data []byte) (ssrc, ntpSec, ntpFrac, rtpTS uint32, ok boo
 		data = data[size:]
 	}
 	return 0, 0, 0, 0, false
+}
+
+// ReportBlock is one RFC 3550 §6.4.1 receiver-report block.
+type ReportBlock struct {
+	SSRC           uint32
+	FractionLost   uint8
+	CumulativeLost uint32 // 24 bits
+	ExtHighestSeq  uint32
+	Jitter         uint32
+	LSR            uint32 // middle 32 bits of the source's last SR NTP timestamp
+	DLSR           uint16 // ms since that SR, in 1/65536 s units
+}
+
+// LastSR notes the middle 32 bits of an SSRC's latest SR NTP timestamp and
+// when it arrived; ReceiverReportBlock later echoes them as LSR/DLSR. SR
+// parsing lands with the AVSync work; until then no caller feeds this.
+func (f *RateFeedback) LastSR(ssrc, lsr uint32, at time.Time) {
+	if f.lastSR == nil {
+		f.lastSR = make(map[uint32]lastSRAt)
+	}
+	f.lastSR[ssrc] = lastSRAt{lsr: lsr, at: at}
+}
+
+type lastSRAt struct {
+	lsr uint32
+	at  time.Time
+}
+
+// ReportBlock builds the picture leg's report block at now: loss from the
+// shared tally (fraction as 0-255, cumulative in 24 bits) and the LSR/DLSR
+// pair for ssrc, zero when its last SR is unknown. RTT needs the source's
+// own counters, which we lack, so lost counts what Received did not see.
+func (f *RateFeedback) ReportBlock(ssrc uint32, now time.Time) ReportBlock {
+	total := f.received + f.lost
+	var fraction uint8
+	if total > 0 && f.lost > 0 {
+		fraction = uint8(min(uint64(f.lost)*256/uint64(total), 255))
+	}
+	rb := ReportBlock{
+		SSRC:           ssrc,
+		FractionLost:   fraction,
+		CumulativeLost: uint32(min(f.lost, 1<<24-1)),
+	}
+	if sr, ok := f.lastSR[ssrc]; ok {
+		rb.LSR = sr.lsr
+		rb.DLSR = uint16(min(int(now.Sub(sr.at).Seconds()*65536/1000), 65535))
+	}
+	return rb
+}
+
+// Lost notes one missing picture packet for the loss fields.
+func (f *RateFeedback) Lost() { f.lost++ }
+
+// ReceiverReportWithBlocks is an RTCP RR from ssrc carrying blocks. It keeps
+// the compound header Apple's Mac expects; empty blocks reproduce
+// ReceiverReport.
+func ReceiverReportWithBlocks(ssrc uint32, blocks []ReportBlock) []byte {
+	n := len(blocks)
+	b := binary.BigEndian.AppendUint32([]byte{byte(0x80 | n), 201, 0, 1}, ssrc)
+	for _, rb := range blocks {
+		b = binary.BigEndian.AppendUint32(b, rb.SSRC)
+		b = append(b, rb.FractionLost,
+			byte(rb.CumulativeLost>>16), byte(rb.CumulativeLost>>8), byte(rb.CumulativeLost))
+		b = binary.BigEndian.AppendUint32(b, rb.ExtHighestSeq)
+		b = binary.BigEndian.AppendUint32(b, rb.Jitter)
+		b = binary.BigEndian.AppendUint32(b, rb.LSR)
+		b = binary.BigEndian.AppendUint16(b, rb.DLSR)
+	}
+	return b
 }
