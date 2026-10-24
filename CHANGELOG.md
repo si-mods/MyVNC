@@ -3,6 +3,15 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Adaptive bitrate refinements, borrowed from the proven rootshell-vnc controller: rate cuts
+  now follow only confirmed packet loss, recovery after a cut waits for 2 s of clean delivery,
+  a fast-rising one-way delay counts as congestion even below the delay threshold and vetoes
+  recovery while the queue is draining, and the first 5 s ramp faster so good links reach full
+  quality quickly. Senders on constrained bearers can seed a lower starting estimate
+  (`SetInitial`).
+
 ## 0.0.26
 
 - Automatic updates: MyVNC checks for a new version once a day and shows an update window with the release notes. Install the update, skip that version, or be reminded later.

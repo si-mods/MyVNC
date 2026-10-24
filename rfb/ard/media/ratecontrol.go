@@ -10,13 +10,20 @@ import "time"
 const (
 	rateMin   = 200
 	rateMax   = 60000
-	rateStart = 8000  // a conservative start; demand raises it
-	rateGain  = 1.05  // multiplicative increase per second of demand
-	rateStep  = 50    // additive increase, kbit/s
-	rateCut   = 0.75  // multiplicative decrease on loss or queueing
-	rateDelay = 0.100 // seconds of one-way queueing that counts as congestion
-	rateHold  = 0.050 // below this the link is clean, above it hold
+	rateStart = 8000 // a conservative start; demand raises it
+	rateGain  = 1.05 // multiplicative increase per second of demand
+	rateStep  = 50   // additive increase, kbit/s
+	rateCut   = 0.75 // multiplicative decrease on loss
+	rateDelay = 0.100
+	rateHold  = 0.050
 	rateEvery = time.Second
+	// Clean time required after a cut before any increase (rootshell-vnc
+	// recovery gating).
+	rateQuiet = 2 * time.Second
+	// A rising one-way delay between steps counts as congestion even below
+	// rateDelay, and blocks recovery increases while above rateHold.
+	rateVeto         = 0.050           // seconds of delay rise between steps
+	rateStartupUntil = 5 * time.Second // fast-ramp window from the first step
 )
 
 // rateControl is a receiver-side AIMD controller for the RCTL bandwidth
@@ -31,7 +38,10 @@ type rateControl struct {
 	lastAt      time.Time
 	lastBytes   uint64
 	lastMissing uint64
-	decodeCap   int // kbit/s, the viewer's decoder limit; 0 for none
+	lastOwrd    float64   // previous step's one-way delay
+	lastCut     time.Time // last multiplicative decrease
+	start       time.Time // first step, anchors the startup window
+	decodeCap   int       // kbit/s, the viewer's decoder limit; 0 for none
 }
 
 // setDecodeCap limits the estimate to what the decoder can take, kbit/s;
@@ -65,10 +75,15 @@ func newRateControl(maxKbps int) *rateControl {
 
 // step folds one window of RTP statistics into the target and returns it.
 // bytes and missing are cumulative counters; owrd is the receiver's
-// one-way delay estimate in seconds.
+// one-way delay estimate in seconds. A multiplicative decrease only follows
+// confirmed loss; recovery from a cut is gated on rateQuiet of clean
+// delivery, and blocked while the delay rises fast (queue-delay veto).
+// The first ~rateStartupUntil ramp faster (rateGain 1.25 + 2*rateStep)
+// so good links reach steady state quickly.
 func (r *rateControl) step(now time.Time, bytes, missing uint64, owrd float64) int {
 	if r.lastAt.IsZero() {
-		r.lastAt, r.lastBytes, r.lastMissing = now, bytes, missing
+		r.lastAt, r.lastBytes, r.lastMissing, r.lastOwrd = now, bytes, missing, owrd
+		r.start = now
 		return r.effective()
 	}
 	dt := now.Sub(r.lastAt)
@@ -77,15 +92,35 @@ func (r *rateControl) step(now time.Time, bytes, missing uint64, owrd float64) i
 	}
 	delivered := int(float64(bytes-r.lastBytes) * 8 / 1000 / dt.Seconds())
 	loss := missing - r.lastMissing
-	r.lastAt, r.lastBytes, r.lastMissing = now, bytes, missing
+	owrdRise := owrd - r.lastOwrd
+	r.lastAt, r.lastBytes, r.lastMissing, r.lastOwrd = now, bytes, missing, owrd
 
 	switch {
-	case owrd > rateDelay || loss > 0:
+	case loss > 0 || owrdRise > rateVeto:
+		// Confirmed loss, or delay rising fast enough to count as
+		// congestion even below rateDelay.
 		r.target = max(int(float64(r.target)*rateCut), rateMin)
-	case owrd > rateHold:
-		// Queue building without crossing the cut threshold: hold.
+		r.lastCut = now
+	case owrd > rateDelay || owrd > rateHold:
+		// Queue building: hold.
+	case now.Sub(r.lastCut) < rateQuiet:
+		// Recent cut: wait for rateQuiet of clean delivery.
 	case delivered*10 >= r.target*7: // the sender used 70% of the budget
-		r.target = min(int(float64(r.target)*rateGain)+rateStep, r.max)
+		if now.Sub(r.start) < rateStartupUntil {
+			r.target = min(int(float64(r.target)*1.25)+2*rateStep, r.max)
+		} else {
+			r.target = min(int(float64(r.target)*rateGain)+rateStep, r.max)
+		}
 	}
 	return r.effective()
+}
+
+// SetInitial seeds the starting target for a constrained bearer, kbit/s;
+// 0 keeps the default. Must be called before the first step.
+func (r *rateControl) SetInitial(kbps int) {
+	if kbps <= 0 {
+		return
+	}
+	r.target = min(max(kbps, rateMin), r.max)
+	r.lastCut = time.Time{} // a prior is not congestion
 }
