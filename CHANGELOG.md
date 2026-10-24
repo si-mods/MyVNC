@@ -18,6 +18,13 @@ from it and fails when the file exists but has no section for the version in `my
   the media-control extension (version 2), LTR timestamps from flag 0x02. Frames that end
   damaged are reported once with Apple's PSFB type-6 frame-loss feedback; if loss persists
   after two unanswered PLIs in 2 s, a Full Intra Request goes out instead.
+- High Performance remote audio: the Mac's system-audio stream (payload 101, 48 kHz stereo
+  AAC-ELD/SBR) is depacketized — both Apple's bundled codec access units and RFC 3640 — and,
+  on Windows, decoded with the Media Foundation AAC decoder MFT and played, at most a quarter
+  second behind the stream. Audio is on while High Performance is active (`AudioOff` turns it
+  off); on macOS there is no AAC decoder and the stream stays silent. The AAC decode path has
+  not been tested against a live Mac's stream yet: packetization is verified by unit tests,
+  the decoder by compile-time checks only.
 
 ## 0.0.26
 

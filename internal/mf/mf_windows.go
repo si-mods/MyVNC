@@ -93,6 +93,7 @@ const (
 	attrSetUINT32    = 21
 	attrSetUINT64    = 22
 	attrSetGUID      = 24
+	attrSetBlob      = 26
 	activateActivate = 33
 	sampleSetTime    = 36
 	sampleToContig   = 41

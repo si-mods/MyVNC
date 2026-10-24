@@ -60,6 +60,7 @@ type Session struct {
 
 	// High Performance, when the session negotiates it.
 	video      *videoPipe
+	hpAudio    *hpAudio     // the stream's audio, nil when off
 	h264       *decode.H264 // nil without encoding 50
 	mediaOff   atomic.Bool  // fell back: pictures still decoding are dropped
 	mediaShown atomic.Bool  // the picture is the stream's, not the framebuffer's
@@ -131,6 +132,13 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 		}
 		hp.OnUnit = s.video.push
 		hp.OnFallback = s.mediaFallback
+		// The stream's audio: on while High Performance is active, off
+		// with an AudioOff option, as there is no AAC decoder off
+		// Windows and the units would pile up for nothing.
+		if !hp.AudioOff {
+			s.hpAudio = newHPAudio(hp.AudioConfig)
+			hp.OnAudio = s.hpAudio.push
+		}
 		opt.HighPerformance = &hp
 	}
 	c, err := dial(opt, s)
@@ -167,6 +175,9 @@ func (s *Session) Close() {
 		s.c.Close()
 		if s.video != nil {
 			s.video.close()
+		}
+		if s.hpAudio != nil {
+			s.hpAudio.close()
 		}
 	})
 }
