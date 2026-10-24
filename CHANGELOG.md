@@ -5,6 +5,10 @@ from it and fails when the file exists but has no section for the version in `my
 
 ## 0.0.27
 
+- Gated recovery escalator: when units arrive but nothing decodes for 4 s, the encoder's
+  target bitrate is cut so the recovery keyframe gets through; past 12 s of stall the
+  decoder is reopened. Each level fires once per stall and the ladder resets as soon as
+  pictures flow again (thresholds from rootshell's GatedRecoveryEscalator).
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
   a whole keyframe, with up to three tries per packet and a keyframe request as the fallback.
   Loss recovery is now visible as the NACK counter in the media stats.

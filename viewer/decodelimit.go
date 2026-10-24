@@ -1,6 +1,10 @@
 package viewer
 
-import "time"
+import (
+	"time"
+
+	"github.com/si-mods/MyVNC/rfb/ard/media"
+)
 
 // Decode-capacity limiting for High Performance. The Mac picks its frame
 // rate and bitrate; when this side's decoder cannot keep up, the queue
@@ -116,6 +120,34 @@ func (l *decodeLimiter) tick(dt time.Duration, w decodeWindow) {
 	}
 }
 
+// escTick runs the decode-stall ladder: units arriving but no picture
+// out. First step cuts the encoder's target bitrate so the recovery
+// keyframe is small enough to deliver; the second reopens the decoder.
+func (p *videoPipe) escTick(dt time.Duration, w decodeWindow) {
+	now := time.Now()
+	lastPic := time.Unix(0, p.lastPic.Load())
+	stalled := w.recv > 0 && !lastPic.IsZero() && now.Sub(lastPic) > time.Second
+	switch a, _ := p.esc.Observe(stalled, now); a {
+	case media.EscalateLowerTarget:
+		if p.escSaved == 0 {
+			base := p.lim.cap
+			if base == 0 && dt > 0 {
+				base = int(float64(w.bytes) * 8 / 1000 / dt.Seconds())
+			}
+			if base > capMin {
+				p.escSaved = base
+				p.lim.setCap(max(base/2, capMin))
+			}
+		}
+	case media.EscalateRebuild:
+		p.rebuildReq.Store(true)
+	}
+	if !stalled && p.escSaved > 0 { // pictures flow again: restore the cap
+		p.lim.setCap(p.escSaved)
+		p.escSaved = 0
+	}
+}
+
 // thirty asks once for 30 fps; there is no way back in the session.
 func (l *decodeLimiter) thirty() {
 	if !l.fps30 {
@@ -134,6 +166,7 @@ func (p *videoPipe) tick(dt time.Duration) {
 	p.winBytes += w.bytes
 	p.win = decodeWindow{}
 	p.lim.tick(dt, w)
+	p.escTick(dt, w)
 	p.n.mediaLimited.Store(p.lim.limited || p.lim.cap > 0)
 	if p.lim.fps30 { // one way; a reconnect may have set it already
 		p.n.mediaFPS30.Store(true)

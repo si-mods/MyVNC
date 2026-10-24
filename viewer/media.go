@@ -117,6 +117,13 @@ type videoPipe struct {
 	// bands decodes compound pictures (tilesPerFrame > 1), one decoder
 	// per band; nil until the first compound unit.
 	bands bandComposer
+	// decode-stall recovery: the escalator's ladder, run's goroutine;
+	// lastPic is the unix ns of the last decoded picture. tick asks run
+	// to reopen the decoder via rebuildReq.
+	esc        media.Escalator
+	lastPic    atomic.Int64
+	escSaved   int         // cap to restore after a stall cut, 0 for none
+	rebuildReq atomic.Bool
 }
 
 func newVideoPipe(m mf.Mode, maxFPS int, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), setCap func(kbps int), limitFPS func(), n *counters) *videoPipe {
@@ -175,6 +182,14 @@ func (p *videoPipe) run() {
 		case <-p.done:
 			return
 		}
+		if p.rebuildReq.CompareAndSwap(true, false) && dec != nil {
+			// The stall ladder gave up on this decoder: reopen it and
+			// start over from a keyframe.
+			dec.Close()
+			dec = nil
+			p.keyframe()
+			continue
+		}
 		if dec == nil || u.Codec != codec {
 			if dec != nil {
 				dec.Close()
@@ -216,6 +231,7 @@ func (p *videoPipe) run() {
 			}
 			hw.ok(u.Key)
 			if img != nil {
+				p.lastPic.Store(time.Now().UnixNano())
 				if p.maxFPS > 0 {
 					if gap := time.Second / time.Duration(p.maxFPS); time.Since(p.lastShow) < gap {
 						continue // decoded for its references, not shown
@@ -257,6 +273,7 @@ func (p *videoPipe) run() {
 			hw.ok(u.Key)
 		}
 		if len(frames) > 0 {
+			p.lastPic.Store(time.Now().UnixNano())
 			f := frames[len(frames)-1]
 			if p.maxFPS > 0 {
 				if gap := time.Second / time.Duration(p.maxFPS); time.Since(p.lastShow) < gap {
