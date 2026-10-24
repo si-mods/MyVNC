@@ -583,8 +583,10 @@ func (s *Stream) packetize(dep *Depacketizer, p orderedPacket, owed *ask, unacke
 	s.mu.Lock()
 	c, dn := s.bands, s.bandN
 	s.mu.Unlock()
-	if c == nil && dn > 1 {
-		c = newCompound(dn)
+	if c == nil {
+		// The band count is unknown until the answer arrives; the
+		// compound then acts as the single-band depacketizer.
+		c = newCompound(max(dn, 1))
 		s.mu.Lock()
 		s.bands = c
 		s.mu.Unlock()
