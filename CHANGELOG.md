@@ -22,12 +22,13 @@ from it and fails when the file exists but has no section for the version in `my
   AAC-ELD/SBR) is depacketized — both Apple's bundled codec access units and RFC 3640 — and,
   on Windows, decoded with the Media Foundation AAC decoder MFT and played, at most a quarter
   second behind the stream. Audio is on while High Performance is active (`AudioOff` turns it
-  off); on macOS there is no AAC decoder and the stream stays silent. The AAC decode path has
-  not been tested against a live Mac's stream yet: packetization is verified by unit tests,
-  the decoder by compile-time checks only.
+  off); on macOS there is no AAC decoder and the stream stays silent. Verified against a live
+  Mac: the stream's packets arrive and authenticate; the AAC decoder itself ran on Windows only
+  in unit tests.
 - Compound (multi-band) High Performance streams: the answer's `tiles` count now splits the
   picture across several SSRCs, each decoded as its own bitstream and stacked into one frame.
-  The single-band path is unchanged.
+  Verified against a live Mac: a 4-tile answer streams four interleaved SSRCs at a steady
+  40 pictures/s with no packet loss over 40 s. The single-band path is unchanged.
 
 ## 0.0.26
 

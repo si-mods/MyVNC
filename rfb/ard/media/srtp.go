@@ -175,12 +175,19 @@ func parseRTP(data []byte, tagLen int) (RTPHeader, error) {
 // Mac's pictures cross the network a few packets out of order now and then.
 const replayWindow = 1024
 
-// SRTPReceiver authenticates and decrypts one SRTP stream (server to
-// viewer). Not safe for concurrent use.
+// SRTPReceiver authenticates and decrypts one master key's SRTP streams
+// (server to viewer), one state per SSRC: the Mac's compound picture leg
+// carries several SSRCs interleaved, and one shared state would take each
+// band's packets for the previous band's replay. Not safe for concurrent
+// use.
 type SRTPReceiver struct {
-	keys    *sessionKeys
+	keys   *sessionKeys
+	states map[uint32]*srtcState
+}
+
+// srtcState is one SSRC's replay state.
+type srtcState struct {
 	have    bool
-	ssrc    uint32
 	lastSeq uint16 // of the newest packet
 	roc     uint32
 	// seen has bit i%replayWindow set for each index i received within
@@ -189,29 +196,31 @@ type SRTPReceiver struct {
 }
 
 // NewSRTPReceiver keys a receiver with the server-to-viewer master key.
-func NewSRTPReceiver(m *MasterKey) *SRTPReceiver { return &SRTPReceiver{keys: newSessionKeys(m, 0)} }
+func NewSRTPReceiver(m *MasterKey) *SRTPReceiver {
+	return &SRTPReceiver{keys: newSessionKeys(m, 0), states: map[uint32]*srtcState{}}
+}
 
 // guessROC is RFC 3711 Appendix A; a new SSRC starts at 0 (every offer
 // starts a stream under a new one).
-func (r *SRTPReceiver) guessROC(ssrc uint32, seq uint16) uint32 {
-	if !r.have || r.ssrc != ssrc {
+func (st *srtcState) guessROC(seq uint16) uint32 {
+	if !st.have {
 		return 0
 	}
-	if r.lastSeq < 0x8000 {
-		if seq-r.lastSeq > 0x8000 && seq > r.lastSeq {
-			return r.roc - 1
+	if st.lastSeq < 0x8000 {
+		if seq-st.lastSeq > 0x8000 && seq > st.lastSeq {
+			return st.roc - 1
 		}
-		return r.roc
+		return st.roc
 	}
-	if seq < r.lastSeq-0x8000 {
-		return r.roc + 1
+	if seq < st.lastSeq-0x8000 {
+		return st.roc + 1
 	}
-	return r.roc
+	return st.roc
 }
 
-func (r *SRTPReceiver) bit(index uint64) (*uint64, uint64) {
+func (st *srtcState) bit(index uint64) (*uint64, uint64) {
 	i := index % replayWindow
-	return &r.seen[i/64], 1 << (i % 64)
+	return &st.seen[i/64], 1 << (i % 64)
 }
 
 // Unprotect authenticates data and decrypts its payload in place. An
@@ -223,31 +232,35 @@ func (r *SRTPReceiver) Unprotect(data []byte) (RTPHeader, error) {
 		return h, err
 	}
 	end := len(data) - TagLen
-	roc := r.guessROC(h.SSRC, h.Sequence)
+	st := r.states[h.SSRC]
+	if st == nil {
+		st = &srtcState{}
+		r.states[h.SSRC] = st
+	}
+	roc := st.guessROC(h.Sequence)
 	if subtle.ConstantTimeCompare(r.keys.tag(data[:end], binary.BigEndian.AppendUint32(nil, roc)), data[end:]) != 1 {
 		return h, ErrForged
 	}
 	index := uint64(roc)<<16 | uint64(h.Sequence)
-	newest := uint64(r.roc)<<16 | uint64(r.lastSeq)
-	same := r.have && r.ssrc == h.SSRC
-	if same && index <= newest {
-		w, b := r.bit(index)
+	newest := uint64(st.roc)<<16 | uint64(st.lastSeq)
+	if st.have && index <= newest {
+		w, b := st.bit(index)
 		if newest-index >= replayWindow || *w&b != 0 {
 			return h, ErrStale
 		}
 		*w |= b
 	} else {
-		if !same || index-newest >= replayWindow {
-			r.seen = [replayWindow / 64]uint64{}
+		if !st.have || index-newest >= replayWindow {
+			st.seen = [replayWindow / 64]uint64{}
 		} else {
 			for i := newest + 1; i < index; i++ {
-				w, b := r.bit(i)
+				w, b := st.bit(i)
 				*w &^= b
 			}
 		}
-		w, b := r.bit(index)
+		w, b := st.bit(index)
 		*w |= b
-		r.have, r.ssrc, r.lastSeq, r.roc = true, h.SSRC, h.Sequence, roc
+		st.have, st.lastSeq, st.roc = true, h.Sequence, roc
 	}
 	r.keys.xor(h.SSRC, index, data[h.Payload[0]:end])
 	h.Payload = trimPadding(data, h)
