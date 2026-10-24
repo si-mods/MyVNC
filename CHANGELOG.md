@@ -3,7 +3,7 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
-## 0.0.29 Unreleased
+## 0.0.29
 
 - High Performance now picks the offer's tiles-per-frame from the virtual display's
   area: one tile while the picture fits HEVC level 5.1's 8,912,896 luma samples,
