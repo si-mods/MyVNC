@@ -114,6 +114,9 @@ type videoPipe struct {
 	recv, drops atomic.Int64
 	win         decodeWindow
 	lim         decodeLimiter
+	// bands decodes compound pictures (tilesPerFrame > 1), one decoder
+	// per band; nil until the first compound unit.
+	bands bandComposer
 }
 
 func newVideoPipe(m mf.Mode, maxFPS int, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), setCap func(kbps int), limitFPS func(), n *counters) *videoPipe {
@@ -159,6 +162,7 @@ func (p *videoPipe) run() {
 		if dec != nil {
 			dec.Close()
 		}
+		p.bands.close()
 	}()
 	for {
 		var u *media.Unit
@@ -194,6 +198,37 @@ func (p *videoPipe) run() {
 		var frames []mf.Frame
 		var err error
 		start := time.Now()
+		if u.BandSizes != nil { // a compound picture: one bitstream per band
+			img, info, derr := p.bands.decode(u, t)
+			took := time.Since(start)
+			p.n.mediaDecodeNs.Add(int64(took))
+			p.win.decoded++
+			p.win.decodeNs += int64(took)
+			t += 166666 // 100 ns units at 60 Hz
+			if derr != nil {
+				p.keyframe()
+				if hw.failed(u.Key) && p.mode != mf.Software {
+					p.fellBack = fmt.Sprintf("hardware decode failed, using software: %v", derr)
+					p.mode = mf.Software
+					p.bands.close()
+				}
+				continue
+			}
+			hw.ok(u.Key)
+			if img != nil {
+				if p.maxFPS > 0 {
+					if gap := time.Second / time.Duration(p.maxFPS); time.Since(p.lastShow) < gap {
+						continue // decoded for its references, not shown
+					}
+					p.lastShow = time.Now()
+				}
+				if p.fellBack != "" && info.Fallback == "" {
+					info.Fallback = p.fellBack
+				}
+				p.show(img, mediaMode(codec, info.Output, img.Rect), info)
+			}
+			continue
+		}
 		if depth >= unseenBehind {
 			var n int
 			n, err = dec.DecodeHidden(u.AnnexB(), t)

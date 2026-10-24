@@ -3,6 +3,12 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Compound (multi-band) High Performance streams: the answer's `tiles` count now splits the
+  picture across several SSRCs, each decoded as its own bitstream and stacked into one frame.
+  The single-band path is unchanged.
+
 ## 0.0.26
 
 - Automatic updates: MyVNC checks for a new version once a day and shows an update window with the release notes. Install the update, skip that version, or be reminded later.

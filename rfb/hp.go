@@ -325,6 +325,7 @@ func (c *Client) hpReply(payload []byte) error {
 		if r.Answer != nil {
 			if s := c.MediaStream(); s != nil {
 				s.SetVideoSize(int(r.Answer.Width), int(r.Answer.Height))
+				s.SetBandCount(int(r.Answer.Tiles))
 			}
 		}
 		c.hpWatch(n)

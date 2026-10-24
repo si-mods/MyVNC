@@ -32,7 +32,21 @@ type Unit struct {
 	Codec     Codec
 	SSRC      uint32
 	Timestamp uint32
-	NALs      [][]byte
+	// DON is the picture's decoding order number in the DONL stream, from
+	// the last VCL NAL's payload; 0 without DONL. The compound picture
+	// keeps the lowest DON of its bands.
+	DON  uint16
+	NALs [][]byte
+	// BandNALs, on a compound picture, is each band's NALs in SSRC order:
+	// the bands are independent HEVC bitstreams (each with its own IDR),
+	// so a decoder that wants one bitstream per band decodes them
+	// separately; AnnexB has them concatenated.
+	//
+	// BandSizes, set with BandNALs, is each band's share of BandNALs in
+	// NAL units: band i's NALs are BandNALs[sum(BandSizes[:i]):...]. The
+	// bands are equal-count in practice, but the sizes are the contract.
+	BandNALs  [][]byte
+	BandSizes []int
 	// Key is an IRAP (HEVC 16-23) or IDR (H.264 5) picture.
 	Key bool
 }
@@ -88,6 +102,7 @@ type Depacketizer struct {
 	next      uint16
 	haveTS    bool
 	ts        uint32
+	don       uint16 // the DONL stream's last VCL NAL's DON
 	nals      [][]byte
 	fragment  []byte
 	damaged   bool
@@ -156,6 +171,21 @@ func (d *Depacketizer) Push(h RTPHeader, payload []byte) (u *Unit, lost bool) {
 	return nil, lost
 }
 
+// SSRC is the leg's SSRC; 0 before the first packet.
+func (d *Depacketizer) SSRC() uint32 { return d.ssrc }
+
+// Compound reassembles one picture from several SSRCs' bands, as
+// tilesPerFrame > 1 sends them; see compound.go. The band count comes from
+// the answer's Tiles; 0 keeps the single-band Depacketizer until a second
+// SSRC shows up.
+func (d *Depacketizer) Compound(n int) *compound {
+	c := newCompound(n)
+	if d.started {
+		c.dep = d
+	}
+	return c
+}
+
 func (d *Depacketizer) parseHEVC(p []byte) {
 	if len(p) < 2 {
 		d.damaged = true
@@ -175,11 +205,18 @@ func (d *Depacketizer) parseHEVC(p []byte) {
 		}
 		fu := p[2]
 		hdr := []byte{p[0]&0x81 | (fu&0x3f)<<1, p[1]}
+		if don != 0 {
+			// The FU's DON precedes its payload.
+			d.don = binary.BigEndian.Uint16(p[3:])
+		}
 		d.fragmentUnit(fu&0x80 != 0, fu&0x40 != 0, hdr, p[3+don:])
 	default:
 		if len(p) < 2+don {
 			d.damaged = true
 			return
+		}
+		if don != 0 {
+			d.don = binary.BigEndian.Uint16(p[2:])
 		}
 		d.nals = append(d.nals, append(append([]byte(nil), p[:2]...), p[2+don:]...))
 	}
@@ -210,6 +247,13 @@ func (d *Depacketizer) aggregate(rest []byte, skip int) {
 	if len(rest) < skip {
 		d.damaged = true
 		return
+	}
+	if skip != 0 {
+		if len(rest) < 2 {
+			d.damaged = true
+			return
+		}
+		d.don = binary.BigEndian.Uint16(rest[:2])
 	}
 	rest = rest[skip:]
 	for len(rest) >= 2 {
@@ -250,7 +294,7 @@ func (d *Depacketizer) finish() *Unit {
 	if d.codec == H264 {
 		nals = expandAvcC(nals)
 	}
-	u := &Unit{Codec: d.codec, SSRC: d.ssrc, Timestamp: d.ts, NALs: nals}
+	u := &Unit{Codec: d.codec, SSRC: d.ssrc, Timestamp: d.ts, DON: d.don, NALs: nals}
 	starts := false
 	for _, n := range nals {
 		if len(n) == 0 {

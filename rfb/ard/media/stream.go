@@ -100,6 +100,11 @@ type Stream struct {
 	w, h     uint16 // the answered picture size, for Refresh
 	sinceKey int    // pictures since the last key picture, for GOP
 	lossAt   time.Time
+	// bands is the compound depacketizer when the Mac spreads pictures
+	// over several SSRCs; nil while one band is enough. bandN is the
+	// answer's Tiles; loop reads both between packets.
+	bands  *compound
+	bandN  int
 }
 
 // Listen binds the audio and video ports on cfg.Local, connects them to
@@ -183,6 +188,25 @@ func (s *Stream) SetVideoSize(w, h int) {
 // SetDecodeCap limits the RCTL bandwidth estimate to kbps, the most this
 // side's decoder can take; 0 lifts it. Any goroutine.
 func (s *Stream) SetDecodeCap(kbps int) { s.decodeCap.Store(int64(max(kbps, 0))) }
+
+// SetBandCount sets how many SSRCs one picture is spread over, from the
+// answer's Tiles; 1 (or 0) keeps the single-band depacketizer. From then
+// on the compound merges the bands' units per picture. Any goroutine.
+func (s *Stream) SetBandCount(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.mu.Lock()
+	s.bandN = n
+	if n > 1 {
+		if s.bands == nil {
+			s.bands = newCompound(n)
+		} else {
+			s.bands.SetBandCount(n)
+		}
+	}
+	s.mu.Unlock()
+}
 
 // RequestKeyframe asks the Mac for an IDR, as after a decoder failure.
 func (s *Stream) RequestKeyframe() {
@@ -292,7 +316,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 				send(s.video, videoOut.Protect(r), &s.stats.RCTL)
 			}
 			for _, p := range order.Expire() {
-				s.depacketize(&dep, p, &owed, &unacked)
+				s.packetize(&dep, p, &owed, &unacked)
 			}
 			s.mu.Lock()
 			s.stats.Missing = order.Missing
@@ -333,7 +357,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 				mediaSSRC, owed = h.SSRC, askNone // a new stream starts with its own IDR
 			}
 			for _, p := range order.push(h, d[h.Payload[0]:h.Payload[1]]) {
-				s.depacketize(&dep, p, &owed, &unacked)
+				s.packetize(&dep, p, &owed, &unacked)
 			}
 			s.mu.Lock()
 			s.stats.Late, s.stats.Missing = order.Late, order.Missing
@@ -357,10 +381,24 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 	}
 }
 
-// depacketize hands one in-order picture packet to dep, a whole unit on
-// to OnUnit, and notes what to acknowledge or ask for.
-func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unacked **uint32) {
-	u, lost := dep.Push(p.h, p.payload)
+// packetize hands one in-order picture packet to the compound or the
+// single-band depacketizer, a whole unit on to OnUnit, and notes what to
+// acknowledge or ask for. The caller reads s.bands and s.bandN before it,
+// between packets.
+func (s *Stream) packetize(dep *Depacketizer, p orderedPacket, owed *ask, unacked **uint32) {
+	s.mu.Lock()
+	c, dn := s.bands, s.bandN
+	s.mu.Unlock()
+	if c == nil && dn > 1 {
+		c = newCompound(dn)
+		s.mu.Lock()
+		s.bands = c
+		s.mu.Unlock()
+	}
+	if c != nil {
+		c.SetBandCount(max(dn, 1))
+	}
+	u, lost := c.push(p.h, p.payload)
 	switch {
 	case u != nil:
 		*owed = askNone
@@ -397,7 +435,12 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 		}
 		s.mu.Unlock()
 		a := askKeyframe
-		if dep.ResumesAtRefresh() {
+		if c != nil {
+			// A lost band picture is out of step by lost packets alone;
+			// the Mac's refresh picture (on the band that lost it)
+			// resumes the stream.
+			a = askRefresh
+		} else if dep.ResumesAtRefresh() {
 			a = askRefresh
 		}
 		*owed = max(*owed, a)
