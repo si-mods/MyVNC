@@ -466,6 +466,10 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			nacks.add(now, order.Gaps())
 			due := nacks.send(now)
 			s.mu.Unlock()
+			// Reorder depth is the receiver's queue backlog: packets still
+			// waiting behind a gap. Track the peak between rate ticks; a
+			// future SetQueueTarget derives its target from it.
+			feedback.NoteReorder(order.Waiting())
 			if len(due) > 0 {
 				send(s.video, videoOut.Protect(NACK(sec.VideoSSRC, mediaSSRC, due)), &s.stats.NACK)
 			}

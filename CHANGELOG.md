@@ -16,6 +16,18 @@ from it and fails when the file exists but has no section for the version in `my
   configuration was added: Tailscale and other virtual networks already work through the
   default system routing, and only an SSH direct-tcpip tunnel would need
   `media.StreamConfig.Dialer` injection, which the SSH tunnel cannot provide for UDP anyway.
+- RCTL byte-13 receive queue target: cross-checked our 32-byte RCTL APP packet byte for
+  byte against the rootshell reference's 20-byte `AppleMediaRCTLFeedback`. Conclusion: the
+  two are different generations of the same report — the reference's byte 1 is the receive
+  queue target in 20 ms units (their sender passes 100 ms → 5), and the 32-byte form puts
+  the same slot at byte 13. Field meanings (echo timestamp, 1/1024 s clock, Q13 OWRD, packed
+  receive statistics, bandwidth estimate) map one to one. Our 32-byte form is live-verified
+  against a real Mac (stream stays up), so the wire format is unchanged; the byte semantics
+  are now documented in `RateFeedback.Report` with the reference cross-reference. Added
+  `RateFeedback.SetQueueTarget(ms)` (encodes 20 ms units into byte 13, clamped 0–255,
+  default 0) and a reorder-depth metric (`reorder.Waiting`, `RateFeedback.NoteReorder`)
+  from which a queue target can later be derived; neither is emitted by default. New tests
+  lock the 32-byte golden layout, per-field slots and queue-target encoding.
 
 ## 0.0.28
 

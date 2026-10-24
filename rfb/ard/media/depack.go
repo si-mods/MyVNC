@@ -454,6 +454,10 @@ func (r *reorder) Gaps() []uint16 {
 	return g
 }
 
+// Waiting is how many packets currently sit behind a gap: the receive
+// queue depth the RCTL queue target would pace against.
+func (r *reorder) Waiting() int { return len(r.wait) }
+
 func (r *reorder) drain(out []orderedPacket) []orderedPacket {
 	for {
 		p, ok := r.wait[r.next]
