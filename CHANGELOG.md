@@ -3,7 +3,7 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
-## Unreleased
+## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
   a whole keyframe, with up to three tries per packet and a keyframe request as the fallback.
