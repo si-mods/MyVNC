@@ -8,6 +8,12 @@ from it and fails when the file exists but has no section for the version in `my
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
   a whole keyframe, with up to three tries per packet and a keyframe request as the fallback.
   Loss recovery is now visible as the NACK counter in the media stats.
+- Adaptive bitrate refinements, borrowed from the proven rootshell-vnc controller: rate cuts
+  now follow only confirmed packet loss, recovery after a cut waits for 2 s of clean delivery,
+  a fast-rising one-way delay counts as congestion even below the delay threshold and vetoes
+  recovery while the queue is draining, and the first 5 s ramp faster so good links reach full
+  quality quickly. Senders on constrained bearers can seed a lower starting estimate
+  (`SetInitial`).
 
 ## 0.0.26
 
