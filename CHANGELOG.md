@@ -3,6 +3,12 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.29 Unreleased
+
+- The AVC media message 1 (0x3f2) inside an encoding-1010 rectangle now enters High Performance:
+  password-only Macs that skip the 1103 exchange name their UDP ports this way instead (rootshell
+  TransportSession.swift:5243). It drives the same offer flow as a kind-1 reply.
+
 ## 0.0.28
 
 - Media UDP legs now always dial the TCP connection's peer IP literal with a pinned address

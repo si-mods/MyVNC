@@ -547,3 +547,29 @@ func TestRTCPBytes(t *testing.T) {
 	// echo 0x1234, 30 ms, clock 2.03 s * 1024 = 2078, delay 0, 2 packets, 60000.
 	check("RCTL", r, "80cc000700000009"+hex.EncodeToString([]byte("RCTL"))+"85000004"+"1234"+"00000000"+"001e"+"081e"+"0000"+"0002"+"ea60")
 }
+
+func TestParseAVCMessage(t *testing.T) {
+	body := make([]byte, 36)
+	copy(body, []byte{0, 1, // version 1
+		0, 1, // message type 1 (the offer)
+		0, 0, 0, 0, 0x17, 0x0c, 0, 0, 0, 1, 0x17, 0x0d, 0, 0, 0, 1})
+	rect := binary.BigEndian.AppendUint16(nil, uint16(4+2+len(body)))
+	rect = append(rect, 0x00, 0x00, 0x03, 0xf2)
+	rect = append(rect, binary.BigEndian.AppendUint16(nil, uint16(len(body)))...)
+	payload := append(rect, body...)
+	if r, err := ParseReply(payload); err != nil || r.Kind != 0 {
+		t.Fatalf("ParseReply precondition: kind=%d err=%v", r.Kind, err)
+	}
+	r, err := ParseAVCMessage(payload)
+	if err != nil || r.Kind != ReplyPorts || r.AudioPort != 5900 || r.VideoPort != 5901 {
+		t.Errorf("AVC message 1: %+v %v", r, err)
+	}
+	if _, err := ParseAVCMessage([]byte{0, 0, 1, 2, 3, 4}); err == nil {
+		t.Error("non-AVC payload accepted")
+	}
+	other := append([]byte{0x00, 0x00, 0x03, 0xf2}, binary.BigEndian.AppendUint16(nil, 8)...)
+	other = append(other, 0, 1, 0, 7, 0, 0, 0, 0)
+	if r, err := ParseAVCMessage(withLen(other)); err != nil || r.Kind != 0 {
+		t.Errorf("non-offer AVC type: kind=%d err=%v, want kind 0", r.Kind, err)
+	}
+}
