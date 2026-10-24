@@ -127,6 +127,16 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 				st.SetDecodeCap(kbps)
 			}
 		}, func() { s.c.LimitMediaFrameRate(true) }, &s.n)
+		// A thirty-second heartbeat in the log, so a High Performance
+		// teardown explains itself; the stream's stats are nil-safe.
+		s.video.log = opt.Logger
+		s.video.streamStats = func() *media.Stats {
+			if st := s.c.MediaStream(); st != nil {
+				stats := st.Stats()
+				return &stats
+			}
+			return nil
+		}
 		if f := hp.Offer.Flags; f != 0 && f&media.Flag60FPS == 0 {
 			s.n.mediaFPS30.Store(true) // a reconnect keeping the lost session's limit
 		}

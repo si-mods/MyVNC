@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -124,6 +125,12 @@ type videoPipe struct {
 	lastPic    atomic.Int64
 	escSaved   int // cap to restore after a stall cut, 0 for none
 	rebuildReq atomic.Bool
+	// heartbeatTick, when streamStats is set, logs the stream's health
+	// once every thirty ticks; nil in a Standard session. p.log is the
+	// session's logger; streamStats is replaced by tests.
+	heartbeats  int
+	log         *slog.Logger
+	streamStats func() *media.Stats // the session's MediaStream().Stats(); replaced by tests
 }
 
 func newVideoPipe(m mf.Mode, maxFPS int, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), setCap func(kbps int), limitFPS func(), n *counters) *videoPipe {
@@ -156,6 +163,45 @@ func (p *videoPipe) push(u *media.Unit) {
 }
 
 func (p *videoPipe) close() { close(p.done) }
+
+// heartbeatTick logs the High Performance stream's health once every
+// thirty seconds; the reference implementation's 30 s heartbeat, at
+// VNCPaneView.swift:718. The videoPipe's own tick goroutine.
+func (p *videoPipe) heartbeatTick() {
+	if p.streamStats == nil {
+		return
+	}
+	if st := p.streamStats(); st != nil {
+		p.heartbeat(st)
+	}
+}
+
+// heartbeat logs one line that explains a media stream: the video leg's
+// datagram and SRTP tallies, the pictures since the last key, the RCTL
+// bandwidth estimate and the losses, so a teardown explains itself.
+func (p *videoPipe) heartbeat(st *media.Stats) {
+	if p.log == nil {
+		return
+	}
+	p.log.Info("viewer: high performance heartbeat",
+		"highPerformance", true,
+		"videoDgrams", st.Video.Datagrams,
+		"videoSrtpOK", st.Video.SRTPOK,
+		"videoSrtpForged", st.Video.SRTPForged,
+		"videoRtcpOK", st.Video.RTCPOK,
+		"videoReadErrors", st.Video.ReadErrors,
+		"sinceKey", st.SinceKey,
+		"targetKbps", st.TargetKbps,
+		"lost", st.Lost,
+		"late", st.Late,
+		"missing", st.Missing,
+		"recoveries", st.Recoveries,
+		"rr", st.RR,
+		"rctl", st.RCTL,
+		"units", st.Units,
+		"decodeCapKbps", p.n.mediaCapKbps.Load(),
+	)
+}
 
 func (p *videoPipe) run() {
 	var dec videoDecoder

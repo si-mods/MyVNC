@@ -171,4 +171,8 @@ func (p *videoPipe) tick(dt time.Duration) {
 	if p.lim.fps30 { // one way; a reconnect may have set it already
 		p.n.mediaFPS30.Store(true)
 	}
+	p.heartbeats++
+	if p.streamStats != nil && p.heartbeats%30 == 0 {
+		p.heartbeatTick()
+	}
 }

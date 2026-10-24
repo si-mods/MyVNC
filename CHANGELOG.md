@@ -3,6 +3,13 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.29 Unreleased
+
+- viewer: High Performance sessions log a heartbeat every thirty seconds —
+  the video leg's datagram and SRTP tallies, pictures since the last key,
+  the RCTL bandwidth estimate and the losses — so a teardown explains
+  itself.
+
 ## 0.0.28
 
 - Media UDP legs now always dial the TCP connection's peer IP literal with a pinned address
