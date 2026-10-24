@@ -211,3 +211,28 @@ func (d *oneWayDelay) sample(ts uint32, at time.Time) {
 		d.long, d.owrd = d.short, 0
 	}
 }
+
+// ParseSenderReport reads the first SR (PT 200) of a compound RTCP
+// datagram, returning its SSRC and the NTP/RTP timestamp pair that places
+// the leg's RTP clock on the sender's wall clock. ok is false when the
+// datagram carries no well-formed SR.
+func ParseSenderReport(data []byte) (ssrc, ntpSec, ntpFrac, rtpTS uint32, ok bool) {
+	for len(data) >= 4 {
+		v := data[0] >> 6
+		pt := data[1]
+		words := int(binary.BigEndian.Uint16(data[2:4]))
+		size := 4 + 4*words
+		if v != 2 || size > len(data) {
+			return 0, 0, 0, 0, false
+		}
+		if pt == 200 && words >= 6 {
+			return binary.BigEndian.Uint32(data[4:]),
+				binary.BigEndian.Uint32(data[8:]),
+				binary.BigEndian.Uint32(data[12:]),
+				binary.BigEndian.Uint32(data[16:]),
+				true
+		}
+		data = data[size:]
+	}
+	return 0, 0, 0, 0, false
+}

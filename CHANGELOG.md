@@ -9,6 +9,10 @@ from it and fails when the file exists but has no section for the version in `my
   family: `dialLeg` normalizes v4-mapped v6 peers and rejects a local/peer family mismatch,
   so no hostname is re-resolved and v4 stays with v4, v6 with v6 (matching the Swift
   reference's `remoteEndpointHost`).
+- A/V presentation sync: the media legs' RTCP sender reports (PT 200) are now parsed and feed a
+  presentation clock mapping RTP timestamps to wall time, so video frames get an absolute
+  presentation deadline aligned with the audio playback clock. Visible as the ClockSyncs counter
+  in the media stats; `Stream.PresentationClock()` or `StreamConfig.OnClock` hands the clock out.
 
 ## 0.0.27
 
