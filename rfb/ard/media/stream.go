@@ -8,6 +8,7 @@ package media
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strconv"
@@ -129,8 +130,8 @@ type Stream struct {
 	// bands is the compound depacketizer when the Mac spreads pictures
 	// over several SSRCs; nil while one band is enough. bandN is the
 	// answer's Tiles; loop reads both between packets.
-	bands  *compound
-	bandN  int
+	bands *compound
+	bandN int
 }
 
 // frameDamage is a frame that ended with packets missing.
@@ -172,7 +173,25 @@ func Listen(cfg StreamConfig) (*Stream, error) {
 	return s, nil
 }
 
+// normalizePeer pins the peer IP to one address family: a v4-mapped v6
+// (::ffff:a.b.c.d) becomes plain v4, so both legs dial the literal the TCP
+// connection used, never a second resolution with a different family.
+func normalizePeer(peer net.IP) net.IP {
+	if v4 := peer.To4(); v4 != nil {
+		return v4
+	}
+	return peer.To16()
+}
+
 func dialLeg(local, peer net.IP, port, rcvbuf int) (*net.UDPConn, error) {
+	peer = normalizePeer(peer)
+	// peer must already be the TCP connection's RemoteAddr literal; dialing
+	// it again here would resolve a hostname a second time and might land on
+	// the other family (see TCPConnection.remoteEndpointHost in the Swift
+	// reference). Keep it a literal, v4 dialing v4, v6 dialing v6.
+	if local.To4() != nil && peer.To4() == nil || local.To4() == nil && peer.To4() != nil {
+		return nil, fmt.Errorf("media: address family mismatch: local %v, peer %v", local, peer)
+	}
 	d := net.Dialer{LocalAddr: &net.UDPAddr{IP: local, Port: port}, Control: control}
 	c, err := d.Dial("udp", net.JoinHostPort(peer.String(), strconv.Itoa(port)))
 	if err != nil {

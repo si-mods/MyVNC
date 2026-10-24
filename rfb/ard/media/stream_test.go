@@ -90,3 +90,55 @@ func TestStreamLoopback(t *testing.T) {
 		t.Errorf("key bytes %d, since key %d; want %d, 0", st.KeyBytes, st.SinceKey, wantKey)
 	}
 }
+
+// TestNormalizePeer pins the address-family normalization dialLeg applies:
+// a v4-mapped v6 literal from the TCP connection must dial as plain v4, a
+// real v6 stays v6, so no leg re-resolves the peer host.
+func TestNormalizePeer(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"192.168.1.10", "192.168.1.10"},
+		{"::ffff:192.168.1.10", "192.168.1.10"},
+		{"::ffff:c0a8:10a", "192.168.1.10"},
+		{"2001:db8::1", "2001:db8::1"},
+	}
+	for _, c := range cases {
+		got := normalizePeer(net.ParseIP(c.in))
+		if got == nil || got.String() != c.want {
+			t.Errorf("normalizePeer(%s) = %v; want %s", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDialLegFamilyMismatch locks the guarantee that the UDP legs always
+// dial the same address family as the TCP connection's local address, as
+// they do in production where hpListen passes both TCP endpoints.
+func TestDialLegFamilyMismatch(t *testing.T) {
+	if _, err := dialLeg(net.ParseIP("192.168.1.10"), net.ParseIP("2001:db8::1"), 0, 0); err == nil {
+		t.Error("v4 local dialing v6 peer: want error")
+	}
+	if _, err := dialLeg(net.ParseIP("2001:db8::1"), net.ParseIP("::ffff:192.168.1.10"), 0, 0); err == nil {
+		t.Error("v6 local dialing v4-mapped peer: want error")
+	}
+	// Matching families dial fine.
+	port := freeUDPPort(t)
+	if _, err := dialLeg(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), port, 0); err != nil {
+		t.Errorf("v4 to v4 loopback: %v", err)
+	}
+}
+
+// TestDialLegPeerLiteral checks the connected remote address is the peer IP
+// literal itself, never a re-resolved host.
+func TestDialLegPeerLiteral(t *testing.T) {
+	peer := net.ParseIP("::ffff:127.0.0.1")
+	c, err := dialLeg(net.ParseIP("127.0.0.1"), peer, freeUDPPort(t), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ra := c.RemoteAddr().(*net.UDPAddr)
+	if !ra.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+		t.Errorf("remote %v; want 127.0.0.1", ra.IP)
+	}
+}
