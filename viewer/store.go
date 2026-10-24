@@ -205,7 +205,7 @@ type Config struct {
 	// displays of the window's size each, instead of one; only an ARD
 	// Mac takes it (SetDisplayConfiguration).
 	TwoDisplays bool
-	Orientation       int    // clockwise display rotation: 0, 90, 180 or 270
+	Orientation int // clockwise display rotation: 0, 90, 180 or 270
 	// VideoDecoding is one of VideoDecodings: where High Performance and
 	// H.264 video is decoded, on (re)connect.
 	VideoDecoding string

@@ -122,7 +122,7 @@ type videoPipe struct {
 	// to reopen the decoder via rebuildReq.
 	esc        media.Escalator
 	lastPic    atomic.Int64
-	escSaved   int         // cap to restore after a stall cut, 0 for none
+	escSaved   int // cap to restore after a stall cut, 0 for none
 	rebuildReq atomic.Bool
 }
 
