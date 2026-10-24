@@ -43,6 +43,30 @@ func PLI(ssrc, mediaSSRC uint32) []byte {
 	return binary.BigEndian.AppendUint32(b, mediaSSRC)
 }
 
+// NACK is a Generic NACK (RFC 4585 §6.2.1): RTPFB format 1 asking the Mac
+// to resend the mediaSSRC packets in missing, each as a PID plus the BLP
+// bitmask of the following 16 sequence numbers. Caller bounds missing at
+// 64 entries.
+func NACK(ssrc, mediaSSRC uint32, missing []uint16) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{0x81, 205, byte(len(missing) >> 8), byte(len(missing))}, ssrc)
+	b = binary.BigEndian.AppendUint32(b, mediaSSRC)
+	set := make(map[uint16]bool, len(missing))
+	for _, s := range missing {
+		set[s] = true
+	}
+	for _, pid := range missing {
+		var blp uint16
+		for i := range 16 {
+			if set[pid+uint16(i)+1] {
+				blp |= 1 << i
+			}
+		}
+		b = binary.BigEndian.AppendUint16(b, pid)
+		b = binary.BigEndian.AppendUint16(b, blp)
+	}
+	return b
+}
+
 const (
 	videoClock = 24000.0 // the picture leg's RTP clock, Hz
 	// defaultBandwidth is the RCTL bandwidth estimate before the adaptive
