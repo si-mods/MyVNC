@@ -99,7 +99,17 @@ type RTPHeader struct {
 	// Refresh is the Mac's mark (extension profile 0x9331) on a picture
 	// predicted from an acknowledged one.
 	Refresh bool
-	Payload [2]int
+	// FrameSeq and FramePackets come from Apple's media-control extension
+	// (version 2, flag 0x01): the frame's sequence number and total packet
+	// count. HasFrameExt says they are present.
+	FrameSeq     uint16
+	FramePackets uint16
+	HasFrameExt  bool
+	// LTRTimestamp is the long-term-reference timestamp (media-control
+	// flag 0x02, little-endian) when HasLTR is set.
+	LTRTimestamp uint32
+	HasLTR       bool
+	Payload      [2]int
 }
 
 // parseRTP reads the header of a datagram of tagLen trailing tag bytes.
@@ -119,6 +129,32 @@ func parseRTP(data []byte, tagLen int) (RTPHeader, error) {
 		}
 		profile := binary.BigEndian.Uint16(data[at:])
 		h.Refresh = profile&^0x0030 == 0x9301 && profile&0x0020 != 0
+		// Apple's media-control extension is not an RFC 8285 profile:
+		// byte0 is version<<6|cameraStatus (versions 1..3), byte1 flags.
+		// The version check keeps an unrelated extension from matching.
+		if v := data[at] >> 6; !h.Refresh && v >= 1 && v <= 3 && len(data) >= at+4 {
+			flags := data[at+1]
+			end := at + 4 + 4*int(binary.BigEndian.Uint16(data[at+2:]))
+			if end <= len(data)-tagLen {
+				cur := at + 4
+				if flags&0x02 != 0 {
+					if cur+4 > end {
+						return h, ErrNotRTP
+					}
+					h.LTRTimestamp = binary.LittleEndian.Uint32(data[cur:])
+					h.HasLTR = true
+					cur += 4
+				}
+				if v == 2 && flags&0x01 != 0 {
+					if cur+4 > end {
+						return h, ErrNotRTP
+					}
+					h.FramePackets = binary.BigEndian.Uint16(data[cur:])
+					h.FrameSeq = binary.BigEndian.Uint16(data[cur+2:])
+					h.HasFrameExt = true
+				}
+			}
+		}
 		at += 4 + 4*int(binary.BigEndian.Uint16(data[at+2:]))
 	}
 	end := len(data) - tagLen

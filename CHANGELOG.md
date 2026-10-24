@@ -14,6 +14,10 @@ from it and fails when the file exists but has no section for the version in `my
   recovery while the queue is draining, and the first 5 s ramp faster so good links reach full
   quality quickly. Senders on constrained bearers can seed a lower starting estimate
   (`SetInitial`).
+- Apple media-control RTP extension: frame sequence number and packet count are parsed from
+  the media-control extension (version 2), LTR timestamps from flag 0x02. Frames that end
+  damaged are reported once with Apple's PSFB type-6 frame-loss feedback; if loss persists
+  after two unanswered PLIs in 2 s, a Full Intra Request goes out instead.
 
 ## 0.0.26
 

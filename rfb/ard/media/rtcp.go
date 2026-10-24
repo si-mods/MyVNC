@@ -43,6 +43,38 @@ func PLI(ssrc, mediaSSRC uint32) []byte {
 	return binary.BigEndian.AppendUint32(b, mediaSSRC)
 }
 
+// FrameLossInfo describes one damaged frame for FrameLoss.
+type FrameLossInfo struct {
+	FrameRTPTimestamp uint32
+	FrameSeq          uint16
+	PacketCount       uint8
+	LostCount         uint8
+}
+
+// FrameLoss is Apple's PSFB application feedback (format 15, name type 6)
+// about one damaged frame: 24 bytes, sender SSRC, media SSRC, the app type
+// 6, then the frame's RTP timestamp, its media-control sequence number and
+// the total and lost packet counts.
+func FrameLoss(ssrc, mediaSSRC uint32, f FrameLossInfo) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{0x8f, 206, 0, 5}, ssrc)
+	b = binary.BigEndian.AppendUint32(b, mediaSSRC)
+	b = binary.BigEndian.AppendUint32(b, 6)
+	b = binary.BigEndian.AppendUint32(b, f.FrameRTPTimestamp)
+	b = binary.BigEndian.AppendUint16(b, f.FrameSeq)
+	b = append(b, f.PacketCount, f.LostCount)
+	return b
+}
+
+// FIR is a Full Intra Request (PT 206, FMT 4), sent when frame-loss
+// feedback has not restored the picture. The common media-SSRC field is
+// zero; the requested source and a rotating sequence follow.
+func FIR(ssrc, mediaSSRC uint32, seq uint8) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{0x84, 206, 0, 4}, ssrc)
+	b = binary.BigEndian.AppendUint32(b, 0)
+	b = binary.BigEndian.AppendUint32(b, mediaSSRC)
+	return append(b, seq, 0, 0, 0)
+}
+
 // NACK is a Generic NACK (RFC 4585 §6.2.1): RTPFB format 1 asking the Mac
 // to resend the mediaSSRC packets in missing, each as a PID plus the BLP
 // bitmask of the following 16 sequence numbers. Caller bounds missing at
