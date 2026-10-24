@@ -3,6 +3,12 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- The video leg's RTCP receiver report now carries a report block (RFC 3550 §6.4.1): fraction
+  and cumulative loss from the feedback tally, plus the LSR/DLSR pair echoed from the Mac's
+  latest sender report once SR parsing feeds `RateFeedback.LastSR`.
+
 ## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
