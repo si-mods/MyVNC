@@ -78,7 +78,9 @@ type Stats struct {
 	Late, Missing uint64
 	RR, RCTL      uint64 // feedback sent
 	PLI, Refresh  uint64
-	TargetKbps    int // adaptive RCTL bandwidth estimate
+	FrameLossSent uint64 // Apple type-6 damaged-frame reports
+	FIRSent       uint64 // full intra requests after unanswered PLIs
+	TargetKbps    int    // adaptive RCTL bandwidth estimate
 	Acks          uint64
 	SendErrors    uint64
 	LastSendError string
@@ -100,6 +102,24 @@ type Stream struct {
 	w, h     uint16 // the answered picture size, for Refresh
 	sinceKey int    // pictures since the last key picture, for GOP
 	lossAt   time.Time
+
+	// frame tracking from Apple's media-control extension: the frame in
+	// flight and the last one that ended damaged, reported once.
+	framePackets, frameSeq uint16
+	frameTS                uint32
+	frameLost              uint16 // packets of the frame in flight that never came
+	frameSeen              bool
+	damage                 *frameDamage // nil when none pending
+	firSeq                 uint8
+	plisSinceFIR           int
+}
+
+// frameDamage is a frame that ended with packets missing.
+type frameDamage struct {
+	ts    uint32
+	seq   uint16
+	total uint16
+	lost  uint16
 }
 
 // Listen binds the audio and video ports on cfg.Local, connects them to
@@ -255,6 +275,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		rate       = time.NewTicker(rateInterval)
 		firstVideo = true
 		firstAudio = true
+		lastPLIAt  time.Time
 	)
 	defer report.Stop()
 	defer rate.Stop()
@@ -332,6 +353,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 			if h.SSRC != mediaSSRC {
 				mediaSSRC, owed = h.SSRC, askNone // a new stream starts with its own IDR
 			}
+			s.trackFrame(h)
 			for _, p := range order.push(h, d[h.Payload[0]:h.Payload[1]]) {
 				s.depacketize(&dep, p, &owed, &unacked)
 			}
@@ -345,6 +367,27 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		}
 		if owed != askNone && mediaSSRC != 0 && time.Since(asked) >= keyframeInterval {
 			asked = time.Now()
+			if d := s.takeDamage(); d != nil && d.lost <= 255 && d.total <= 255 {
+				send(s.video, videoOut.Protect(FrameLoss(sec.VideoSSRC, mediaSSRC, FrameLossInfo{
+					FrameRTPTimestamp: d.ts,
+					FrameSeq:          d.seq,
+					PacketCount:       uint8(d.total),
+					LostCount:         uint8(d.lost),
+				})), &s.stats.FrameLossSent)
+			}
+			s.mu.Lock()
+			s.plisSinceFIR++
+			s.mu.Unlock()
+			if s.plisSinceFIR >= 2 && time.Since(lastPLIAt) >= 2*time.Second {
+				s.mu.Lock()
+				s.plisSinceFIR = 0
+				seq := s.firSeq
+				s.firSeq++
+				s.mu.Unlock()
+				send(s.video, videoOut.Protect(FIR(sec.VideoSSRC, mediaSSRC, seq)), &s.stats.FIRSent)
+			} else {
+				lastPLIAt = time.Now()
+			}
 			s.mu.Lock()
 			w, h := s.w, s.h
 			s.mu.Unlock()
@@ -365,6 +408,7 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 	case u != nil:
 		*owed = askNone
 		s.mu.Lock()
+		s.plisSinceFIR = 0
 		s.stats.Units++
 		if u.Key {
 			s.stats.Keys++
@@ -396,12 +440,45 @@ func (s *Stream) depacketize(dep *Depacketizer, p orderedPacket, owed *ask, unac
 			s.lossAt = time.Now()
 		}
 		s.mu.Unlock()
+		s.frameMisses(1)
 		a := askKeyframe
 		if dep.ResumesAtRefresh() {
 			a = askRefresh
 		}
 		*owed = max(*owed, a)
 	}
+}
+
+// trackFrame follows the frame in flight through Apple's media-control
+// extension: a packet carrying a frame sequence number closes the previous
+// frame, a damaged one is recorded once for a type-6 frame-loss report.
+func (s *Stream) trackFrame(h RTPHeader) {
+	if !h.HasFrameExt {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.frameSeen && s.damage == nil && s.frameLost > 0 {
+		s.damage = &frameDamage{ts: s.frameTS, seq: s.frameSeq, total: s.framePackets, lost: s.frameLost}
+	}
+	s.framePackets, s.frameSeq, s.frameTS, s.frameSeen = h.FramePackets, h.FrameSeq, h.Timestamp, true
+	s.frameLost = 0
+}
+
+// frameMisses notes packets of the frame in flight that did not arrive.
+func (s *Stream) frameMisses(n int) {
+	s.mu.Lock()
+	s.frameLost += uint16(n)
+	s.mu.Unlock()
+}
+
+// takeDamage returns the pending damaged frame, if any, once per frame.
+func (s *Stream) takeDamage() *frameDamage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.damage
+	s.damage = nil
+	return d
 }
 
 // count records one datagram's fate; s.mu is held.
