@@ -368,6 +368,10 @@ func (c *Client) hpListen(audio, video uint16) error {
 	if !ok1 || !ok2 {
 		return fmt.Errorf("the RFB connection is not TCP (%v)", c.conn.LocalAddr())
 	}
+	// The UDP legs dial the TCP connection's IP literals, not the host name
+	// we dialed: re-resolving it could pick the other address family or a
+	// different address than the one the Mac's media answers on (the Swift
+	// reference does the same via TCPConnection.remoteEndpointHost).
 	s, err := media.Listen(media.StreamConfig{
 		Local: local.IP, Peer: peer.IP, AudioPort: int(audio), VideoPort: int(video),
 		Secrets: hp.secrets, DONL: hp.cfg.Offer.Tiles > 1, OnUnit: hp.cfg.OnUnit, OnPacket: hp.cfg.OnPacket,

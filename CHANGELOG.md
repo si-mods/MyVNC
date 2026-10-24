@@ -3,6 +3,13 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Media UDP legs now always dial the TCP connection's peer IP literal with a pinned address
+  family: `dialLeg` normalizes v4-mapped v6 peers and rejects a local/peer family mismatch,
+  so no hostname is re-resolved and v4 stays with v4, v6 with v6 (matching the Swift
+  reference's `remoteEndpointHost`).
+
 ## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of
