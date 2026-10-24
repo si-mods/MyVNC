@@ -44,6 +44,10 @@ type StreamConfig struct {
 	// when err is nil; as received with ErrStale or ErrForged. It must
 	// not keep packet.
 	OnPacket func(at time.Time, h RTPHeader, packet []byte, err error)
+	// OnAudio, when set, receives each audio access unit off the audio
+	// leg (payload 101) on the receiver's goroutine; nil drops audio, as
+	// it is by default. Hand it to a queue rather than decoding here.
+	OnAudio func(*AudioUnit)
 	// MaxKbps caps the adaptive RCTL bandwidth estimate; 0 is the Mac's
 	// 60 Mbit/s ceiling.
 	MaxKbps int
@@ -70,6 +74,7 @@ type Stats struct {
 	Units, Keys  uint64 // access units handed on, and key pictures among them
 	KeyBytes     uint64 // wire bytes in key pictures
 	SinceKey     int    // pictures since the last key picture
+	AudioUnits   uint64 // audio access units handed to OnAudio
 	Recoveries   uint64 // loss episodes ended by a key picture
 	RecoveryMs   int64  // the last recovery, in milliseconds
 	Lost         uint64 // losses reported by the depacketizer
@@ -244,6 +249,8 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 		videoRTCP  = NewSRTCPReceiver(&sec.Video.Down)
 		videoOut   = NewSRTCPSender(&sec.Video.Up)
 		dep        = Depacketizer{DONL: s.cfg.DONL}
+		audioDep   AudioDepacketizer
+		audioSSRC  uint32
 		order      reorder
 		feedback   = NewRateFeedback(time.Now())
 		rateCtl    = newRateControl(s.cfg.MaxKbps)
@@ -309,6 +316,25 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 				firstAudio = false
 				s.log.Info("media: sound is flowing", "ssrc", h.SSRC, "pt", h.PayloadType)
 			}
+			if err != nil || s.cfg.OnAudio == nil || h.PayloadType != AudioPayloadType {
+				break
+			}
+			if h.SSRC != audioSSRC { // a new audio stream starts over
+				audioSSRC = h.SSRC
+				audioDep = AudioDepacketizer{}
+			}
+			u, err := audioDep.Push(h, d[h.Payload[0]:h.Payload[1]])
+			if err != nil {
+				s.log.Debug("media: bad audio packet", "seq", h.Sequence, "err", err)
+				break
+			}
+			if u == nil {
+				break
+			}
+			s.mu.Lock()
+			s.stats.AudioUnits++
+			s.mu.Unlock()
+			s.cfg.OnAudio(u)
 		case d := <-videoIn:
 			h, err := videoSRTP.Unprotect(d)
 			s.mu.Lock()

@@ -68,6 +68,19 @@ type HighPerformance struct {
 	// MaxFPS caps how many decoded pictures per second are shown; 0 is
 	// the stream's own rate.
 	MaxFPS int
+	// AudioConfig is the AAC-ELD+SBR AudioSpecificConfig the audio
+	// decoder is opened with, as the offer's audio blob carries it
+	// (frequency index and channel configuration); nil takes the
+	// standard 48 kHz stereo ELD+SBR one, 0xF8E8. Audio plays when High
+	// Performance is on and this decodes.
+	AudioConfig []byte
+	// AudioOff turns the High Performance stream's audio off.
+	AudioOff bool
+	// OnAudio, when set, receives each audio access unit off the media
+	// stream's audio leg; see media.StreamConfig.OnAudio. When it is nil
+	// the audio is dropped, as it is while AudioOff is set or nothing
+	// here decodes AAC.
+	OnAudio func(*media.AudioUnit)
 }
 
 // The reasons High Performance falls back, as OnFallback gets them.
@@ -357,7 +370,7 @@ func (c *Client) hpListen(audio, video uint16) error {
 	s, err := media.Listen(media.StreamConfig{
 		Local: local.IP, Peer: peer.IP, AudioPort: int(audio), VideoPort: int(video),
 		Secrets: hp.secrets, DONL: hp.cfg.Offer.Tiles > 1, OnUnit: hp.cfg.OnUnit, OnPacket: hp.cfg.OnPacket,
-		MaxKbps: hp.cfg.MaxKbps, GOP: hp.cfg.GOP, Logger: c.log,
+		OnAudio: hp.cfg.OnAudio, MaxKbps: hp.cfg.MaxKbps, GOP: hp.cfg.GOP, Logger: c.log,
 	})
 	if err != nil {
 		return err
