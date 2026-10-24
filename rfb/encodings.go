@@ -67,6 +67,7 @@ const (
 	SecTypeTLS       uint32 = 18
 	SecTypeVeNCrypt  uint32 = 19
 	SecTypeDH        uint32 = 30
+	SecTypeMacAuth   uint32 = 33
 	SecTypeMSLogonII uint32 = 113
 	SecTypeRA256     uint32 = 129
 	SecTypeRAne256   uint32 = 130
@@ -85,7 +86,7 @@ const (
 var defaultSecTypes = []uint32{
 	SecTypeRA256, SecTypeRA2, SecTypeX509Vnc, SecTypeX509Plain,
 	SecTypeX509None, SecTypeRAne256, SecTypeRA2ne, SecTypeDH,
-	SecTypeMSLogonII, SecTypeVncAuth, SecTypePlain, SecTypeNone,
+	SecTypeMacAuth, SecTypeMSLogonII, SecTypeVncAuth, SecTypePlain, SecTypeNone,
 }
 
 const (

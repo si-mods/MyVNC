@@ -746,7 +746,7 @@ func secTypeName(t uint32) string {
 
 var secTypeNames = map[uint32]string{
 	SecTypeNone: "None", SecTypeVncAuth: "VncAuth", SecTypeRA2: "RA2", SecTypeRA2ne: "RA2ne",
-	SecTypeTLS: "TLS", SecTypeVeNCrypt: "VeNCrypt", SecTypeDH: "DH (ARD)", SecTypeMSLogonII: "MSLogonII",
+	SecTypeTLS: "TLS", SecTypeVeNCrypt: "VeNCrypt", SecTypeDH: "DH (ARD)", SecTypeMacAuth: "MacAuth", SecTypeMSLogonII: "MSLogonII",
 	SecTypeRA256: "RA256", SecTypeRAne256: "RAne256", SecTypePlain: "Plain",
 	SecTypeTLSNone: "TLSNone", SecTypeTLSVnc: "TLSVnc", SecTypeTLSPlain: "TLSPlain",
 	SecTypeX509None: "X509None", SecTypeX509Vnc: "X509Vnc", SecTypeX509Plain: "X509Plain",
@@ -789,6 +789,13 @@ func (c *Client) runSecurity(ctx context.Context, t uint32, allowed []uint32) er
 		return nil
 	case SecTypeDH:
 		key, err := ard.DHAuth(c.rd.r, c.out, rand.Reader, c.creds)
+		if err != nil {
+			return err
+		}
+		c.ardKey = &key
+		return nil
+	case SecTypeMacAuth:
+		key, err := auth.MacAuth(c.rd.r, c.out, rand.Reader, c.creds)
 		if err != nil {
 			return err
 		}

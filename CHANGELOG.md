@@ -28,6 +28,11 @@ from it and fails when the file exists but has no section for the version in `my
   virtual displays laid out side by side (`BuildDisplayConfiguration`,
   Apple's Screen Sharing command 29 wire layout), and the new `TwoDisplays`
   setting asks for two of the window's size each.
+- Apple "Mac Authentication" (security type 33): the client now negotiates the type-33
+  handshake macOS Screen Sharing offers alongside type 30 — RSA1 capability request with the
+  security byte bundled into the same write, RSA-PKCS1v15 exchange of a random AES session
+  key, and AES-ECB encrypted credentials, following rootshell-vnc's MacAuthenticator. The
+  session key is stored like the ARD DH key; the DH and SRP sub-modes remain unimplemented.
 
 ## 0.0.27
 
