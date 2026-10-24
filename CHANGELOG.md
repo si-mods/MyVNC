@@ -3,6 +3,13 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Injectable media UDP transport: `media.StreamConfig.Dialer` (a `media.UDPDialer`) dials the
+  audio and video legs instead of the host's own UDP sockets, so the High Performance media
+  path can flow through an application-owned tunnel such as an SSH direct-tcpip channel.
+  Nil (the default) keeps the plain UDP behavior.
+
 ## 0.0.27
 
 - Generic NACK (RFC 4585): single lost picture packets are retransmitted by the Mac instead of

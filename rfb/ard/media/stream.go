@@ -61,7 +61,11 @@ type StreamConfig struct {
 	MaxKbps int
 	// GOP, when positive, asks for a keyframe after that many pictures,
 	// bounding the effective group of pictures.
-	GOP    int
+	GOP int
+	// Dialer, when set, dials each UDP leg instead of the host's own
+	// sockets, so media flows through a tunnel such as SSH direct-tcpip.
+	// It is called twice, audio then video, before the offer goes out.
+	Dialer UDPDialer
 	Logger *slog.Logger
 }
 
@@ -103,7 +107,7 @@ type Stats struct {
 // Stream receives one High Performance session's media.
 type Stream struct {
 	cfg          StreamConfig
-	audio, video *net.UDPConn
+	audio, video net.Conn // each leg's datagram conn
 	log          *slog.Logger
 	done         chan struct{}
 	closeOnce    sync.Once
@@ -150,10 +154,10 @@ func Listen(cfg StreamConfig) (*Stream, error) {
 		s.log = slog.New(slog.DiscardHandler)
 	}
 	var err error
-	if s.audio, err = dialLeg(cfg.Local, cfg.Peer, cfg.AudioPort, 0); err != nil {
+	if s.audio, err = s.dial(cfg.AudioPort, 0); err != nil {
 		return nil, err
 	}
-	if s.video, err = dialLeg(cfg.Local, cfg.Peer, cfg.VideoPort, videoReceiveBuffer); err != nil {
+	if s.video, err = s.dial(cfg.VideoPort, videoReceiveBuffer); err != nil {
 		s.audio.Close()
 		return nil, err
 	}
@@ -172,17 +176,25 @@ func Listen(cfg StreamConfig) (*Stream, error) {
 	return s, nil
 }
 
-func dialLeg(local, peer net.IP, port, rcvbuf int) (*net.UDPConn, error) {
+// dial opens one leg: the injected dialer when set, the host's own UDP
+// otherwise.
+func (s *Stream) dial(port, rcvbuf int) (net.Conn, error) {
+	if s.cfg.Dialer != nil {
+		return s.cfg.Dialer.Dial(s.cfg.Local, s.cfg.Peer, port, rcvbuf)
+	}
+	return dialLeg(s.cfg.Local, s.cfg.Peer, port, rcvbuf)
+}
+
+func dialLeg(local, peer net.IP, port, rcvbuf int) (net.Conn, error) {
 	d := net.Dialer{LocalAddr: &net.UDPAddr{IP: local, Port: port}, Control: control}
 	c, err := d.Dial("udp", net.JoinHostPort(peer.String(), strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
 	}
-	uc := c.(*net.UDPConn)
 	if rcvbuf > 0 {
-		uc.SetReadBuffer(rcvbuf)
+		c.(*net.UDPConn).SetReadBuffer(rcvbuf)
 	}
-	return uc, nil
+	return c, nil
 }
 
 // Close stops the stream and closes its sockets.
@@ -250,7 +262,7 @@ func (s *Stream) RequestKeyframe() {
 	}
 }
 
-func (s *Stream) read(c *net.UDPConn, out chan<- []byte, st *LegStats) {
+func (s *Stream) read(c net.Conn, out chan<- []byte, st *LegStats) {
 	defer s.wg.Done()
 	buf := make([]byte, 65536)
 	for {
@@ -384,7 +396,7 @@ func (s *Stream) loop(audioIn, videoIn <-chan []byte) {
 	s.mu.Lock()
 	s.stats.TargetKbps = rateCtl.target
 	s.mu.Unlock()
-	send := func(c *net.UDPConn, b []byte, counter *uint64) {
+	send := func(c net.Conn, b []byte, counter *uint64) {
 		_, err := c.Write(b)
 		s.mu.Lock()
 		*counter++
@@ -551,8 +563,10 @@ func (s *Stream) packetize(dep *Depacketizer, p orderedPacket, owed *ask, unacke
 	s.mu.Lock()
 	c, dn := s.bands, s.bandN
 	s.mu.Unlock()
-	if c == nil && dn > 1 {
-		c = newCompound(dn)
+	if c == nil {
+		// The band count is unknown until the answer arrives; the
+		// compound then acts as the single-band depacketizer.
+		c = newCompound(max(dn, 1))
 		s.mu.Lock()
 		s.bands = c
 		s.mu.Unlock()
