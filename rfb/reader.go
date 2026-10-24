@@ -887,7 +887,12 @@ func (c *Client) readARDPasteboard() error {
 		c.log.Info("rfb: invalid UTF-8 sequence in clipboard")
 		return nil
 	}
-	c.h.Clipboard(text.ConvertLF(string(data)))
+	s := text.ConvertLF(string(data))
+	if cb := c.opt.OnAppleClipboard; cb != nil {
+		cb(s)
+		return nil
+	}
+	c.h.Clipboard(s)
 	return nil
 }
 

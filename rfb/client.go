@@ -116,6 +116,11 @@ type Options struct {
 	// bytes; larger ones are dropped. 0 means 256 KiB, TigerVNC's
 	// default MaxCutText.
 	MaxClipboard int
+	// OnAppleClipboard, when set, receives the text of the Mac's Apple
+	// packed-scrap pasteboard (the 0x1f reply and push) instead of
+	// Handler.Clipboard, so a caller can tell Apple-originated text apart;
+	// on the Run goroutine.
+	OnAppleClipboard func(text string)
 	// HighPerformance, when set, negotiates ARD High Performance with an
 	// ARD server: the picture comes as HEVC/H.264 over SRTP; see
 	// HighPerformance. nil is Standard mode.
