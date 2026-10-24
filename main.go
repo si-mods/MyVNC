@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"log/slog"
@@ -903,9 +904,17 @@ func (a *app) connectTo(server string, again bool) {
 			},
 		}
 		if cfg.HighPerformance {
-			opt.HighPerformance = &rfb.HighPerformance{ // only an ARD server takes it
+			hp := &rfb.HighPerformance{ // only an ARD server takes it
 				MaxKbps: cfg.MaxKbps, GOP: cfg.GOP, MaxFPS: cfg.MaxFPS,
 			}
+			if cfg.TwoDisplays {
+				w, h := 0, 0
+				if a.sess != nil {
+					w, h = a.sess.Size()
+				}
+				hp.Displays = rfb.TwoVirtual(image.Pt(w, h))
+			}
+			opt.HighPerformance = hp
 			if limit30 {
 				opt.HighPerformance.Offer.Flags = media.DefaultFlags &^ media.Flag60FPS
 			}

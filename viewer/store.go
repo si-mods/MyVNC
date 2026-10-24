@@ -201,6 +201,10 @@ type Config struct {
 	MaxFPS            int    // High Performance pictures shown per second, 0 unlimited
 	MaxKbps           int    // High Performance bitrate cap, 0 adaptive
 	GOP               int    // asked-for keyframe interval in pictures, 0 off
+	// TwoDisplays asks High Performance for two side-by-side virtual
+	// displays of the window's size each, instead of one; only an ARD
+	// Mac takes it (SetDisplayConfiguration).
+	TwoDisplays bool
 	Orientation       int    // clockwise display rotation: 0, 90, 180 or 270
 	// VideoDecoding is one of VideoDecodings: where High Performance and
 	// H.264 video is decoded, on (re)connect.

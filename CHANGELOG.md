@@ -23,6 +23,11 @@ from it and fails when the file exists but has no section for the version in `my
   sync-flush boundary, text-flavor extraction including UTF-16), request and auto-pasteboard
   messages, `Client.SetAppleClipboard` (gated on the packed-scrap capability bit) and an
   `Options.OnAppleClipboard` callback that receives the Mac's pushed pasteboard text.
+- Multiple virtual displays on a Mac over High Performance: `Displays` in
+  `rfb.HighPerformance` asks `SetDisplayConfiguration` (0x1d) for up to two
+  virtual displays laid out side by side (`BuildDisplayConfiguration`,
+  Apple's Screen Sharing command 29 wire layout), and the new `TwoDisplays`
+  setting asks for two of the window's size each.
 
 ## 0.0.27
 

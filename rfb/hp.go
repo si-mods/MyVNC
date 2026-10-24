@@ -16,6 +16,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/si-mods/MyVNC/rfb/ard/media"
 )
@@ -81,6 +82,23 @@ type HighPerformance struct {
 	// the audio is dropped, as it is while AudioOff is set or nothing
 	// here decodes AAC.
 	OnAudio func(*media.AudioUnit)
+	// Displays asks for those virtual displays instead of the one Size
+	// names; empty keeps the one-display behaviour. At most two, as
+	// Apple's Screen Sharing builds (AppleDisplayConfiguration.swift).
+	Displays []DisplaySpec
+}
+
+// TwoVirtual is a Displays for two client-sized virtual displays side by
+// side, each dynamic-resolution.
+func TwoVirtual(size image.Point) []DisplaySpec {
+	if size == (image.Point{}) {
+		size = image.Pt(dynamicMaxWidth/2, dynamicMaxHeight)
+	}
+	size.X, size.Y = min(max(size.X, 1), dynamicMaxWidth), min(max(size.Y, 1), dynamicMaxHeight)
+	return []DisplaySpec{
+		{Name: "Screen Sharing Virtual Display", PixelW: size.X, PixelH: size.Y, PointW: size.X, PointH: size.Y, Flags: 1},
+		{Name: "Screen Sharing Virtual Display", PixelW: size.X, PixelH: size.Y, PointW: size.X, PointH: size.Y, Origin: image.Pt(size.X, 0), Flags: 1},
+	}
 }
 
 // The reasons High Performance falls back, as OnFallback gets them.
@@ -177,6 +195,16 @@ func (c *Client) hpInit() [][]byte {
 	size := cfg.Size
 	if size == (image.Point{}) {
 		size = image.Pt(c.width, c.height)
+	}
+	if len(cfg.Displays) > 0 {
+		dsp := cfg.Displays
+		w := 0
+		for _, d := range dsp { // the desktop spans the displays
+			w = max(w, d.Origin.X+max(d.PixelW, d.PointW))
+		}
+		c.log.Info("rfb: asking for virtual displays", "count", len(dsp))
+		c.disp.mode = [3]int{w, size.Y, 1}
+		return [][]byte{BuildDisplayConfiguration(dsp)}
 	}
 	size.X, size.Y = min(max(size.X, 1), dynamicMaxWidth), min(max(size.Y, 1), dynamicMaxHeight)
 	c.log.Info("rfb: asking for a virtual display", "width", size.X, "height", size.Y)
@@ -495,6 +523,95 @@ func ardSetDisplayConfiguration(w, h, density int) []byte {
 	d = be.AppendUint32(d, 0)
 	body := append(be.AppendUint16(be.AppendUint16(nil, 1), 1), 0, 0, 0, 0)
 	body = append(body, d...)
+	return append(be.AppendUint16([]byte{0x1d, 0}, uint16(len(body))), body...)
+}
+
+// DisplaySpec is one virtual display for BuildDisplayConfiguration.
+type DisplaySpec struct {
+	Name   string
+	PixelW int // framebuffer size
+	PixelH int
+	PointW int // remote UI scale; PixelW/PointW is the density
+	PointH int
+	Origin image.Point // top-left on the Mac's layout
+	Flags  uint32      // 1 is dynamic resolution (AppleVirtualDisplay.dynamicResolutionFlag)
+	// Attributes is the display type word; 4 is virtual, as native sends.
+	Attributes uint32
+}
+
+// nameByteCount is the name field's size, NUL included
+// (AppleVirtualDisplay.nameByteCount).
+const nameByteCount = 120
+
+// BuildDisplayConfiguration builds the SetDisplayConfiguration (0x1d) body
+// for one or two virtual displays, Apple's Screen Sharing command 29
+// (AppleDisplayConfiguration.swift writeAppleDisplayConfiguration): a
+// 12-byte command header (type, size, version 1, display count, a
+// reserved zero word), then per display a 2-byte record size, a
+// zero-padded 120-byte name, flags, attributes, the millimetres, the
+// maximum pixels, the origin, the identifier, and the mode count,
+// followed by 28-byte mode records. Points default to the pixels, at
+// density 1. A name longer than the field is cut whole runes short of a
+// NUL. The identifiers are 7 and 8, as native gives the first 7.
+func BuildDisplayConfiguration(displays []DisplaySpec) []byte {
+	if len(displays) == 0 {
+		displays = []DisplaySpec{{Name: "Screen Sharing Virtual Display", Flags: 1}}
+	}
+	displays = displays[:min(len(displays), 2)]
+	be := binary.BigEndian
+	var records []byte
+	for _, dsp := range displays {
+		tw, th := dsp.PointW, dsp.PointH
+		if tw <= 0 || th <= 0 {
+			tw, th = max(dsp.PixelW, 1), max(dsp.PixelH, 1)
+		}
+		pw, ph := dsp.PixelW, dsp.PixelH
+		if pw <= 0 || ph <= 0 {
+			pw, ph = tw, th
+		}
+		attrs := dsp.Attributes
+		if attrs == 0 {
+			attrs = 4 // display type: virtual, as native sends
+		}
+		name := dsp.Name
+		if name == "" {
+			name = "Screen Sharing Virtual Display"
+		}
+		b := []byte(name)
+		for len(b) > nameByteCount-1 { // cut whole runes, leave a NUL
+			_, size := utf8.DecodeLastRune(b)
+			b = b[:len(b)-size]
+		}
+		r := be.AppendUint16(nil, 156+28) // record size: fixed + one mode
+		r = append(r, b...)
+		r = append(r, make([]byte, 2+nameByteCount-len(r))...)
+		r = be.AppendUint32(r, dsp.Flags) // display flags
+		r = be.AppendUint32(r, attrs)     // display type: virtual
+		r = be.AppendUint32(r, math.Float32bits(float32(tw)/nominalDPI*25.4))
+		r = be.AppendUint32(r, math.Float32bits(float32(th)/nominalDPI*25.4))
+		r = be.AppendUint32(r, dynamicMaxWidth)
+		r = be.AppendUint32(r, dynamicMaxHeight)
+		r = be.AppendUint16(r, 0) // current mode
+		r = be.AppendUint16(r, 0) // preferred mode
+		r = be.AppendUint32(r, 7) // rotations, as native sends
+		r = be.AppendUint16(r, 1) // one mode
+		r = be.AppendUint32(r, uint32(pw))
+		r = be.AppendUint32(r, uint32(ph))
+		r = be.AppendUint32(r, uint32(tw))
+		r = be.AppendUint32(r, uint32(th))
+		r = be.AppendUint64(r, math.Float64bits(displayHz))
+		r = be.AppendUint32(r, 0)
+		records = append(records, r...)
+	}
+	for i, dsp := range displays {
+		at := i * (156 + 28)
+		be.PutUint16(records[at+146:], uint16(dsp.Origin.X))
+		be.PutUint16(records[at+148:], uint16(dsp.Origin.Y))
+		be.PutUint32(records[at+150:], uint32(7+i)) // unique identifiers
+	}
+	body := be.AppendUint16(be.AppendUint16(nil, 1), uint16(len(displays))) // version, display count
+	body = append(body, 0, 0, 0, 0)                                         // reserved word
+	body = append(body, records...)
 	return append(be.AppendUint16([]byte{0x1d, 0}, uint16(len(body))), body...)
 }
 
