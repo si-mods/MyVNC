@@ -33,6 +33,7 @@ type conn struct {
 	name    string
 	clip    string
 	clipCh  chan struct{} // a token when the server's clipboard text came
+	laidCh  chan struct{} // a token when a Mac answered a display change
 	refused int           // SetDesktopSize refusals
 
 	fm    sync.Mutex
@@ -50,6 +51,8 @@ var (
 	layoutWait = 20 * time.Second
 	// shotWait is how long a screenshot waits for a blank picture to fill.
 	shotWait = 2 * time.Second
+	// settleCap bounds the wait for a quiet framebuffer after the answer.
+	settleCap = 5 * time.Second
 	// settleWait is how long the framebuffer must be quiet before connect
 	// takes a virtual display as drawn: the Mac paints it in tiles.
 	settleWait = 500 * time.Millisecond
@@ -60,30 +63,29 @@ var (
 
 func newConn() *conn {
 	return &conn{
-		done: make(chan struct{}), clipCh: make(chan struct{}, 1),
+		done: make(chan struct{}), clipCh: make(chan struct{}, 1), laidCh: make(chan struct{}, 1),
 		ready: make(chan struct{}), tick: make(chan struct{}),
 	}
 }
 
-// blank reports whether the part r of fb looks empty: a grid of samples
-// that are all black (a stray pixel in a corner does not count).
+// blank reports whether the part r of fb looks undrawn: under 2% of a
+// 64×64 grid of samples is not black (the Mac leaves a few stray pixels in
+// a display it has not painted).
 func blank(fb *image.RGBA, r image.Rectangle) bool {
+	lit := 0
 	for j := range 64 {
 		y := r.Min.Y + (2*j+1)*r.Dy()/128
 		for i := range 64 {
-			if i == 0 && j == 0 {
-				continue // the corner, where the Mac leaves a stray pixel
-			}
 			o := fb.PixOffset(r.Min.X+(2*i+1)*r.Dx()/128, y)
 			if fb.Pix[o]|fb.Pix[o+1]|fb.Pix[o+2] != 0 {
-				return false
+				lit++
 			}
 		}
 	}
-	return true
+	return lit < 64*64/50
 }
 
-// Outcomes of waitLaid.
+// Outcomes of changeDisplay.
 const (
 	laid = iota
 	refusedSize
@@ -91,50 +93,92 @@ const (
 	ended
 )
 
-// waitLaid waits, for at most d, until the desktop is not the from it was
-// when the change was asked, or is want, shows something, and has had no
-// update for settleWait. The Mac resizes the framebuffer, black, as soon as
-// it answers, but draws the virtual display only once it has laid it out,
-// which can take seconds, and then tile by tile. A desktop that never goes
-// quiet ends at d as laid once it shows something.
-func (c *conn) waitLaid(from, want image.Point, d time.Duration) (w, h, state int) {
+// setDisplay asks the session for a w×h desktop at density; see
+// changeDisplay.
+func (c *conn) setDisplay(w, h, density int) (int, int, int) {
+	return c.changeDisplay(w, h, c.s.DisplayConfigurationAvailable(), func() {
+		c.do(func(s *viewer.Session) { s.SetDesktopSize(w, h, density) })
+	})
+}
+
+// changeDisplay calls ask, which asks for a w×h desktop and waits until it is there. A Mac
+// answers with its layout (OnDisplayLaid) after seconds, and paints the
+// display in tiles after that, so this waits for the answer, for up to
+// layoutWait (timedOut if none), and then for a quiet framebuffer, for up to
+// settleCap. A server without virtual displays has no answer to wait for:
+// it is the new size, or its refusal, that ends the first wait.
+func (c *conn) changeDisplay(w, h int, need bool, ask func()) (rw, rh, state int) {
+	from := image.Pt(c.size())
+	select { // an answer to an older request
+	case <-c.laidCh:
+	default:
+	}
 	c.mu.Lock()
 	refused := c.refused
 	c.mu.Unlock()
-	end := time.NewTimer(d)
+	ask()
+	since := time.Now()
+	end := time.NewTimer(layoutWait)
 	defer end.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+wait:
 	for {
-		var wake <-chan time.Time
-		shown := false
-		c.fm.Lock()
-		tick := c.tick
-		if c.snap != nil {
-			w, h = c.snap.Rect.Dx(), c.snap.Rect.Dy()
-			shown = (image.Pt(w, h) == want || image.Pt(w, h) != from) && !blank(c.snap, c.snap.Rect)
-			if q := time.Since(c.at); shown && q >= settleWait {
-				c.fm.Unlock()
-				return w, h, laid
-			} else if shown {
-				wake = time.After(settleWait - q)
-			}
+		select {
+		case <-c.laidCh:
+			break wait
+		case <-c.done:
+			rw, rh = c.size()
+			return rw, rh, ended
+		case <-end.C:
+			rw, rh = c.size()
+			return rw, rh, timedOut
+		case <-poll.C:
 		}
-		c.fm.Unlock()
+		rw, rh = c.size()
 		c.mu.Lock()
 		gone := c.refused != refused
 		c.mu.Unlock()
 		if gone {
-			return w, h, refusedSize
+			return rw, rh, refusedSize
+		}
+		if now := image.Pt(rw, rh); !need && (now == image.Pt(w, h) || now != from) {
+			break
+		}
+	}
+	if need {
+		since = time.Now() // what came before the answer was not the painting
+	}
+	c.settle(since)
+	rw, rh = c.size()
+	return rw, rh, laid
+}
+
+// settle waits for an update after since and then settleWait without one,
+// but no longer than settleCap in all: a desktop that never goes quiet, as
+// with a video playing, is taken as it is.
+func (c *conn) settle(since time.Time) {
+	end := time.NewTimer(settleCap)
+	defer end.Stop()
+	for {
+		var wake <-chan time.Time
+		c.fm.Lock()
+		at, tick := c.at, c.tick
+		c.fm.Unlock()
+		if at.After(since) {
+			if q := time.Since(at); q >= settleWait {
+				return
+			} else {
+				wake = time.After(settleWait - q)
+			}
 		}
 		select {
 		case <-tick:
 		case <-wake:
 		case <-c.done:
-			return w, h, ended
+			return
 		case <-end.C:
-			if shown {
-				return w, h, laid
-			}
-			return w, h, timedOut
+			return
 		}
 	}
 }
@@ -284,6 +328,12 @@ func dial(addr, user, pass string, types []uint32, log *slog.Logger) (*conn, err
 		c.clip = t
 		select {
 		case c.clipCh <- struct{}{}:
+		default:
+		}
+	}
+	s.OnDisplayLaid = func(int, int) {
+		select {
+		case c.laidCh <- struct{}{}:
 		default:
 		}
 	}

@@ -139,9 +139,7 @@ func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectI
 	}
 	note := ""
 	if c.s.SecurityType() == rfb.SecTypeDH && (in.Virtual == nil || *in.Virtual) && !a.readonly {
-		w0, h0 := c.size()
-		c.do(func(s *viewer.Session) { s.SetDesktopSize(1920, 1080, 1) })
-		_, _, st := c.waitLaid(image.Pt(w0, h0), image.Pt(1920, 1080), layoutWait)
+		_, _, st := c.setDisplay(1920, 1080, 1)
 		note = layoutNote(st)
 	}
 	w, h := c.size()
@@ -522,9 +520,7 @@ func (a *agent) setDisplay(_ context.Context, _ *mcp.CallToolRequest, in display
 	if in.Width < 320 || in.Width > 8192 || in.Height < 200 || in.Height > 8192 || in.Density < 1 || in.Density > 2 {
 		return nil, nil, errors.New("invalid_argument: width 320-8192, height 200-8192, density 1 or 2")
 	}
-	w0, h0 := c.size()
-	c.do(func(s *viewer.Session) { s.SetDesktopSize(in.Width, in.Height, in.Density) })
-	w, h, st := c.waitLaid(image.Pt(w0, h0), image.Pt(in.Width, in.Height), layoutWait)
+	w, h, st := c.setDisplay(in.Width, in.Height, in.Density)
 	switch st {
 	case laid:
 		return text(fmt.Sprintf("framebuffer is now %dx%d", w, h))

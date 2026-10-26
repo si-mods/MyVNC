@@ -212,6 +212,48 @@ func TestDisplayLaid2(t *testing.T) {
 	h.next(t, "done")
 }
 
+// TestDisplayLaidHandler: DisplayLaidHandler hears each accepted answer
+// once, and not a layout repeated unchanged or one nothing asked for.
+func TestDisplayLaidHandler(t *testing.T) {
+	h := newHandler()
+	h.laid = make(chan [2]int, 4)
+	c, s := dialARD(t, h)
+	// A layout with no change out answers nothing.
+	s.send(layout2(40, 20, 64, 32)...)
+	s.expect(ardAutoFBUpdate(true, 64, 32))
+	s.expect(framebufferUpdateRequest(true, 64, 32))
+	h.next(t, "done")
+	call(t, s, func() error { return c.SetDisplayConfiguration(40, 20, 2) }, framebufferUpdateRequest(false, 1, 1))
+	s.send([]byte{msgFramebufferUpdate, 0}, uint16(0))
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	h.next(t, "done")
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.recv(4 + 8 + 0xb8)
+	if len(h.laid) != 0 {
+		t.Fatalf("heard %v before the Mac answered", <-h.laid)
+	}
+
+	s.send(layout2(40, 20, 80, 40)...)
+	s.expect(ardAutoFBUpdate(true, 1, 1))
+	s.expect(framebufferUpdateRequest(true, 1, 1))
+	h.next(t, "resize")
+	h.next(t, "done")
+	s.expect(ardAutoFBUpdate(true, 80, 40))
+	s.expect(framebufferUpdateRequest(false, 80, 40))
+	if got := <-h.laid; got != [2]int{80, 40} {
+		t.Errorf("laid %v, want 80x40", got)
+	}
+	// The same layout again.
+	s.send(layout2(40, 20, 80, 40)...)
+	s.expect(ardAutoFBUpdate(true, 80, 40))
+	s.expect(framebufferUpdateRequest(true, 80, 40))
+	h.next(t, "done")
+	if len(h.laid) != 0 {
+		t.Errorf("heard %v for a repeated layout", <-h.laid)
+	}
+}
+
 // TestDisplayUnanswered: a change the Mac does not answer holds the pixel
 // requests for displayHold only, then the screen is asked for again, as
 // much as both sizes share, without any update to prompt it; after

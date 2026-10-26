@@ -5,7 +5,6 @@ import (
 	"context"
 	"image"
 	"image/png"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,47 +18,20 @@ func frame(c *conn, w, h int, col [3]byte) {
 	for i := 0; i < len(fb.Pix); i += 4 {
 		fb.Pix[i], fb.Pix[i+1], fb.Pix[i+2], fb.Pix[i+3] = col[0], col[1], col[2], 0xff
 	}
-	if col == [3]byte{} {
+	if col == [3]byte{} { // the stray pixels of a display the Mac has not painted
 		fb.Pix[0], fb.Pix[1], fb.Pix[2] = 255, 0, 255
+		for y := range 4 {
+			o := fb.PixOffset(w-4, y)
+			fb.Pix[o+2] = 255
+		}
 	}
 	c.onFrame(fb, []image.Rectangle{fb.Rect})
 }
 
 func shortWaits(t *testing.T) {
-	l, s, q, sq := layoutWait, shotWait, settleWait, shotQuiet
-	layoutWait, shotWait, settleWait, shotQuiet = 400*time.Millisecond, 300*time.Millisecond, 60*time.Millisecond, 40*time.Millisecond
-	t.Cleanup(func() { layoutWait, shotWait, settleWait, shotQuiet = l, s, q, sq })
-}
-
-// The Mac resizes the framebuffer black, then draws it seconds later.
-func TestWaitLaid(t *testing.T) {
-	shortWaits(t)
-	c := newConn()
-	frame(c, 100, 80, [3]byte{9, 9, 9})
-	from, want := image.Pt(100, 80), image.Pt(192, 108)
-
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		frame(c, 192, 108, [3]byte{}) // resized, not drawn
-		time.Sleep(100 * time.Millisecond)
-		frame(c, 192, 108, [3]byte{0, 200, 0})
-	}()
-	start := time.Now()
-	w, h, st := c.waitLaid(from, want, layoutWait)
-	if st != laid || w != 192 || h != 108 || time.Since(start) < 100*time.Millisecond {
-		t.Fatalf("waitLaid = %d×%d state %d after %v; want to wait for the drawing", w, h, st, time.Since(start))
-	}
-
-	// The layout never comes: a timeout, and the warning for connect.
-	c2 := newConn()
-	frame(c2, 100, 80, [3]byte{9, 9, 9})
-	frame(c2, 192, 108, [3]byte{})
-	if _, _, st := c2.waitLaid(from, want, 50*time.Millisecond); st != timedOut {
-		t.Fatalf("state = %d, want timedOut", st)
-	}
-	if n := layoutNote(timedOut); !strings.Contains(n, "WARNING: virtual display not laid out yet; screenshots may be blank") {
-		t.Errorf("note = %q", n)
-	}
+	l, s, q, sq, sc := layoutWait, shotWait, settleWait, shotQuiet, settleCap
+	layoutWait, shotWait, settleWait, shotQuiet, settleCap = 400*time.Millisecond, 300*time.Millisecond, 60*time.Millisecond, 40*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { layoutWait, shotWait, settleWait, shotQuiet, settleCap = l, s, q, sq, sc })
 }
 
 func TestScreenshotWaitsForDrawing(t *testing.T) {

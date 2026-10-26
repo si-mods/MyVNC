@@ -50,12 +50,14 @@ a point (px, py) of the image is framebuffer `region origin + (px, py) / scale`.
 `connect` replaces any existing session. On a Mac (ARD) it asks for a
 virtual 1920x1080 display (on a Mac mini it shows up as "Screen Sharing
 Virtual Display"), so the agent's picture is its own screen. The Mac can
-take several seconds to lay it out (9 s measured); `connect` waits up to
-20 s and, if the display is still not drawn, succeeds with a warning that
-screenshots may be blank. The Mac draws the display in tiles, so `connect`
-also waits for 500 ms without an update. A screenshot of a blank picture,
-or of one updated in the last 300 ms, waits up to 2 s for it to fill and go
-quiet, then returns what it has.
+take several seconds to answer the request (9 s measured) and then paints
+the display in tiles. `connect` waits for the Mac's answer (up to 20 s; if
+none comes it succeeds with a warning that screenshots may be blank), then
+for 500 ms without an update (up to 5 s). A server that has no virtual
+displays, or refuses, ends the wait at once. A screenshot of a picture that
+is almost all black (under 2% of sampled points lit), or updated in the
+last 300 ms, waits up to 2 s for it to fill and go quiet, then returns what
+it has.
 
 **Input is not isolated.** Only the picture is separate. The pointer and
 keyboard are the Mac's one global pair, shared with the physical session: a

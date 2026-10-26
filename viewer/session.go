@@ -46,6 +46,10 @@ type Session struct {
 	// key LEDs (rfb.LED* bits), on the UI thread.
 	OnBell func()
 	OnLED  func(state uint32)
+	// OnDisplayLaid, when set, hears that the Mac answered a display change
+	// with its layout of w x h pixels (rfb.DisplayLaidHandler), on Run's
+	// goroutine; the Mac draws the display after.
+	OnDisplayLaid func(w, h int)
 	// OnResizeRefused, when set, hears that the server cannot or will not
 	// change its size for SetDesktopSize, on the UI thread.
 	OnResizeRefused func()
@@ -372,6 +376,19 @@ func (s *Session) refused() {
 			s.OnResizeRefused()
 		}
 	})
+}
+
+// DisplayConfigurationAvailable reports whether SetDesktopSize asks a Mac
+// for a virtual display, which OnDisplayLaid then answers.
+func (s *Session) DisplayConfigurationAvailable() bool {
+	return s.c.DisplayConfigurationAvailable()
+}
+
+// DisplayLaid is rfb.DisplayLaidHandler, on Run's goroutine.
+func (s *Session) DisplayLaid(w, h int) {
+	if s.OnDisplayLaid != nil {
+		s.OnDisplayLaid(w, h)
+	}
 }
 
 // DesktopSizeFailed is rfb.DesktopSizeHandler.

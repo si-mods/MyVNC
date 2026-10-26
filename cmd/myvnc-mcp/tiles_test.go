@@ -5,6 +5,7 @@ import (
 	"context"
 	"image"
 	"image/png"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,38 +24,85 @@ func tile(c *conn, w, h int, r image.Rectangle) {
 	c.onFrame(fb, []image.Rectangle{r})
 }
 
-// The Mac paints the virtual display in tiles: connect waits for a quiet
-// gap after the last one, not for the first.
-func TestWaitLaidSettlesAfterTiles(t *testing.T) {
+// laidSignal is what OnDisplayLaid does.
+func laidSignal(c *conn) { c.laidCh <- struct{}{} }
+
+// The Mac resizes the framebuffer at once, black with stray pixels, answers
+// seconds later and paints tiles after that: changeDisplay waits for the
+// answer and then for the last tile.
+func TestChangeDisplayWaitsForAnswerAndTiles(t *testing.T) {
 	shortWaits(t)
 	c := newConn()
 	frame(c, 100, 80, [3]byte{9, 9, 9})
-	frame(c, 200, 160, [3]byte{}) // resized, black
-	go func() {
-		for _, x := range []int{0, 100} {
+	var answered time.Time
+	ask := func() {
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			frame(c, 200, 160, [3]byte{}) // resized, not painted
+			time.Sleep(150 * time.Millisecond)
+			answered = time.Now()
+			laidSignal(c)
+			time.Sleep(30 * time.Millisecond)
+			tile(c, 200, 160, image.Rect(0, 0, 100, 160))
 			time.Sleep(50 * time.Millisecond)
-			tile(c, 200, 160, image.Rect(x, 0, x+100, 160))
-		}
-	}()
-	start := time.Now()
-	w, h, st := c.waitLaid(image.Pt(100, 80), image.Pt(200, 160), layoutWait)
-	took := time.Since(start)
-	if st != laid || w != 200 || h != 160 {
-		t.Fatalf("waitLaid = %d×%d state %d", w, h, st)
+			tile(c, 200, 160, image.Rect(100, 0, 200, 160))
+		}()
 	}
-	// Two tiles at 50 and 100 ms, then 60 ms of quiet.
-	if took < 150*time.Millisecond {
+	start := time.Now()
+	w, h, st := c.changeDisplay(200, 160, true, ask)
+	if st != laid || w != 200 || h != 160 {
+		t.Fatalf("changeDisplay = %d×%d state %d", w, h, st)
+	}
+	if took := time.Since(start); took < 150+30+50+60-10 {
 		t.Errorf("returned after %v, before the last tile settled", took)
+	}
+	if answered.IsZero() {
+		t.Fatal("returned before the answer")
 	}
 	c.fm.Lock()
 	defer c.fm.Unlock()
 	if c.snap.Pix[c.snap.PixOffset(150, 10)+1] != 200 {
-		t.Error("the last tile was not drawn when waitLaid returned")
+		t.Error("the last tile was not drawn")
 	}
 }
 
-// A desktop that never goes quiet ends at the cap, as laid.
-func TestWaitLaidNeverQuiet(t *testing.T) {
+// With no answer: the timeout state, for the warning, after layoutWait.
+func TestChangeDisplayNoAnswer(t *testing.T) {
+	shortWaits(t)
+	c := newConn()
+	frame(c, 100, 80, [3]byte{9, 9, 9})
+	start := time.Now()
+	_, _, st := c.changeDisplay(200, 160, true, func() { frame(c, 200, 160, [3]byte{}) })
+	if took := time.Since(start); st != timedOut || took < layoutWait {
+		t.Errorf("state %d after %v, want timedOut after %v", st, took, layoutWait)
+	}
+	if n := layoutNote(timedOut); !strings.Contains(n, "WARNING: virtual display not laid out yet; screenshots may be blank") {
+		t.Errorf("note = %q", n)
+	}
+}
+
+// A server without virtual displays has no answer: its new size, or its
+// refusal, ends the wait at once.
+func TestChangeDisplayWithoutAnswerSignal(t *testing.T) {
+	shortWaits(t)
+	c := newConn()
+	frame(c, 100, 80, [3]byte{9, 9, 9})
+	start := time.Now()
+	w, _, st := c.changeDisplay(200, 160, false, func() {
+		go func() { time.Sleep(20 * time.Millisecond); frame(c, 200, 160, [3]byte{0, 90, 0}) }()
+	})
+	if took := time.Since(start); st != laid || w != 200 || took > layoutWait/2 {
+		t.Errorf("resize: state %d width %d after %v", st, w, took)
+	}
+	start = time.Now()
+	_, _, st = c.changeDisplay(300, 200, false, func() { c.mu.Lock(); c.refused++; c.mu.Unlock() })
+	if took := time.Since(start); st != refusedSize || took > 100*time.Millisecond {
+		t.Errorf("refusal: state %d after %v", st, took)
+	}
+}
+
+// A desktop that never goes quiet ends at settleCap, as laid.
+func TestChangeDisplayNeverQuiet(t *testing.T) {
 	shortWaits(t)
 	c := newConn()
 	frame(c, 100, 80, [3]byte{9, 9, 9})
@@ -71,9 +119,21 @@ func TestWaitLaidNeverQuiet(t *testing.T) {
 		}
 	}()
 	start := time.Now()
-	_, _, st := c.waitLaid(image.Pt(100, 80), image.Pt(200, 160), layoutWait)
-	if took := time.Since(start); st != laid || took < layoutWait-50*time.Millisecond || took > layoutWait+300*time.Millisecond {
-		t.Errorf("state %d after %v, want laid at the %v cap", st, took, layoutWait)
+	_, _, st := c.changeDisplay(200, 160, true, func() { laidSignal(c) })
+	if took := time.Since(start); st != laid || took < settleCap-50*time.Millisecond || took > settleCap+300*time.Millisecond {
+		t.Errorf("state %d after %v, want laid at the %v cap", st, took, settleCap)
+	}
+}
+
+func TestBlank(t *testing.T) {
+	c := newConn()
+	frame(c, 640, 480, [3]byte{}) // stray pixels only
+	if !blank(c.snap, c.snap.Rect) {
+		t.Error("a black screen with stray pixels counts as drawn")
+	}
+	tile(c, 640, 480, image.Rect(0, 0, 100, 100)) // 4% of the area
+	if blank(c.snap, c.snap.Rect) {
+		t.Error("a screen with a tile counts as undrawn")
 	}
 }
 

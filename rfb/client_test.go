@@ -100,7 +100,16 @@ type event struct {
 	n    uint32
 }
 
-type testHandler struct{ ev chan event }
+type testHandler struct {
+	ev   chan event
+	laid chan [2]int // when set, hears DisplayLaid
+}
+
+func (h *testHandler) DisplayLaid(w, hh int) {
+	if h.laid != nil {
+		h.laid <- [2]int{w, hh}
+	}
+}
 
 func (h *testHandler) Resize(w, hh int)          { h.ev <- event{kind: "resize", rect: image.Rect(0, 0, w, hh)} }
 func (h *testHandler) Updated(r image.Rectangle) { h.ev <- event{kind: "updated", rect: r} }
