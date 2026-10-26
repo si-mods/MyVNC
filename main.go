@@ -109,6 +109,7 @@ type app struct {
 	pxScale    float32
 	srvLED     uint32
 	dyn        viewer.Resizer
+	version    string     // the app's version for the home view
 	dynUrgent  bool       // the next size goes at once: a new session, full screen, another monitor
 	dynRefused bool       // the server cannot resize: the session scales to fit instead
 	dynHint    bool       // the session panel says so, until dismissed
@@ -1485,7 +1486,8 @@ func main() {
 		a.log = lg
 		mf.SetLogger(lg)
 	}
-	a.log.Info("starting", "app", appName, "version", mygo.App.Version(), "go", runtime.Version())
+	a.version = mygo.App.Version()
+	a.log.Info("starting", "app", appName, "version", a.version, "go", runtime.Version())
 	start, argErr := a.parseArgs(args)
 	if errors.Is(argErr, params.ErrHelp) {
 		fmt.Print(usage())
