@@ -52,8 +52,14 @@ type Session struct {
 	// OnEncrypted, when set, hears that Encrypted changed, as when ARD
 	// session encryption starts after the first update, on the UI thread.
 	OnEncrypted func(encrypted bool)
-	clip        string // last clipboard text either side sent
-	ptrMask     uint16 // of the last pointer event
+	// OnFrame, when set, makes the session headless: each finished update
+	// goes to it, on Run's goroutine, with the live framebuffer and the
+	// rectangles drawn since the last call (valid only during the call),
+	// and nothing is double-buffered or shown. post must then run its
+	// function at once.
+	OnFrame func(fb *image.RGBA, dirty []image.Rectangle)
+	clip    string // last clipboard text either side sent
+	ptrMask uint16 // of the last pointer event
 
 	c    *rfb.Client
 	post func(func())
@@ -515,6 +521,11 @@ func (s *Session) UpdateDone() {
 				s.OnEncrypted(enc)
 			}
 		})
+	}
+	if s.OnFrame != nil {
+		s.OnFrame(s.c.Framebuffer(), s.dirty)
+		s.dirty, s.resized = s.dirty[:0], false
+		return
 	}
 	if s.mediaShown.Load() {
 		// The stream draws the picture; the framebuffer has no pixels.
