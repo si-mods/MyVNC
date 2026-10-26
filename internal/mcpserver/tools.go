@@ -22,6 +22,7 @@ import (
 type agent struct {
 	readonly bool
 	log      *slog.Logger
+	enabled  func() error // nil in tests: on
 
 	cmu sync.Mutex // serialises connect and disconnect
 	mu  sync.Mutex
@@ -129,6 +130,9 @@ type connectIn struct {
 }
 
 func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectIn) (*mcp.CallToolResult, any, error) {
+	if a.enabled != nil && a.enabled() != nil {
+		return nil, nil, errors.New("mcp_disabled: " + OffMessage)
+	}
 	if in.Host == "" {
 		return nil, nil, errors.New("invalid_argument: host is required")
 	}

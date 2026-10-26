@@ -503,6 +503,48 @@ func (msgs Messages) SendClipboard() string {
 	return Catalog.Format(msgs.locale, "sendClipboard", nil)
 }
 
+// AgentMCP says "Agent (MCP)"
+// in the language the app shows.
+//
+// Settings page title: the MCP server that lets AI agents operate
+// computers.
+func AgentMCP() string { return In(i18n.Locale()).AgentMCP() }
+
+// AgentMCP says "Agent (MCP)"
+// in the language of msgs.
+//
+// Settings page title: the MCP server that lets AI agents operate
+// computers.
+func (msgs Messages) AgentMCP() string {
+	return Catalog.Format(msgs.locale, "agentMCP", nil)
+}
+
+// AllowMCP says "Allow agents to control computers (MCP)"
+// in the language the app shows.
+func AllowMCP() string { return In(i18n.Locale()).AllowMCP() }
+
+// AllowMCP says "Allow agents to control computers (MCP)"
+// in the language of msgs.
+func (msgs Messages) AllowMCP() string {
+	return Catalog.Format(msgs.locale, "allowMCP", nil)
+}
+
+// McpHelp says "Agents that run MyVNC.exe --mcp can see and control every computer MyVNC can connect to: its screen, mouse, keyboard,…"
+// in the language the app shows.
+//
+// Muted help under the MCP switch in Settings; warns what turning it on
+// allows.
+func McpHelp() string { return In(i18n.Locale()).McpHelp() }
+
+// McpHelp says "Agents that run MyVNC.exe --mcp can see and control every computer MyVNC can connect to: its screen, mouse, keyboard,…"
+// in the language of msgs.
+//
+// Muted help under the MCP switch in Settings; warns what turning it on
+// allows.
+func (msgs Messages) McpHelp() string {
+	return Catalog.Format(msgs.locale, "mcpHelp", nil)
+}
+
 // FetchClipboard says "Copy the server's clipboard here"
 // in the language the app shows.
 //

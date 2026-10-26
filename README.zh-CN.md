@@ -51,7 +51,7 @@ MyVNC 是面向 Windows 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看�
   兼容 TigerVNC 命令行选项与 `.tigervnc` 配置文件(完整列表见
   `MyVNC.exe -h`)。
 - AI 代理:`MyVNC.exe --mcp` 以 stdio 运行 MCP 服务,不显示窗口
-  ([docs/MCP.md](docs/MCP.md))。
+  ([docs/MCP.md](docs/MCP.md)),需先在设置中开启。
 - 会话内:悬浮面板查看统计与视频设置;Ctrl+Alt+Del 发送三键;在主页
   卡片上右键可移除。
 

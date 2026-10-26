@@ -464,7 +464,20 @@ func (a *app) settingsCategories() []components.SettingsCategory {
 		ID: "window", Title: locales.Window(), Icon: lucide.AppWindow(),
 		Groups: []components.SettingsGroup{{ID: "layout", Items: windowItems}},
 	}
-	return []components.SettingsCategory{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage}
+	agentPage := components.SettingsCategory{
+		ID: "agent", Title: locales.AgentMCP(), Icon: lucide.Bot(),
+		Groups: []components.SettingsGroup{{ID: "mcp", Items: []components.SettingsItem{
+			{ID: "allow", Title: locales.AllowMCP(), Build: func(c *ui.Context) {
+				if switchChanged(c, &a.cfg.MCPEnabled, locales.AllowMCP(), components.SwitchOptions{HideLabel: true}) {
+					a.saveConfig()
+				}
+			}},
+			{ID: "mcp-help", Build: func(c *ui.Context) {
+				components.Text(c, locales.McpHelp()).TextColor(c.Theme().TextMuted).Wrap()
+			}},
+		}}},
+	}
+	return []components.SettingsCategory{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage, agentPage}
 }
 
 // scrollGutter is the room a scroll's bar takes at its right edge, so

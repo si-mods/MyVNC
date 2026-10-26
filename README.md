@@ -59,7 +59,7 @@ checksummed by CI. No installation of runtimes is required.
   TigerVNC-compatible options and `.tigervnc` files are supported
   (`MyVNC.exe -h` for the list).
 - AI agents: `MyVNC.exe --mcp` runs an MCP server on stdio, with no window
-  ([docs/MCP.md](docs/MCP.md)).
+  ([docs/MCP.md](docs/MCP.md)); off until you turn it on in Settings.
 - In-session: overlay panel for stats and video settings;
   Ctrl+Alt+Del sends Ctrl+Alt+Del; right-click a home card to remove it.
 
