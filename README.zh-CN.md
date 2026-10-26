@@ -50,6 +50,8 @@ MyVNC 是面向 Windows 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看�
 - 命令行:`MyVNC.exe [host[:port]]` 或 `MyVNC.exe rdp://host[:port]`。
   兼容 TigerVNC 命令行选项与 `.tigervnc` 配置文件(完整列表见
   `MyVNC.exe -h`)。
+- AI 代理:`MyVNC.exe --mcp` 以 stdio 运行 MCP 服务,不显示窗口
+  ([docs/MCP.md](docs/MCP.md))。
 - 会话内:悬浮面板查看统计与视频设置;Ctrl+Alt+Del 发送三键;在主页
   卡片上右键可移除。
 
@@ -67,6 +69,7 @@ go tool mygo build   # 构建 exe 与安装包到 build/
 
 | 文档 | 内容 |
 |---|---|
+| [docs/MCP.md](docs/MCP.md) | `MyVNC.exe --mcp`:面向 AI 代理的 MCP 服务 |
 | [docs/rdp.md](docs/rdp.md) | RDP 会话:用法、凭据、限制 |
 | [docs/bandwidth.md](docs/bandwidth.md) | 链路测量、画质策略、服务端配合项 |
 | [docs/ard-drag.md](docs/ard-drag.md) | ARD 拖放与文件传输的实现细节 |

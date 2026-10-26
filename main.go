@@ -29,6 +29,7 @@ import (
 	"github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/si-mods/MyVNC/internal/mcpserver"
 	"github.com/si-mods/MyVNC/internal/mf"
 	"github.com/si-mods/MyVNC/internal/win32"
 	"github.com/si-mods/MyVNC/locales"
@@ -1466,6 +1467,12 @@ func usage() string {
 }
 
 func main() {
+	// --mcp, first: an MCP server on stdio. Nothing of the window, the
+	// settings or the updater is touched.
+	if len(os.Args) > 1 && os.Args[1] == "--mcp" {
+		attachConsole()
+		os.Exit(mcpserver.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	perf, args, perfErr := perfArgs(os.Args[1:])
 	if perfErr != nil {
 		log.Fatal(perfErr)

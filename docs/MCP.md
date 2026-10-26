@@ -1,19 +1,24 @@
-# myvnc-mcp: let an AI agent operate a Mac or VNC desktop
+# MyVNC --mcp: let an AI agent operate a Mac or VNC desktop
 
-`myvnc-mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio.
+`MyVNC.exe --mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio.
 It is the primary way for an agent to operate a Mac or VNC desktop: the
 picture, mouse and keyboard, clipboard and file transfer. It holds one
 long-lived session (Standard mode, no video decoding) and
 serves screenshots straight from the latest framebuffer, so a screenshot
 costs no network round trip.
 
-Build: `go build ./cmd/myvnc-mcp`. It is a console program apart from the
-MyVNC window, because stdout is the MCP channel (logs go to stderr).
+It is the same `MyVNC.exe` as the app, so it updates itself with the app
+(the updater does not run in this mode). With `--mcp` as the first argument
+it opens no window and reads and writes MCP on stdin and stdout; logs go to
+stderr. `MyVNC.exe --mcp --help` prints the options and environment (from a
+terminal it attaches to the parent console). A host named `mcp` still works
+as an ordinary argument, since only the flag `--mcp` switches the mode.
 
-Add it to Claude Code:
+Add it to Claude Code (on Windows the default install directory is
+`%LOCALAPPDATA%\Programs\MyVNC`):
 
 ```
-claude mcp add myvnc -- myvnc-mcp
+claude mcp add myvnc -- "<install dir>\MyVNC.exe" --mcp
 ```
 
 ## Environment
@@ -25,7 +30,7 @@ claude mcp add myvnc -- myvnc-mcp
 | `MYVNC_MCP_FILES_DIR` | The one local directory file transfer may read and write. Unset: `upload` and `download` return `files_disabled`. |
 | `MYVNC_MCP_MAX_FILE_MB` | Size cap of one transfer, default 256. |
 
-With Claude Code: `claude mcp add myvnc -e MYVNC_MCP_PASSWORD=... -- myvnc-mcp`
+With Claude Code: `claude mcp add myvnc -e MYVNC_MCP_PASSWORD=... -- "<install dir>\MyVNC.exe" --mcp`
 (this stores the password in Claude's config; set the variable in the
 environment that starts Claude Code if you prefer).
 
@@ -52,7 +57,7 @@ first-class. Three things to know:
 
   `cua-driver mcp-config --client claude`, run on the Mac, prints the
   command to use. Its agent cursor overlay is drawn on the Mac's screen, so it
-  shows up in `myvnc-mcp` screenshots.
+  shows up in `MyVNC --mcp` screenshots.
 
 ## Tools
 

@@ -58,6 +58,8 @@ checksummed by CI. No installation of runtimes is required.
 - Command line: `MyVNC.exe [host[:port]]` or `MyVNC.exe rdp://host[:port]`.
   TigerVNC-compatible options and `.tigervnc` files are supported
   (`MyVNC.exe -h` for the list).
+- AI agents: `MyVNC.exe --mcp` runs an MCP server on stdio, with no window
+  ([docs/MCP.md](docs/MCP.md)).
 - In-session: overlay panel for stats and video settings;
   Ctrl+Alt+Del sends Ctrl+Alt+Del; right-click a home card to remove it.
 
@@ -75,6 +77,7 @@ go tool mygo build   # build exe + installer into build/
 
 | Doc | Contents |
 |---|---|
+| [docs/MCP.md](docs/MCP.md) | `MyVNC.exe --mcp`: MCP server for AI agents |
 | [docs/rdp.md](docs/rdp.md) | RDP sessions: usage, credentials, limits |
 | [docs/bandwidth.md](docs/bandwidth.md) | Link measurement, quality policy, server-side requirements |
 | [docs/ard-drag.md](docs/ard-drag.md) | ARD drag-and-drop and file transfer internals |
