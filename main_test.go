@@ -883,3 +883,13 @@ func TestWheelPacing(t *testing.T) {
 		t.Errorf("view-only flush sent %v", sent)
 	}
 }
+
+// The home view shows the running version beside the title.
+func TestHomeShowsVersion(t *testing.T) {
+	a := newTestApp(t)
+	a.version = "1.2.3"
+	a.tt.Frame()
+	if !a.tt.HasText("v1.2.3") {
+		t.Errorf("no version on the home view; texts %q", a.tt.Texts())
+	}
+}

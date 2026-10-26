@@ -64,7 +64,12 @@ func (a *app) homeView(c *ui.Context) {
 	ui.Scroll(c).Fill().Children(func() {
 		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32, 32, 32+scrollGutter(t), 32).Gap(24).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, appName).FontSize(28).FontWeight(600).Grow(1)
+				ui.Text(c, appName).FontSize(28).FontWeight(600)
+				if a.version != "" {
+					ui.Text(c, "v"+a.version).TextColor(t.TextMuted).Margin(0, 0, 0, 10).Grow(1)
+				} else {
+					ui.Box(c).Grow(1)
+				}
 				if components.IconButton(c, lucide.Settings(), locales.Settings(), components.IconButtonToolbar).Clicked() {
 					a.openSettings()
 				}
