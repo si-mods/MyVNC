@@ -2,8 +2,6 @@
 
 <img src="docs/assets/banner.png" alt="MyVNC" width="500">
 
-# MyVNC
-
 **A fast VNC / Remote Desktop viewer for Windows, in pure Go.**
 
 English · [简体中文](README.zh-CN.md)
