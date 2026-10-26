@@ -2,8 +2,6 @@
 
 <img src="docs/assets/banner.png" alt="MyVNC" width="500">
 
-# MyVNC
-
 **纯 Go 编写的高速 VNC / 远程桌面查看器,运行于 Windows。**
 
 [English](README.md) · 简体中文
