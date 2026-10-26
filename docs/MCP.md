@@ -38,7 +38,7 @@ environment that starts Claude Code if you prefer).
 ## Input and isolation
 
 The input tools (`click`, `move`, `drag`, `scroll`, `type_text`, `key`) are
-first-class. Three things to know:
+first-class. Two things to know:
 
 - **By default they act on the Mac's shared global pointer and keyboard.**
   They move the real cursor and are shared with anyone at the Mac. That is
@@ -48,17 +48,6 @@ first-class. Three things to know:
   connect as a *different* macOS user (Screen Sharing's "Log In", a separate
   virtual session); the `user` argument of `connect` already selects the
   account. This is being verified and is not yet confirmed: do not rely on it.
-- **Fallback when the agent must not disturb a person** and no separate
-  session is available: cua-driver, which runs on the Mac and sends
-  background input that leaves the user's cursor alone. Register it over ssh:
-
-  ```
-  claude mcp add cua-driver -- ssh -T <host> ~/.local/bin/cua-driver mcp
-  ```
-
-  `cua-driver mcp-config --client claude`, run on the Mac, prints the
-  command to use. Its agent cursor overlay is drawn on the Mac's screen, so it
-  shows up in `MyVNC --mcp` screenshots.
 
 ## Tools
 
