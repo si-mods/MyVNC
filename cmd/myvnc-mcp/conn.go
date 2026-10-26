@@ -34,7 +34,10 @@ type conn struct {
 	clip    string
 	clipCh  chan struct{} // a token when the server's clipboard text came
 	laidCh  chan struct{} // a token when a Mac answered a display change
-	refused int           // SetDesktopSize refusals
+	user    string
+	xf      *viewer.Transfers // file transfers; used under mu
+	xfCh    chan struct{}     // a token when a transfer changed
+	refused int               // SetDesktopSize refusals
 
 	fm    sync.Mutex
 	snap  *image.RGBA // the whole framebuffer, copied from the read goroutine
@@ -63,7 +66,7 @@ var (
 
 func newConn() *conn {
 	return &conn{
-		done: make(chan struct{}), clipCh: make(chan struct{}, 1), laidCh: make(chan struct{}, 1),
+		done: make(chan struct{}), clipCh: make(chan struct{}, 1), laidCh: make(chan struct{}, 1), xfCh: make(chan struct{}, 1),
 		ready: make(chan struct{}), tick: make(chan struct{}),
 	}
 }
@@ -297,7 +300,14 @@ func dial(addr, user, pass string, types []uint32, log *slog.Logger) (*conn, err
 		return e == rfb.EncodingH264 || e == rfb.EncodingAV1
 	})
 	c := newConn()
-	c.cancel = cancel
+	c.cancel, c.user = cancel, user
+	c.xf = viewer.NewTransfers(c.post)
+	c.xf.OnChange = func() {
+		select {
+		case c.xfCh <- struct{}{}:
+		default:
+		}
+	}
 	opt := rfb.Options{
 		Username:      user,
 		Shared:        true,

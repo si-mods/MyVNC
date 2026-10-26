@@ -24,11 +24,15 @@ Environment:
   MYVNC_MCP_PASSWORD   password for the server; the only way to give it
                        (never a tool argument, never logged)
   MYVNC_MCP_READONLY=1 turn off click, move, drag, scroll, type_text, key,
-                       clipboard_set and set_display; screenshot, status
-                       and clipboard_get still work
+                       clipboard_set, set_display, upload and download;
+                       screenshot, status and clipboard_get still work
+  MYVNC_MCP_FILES_DIR  the one local directory upload and download may use
+                       (unset: both are disabled)
+  MYVNC_MCP_MAX_FILE_MB size cap of one file transfer (default 256)
 
 Tools: connect, disconnect, status, screenshot, click, move, drag, scroll,
-type_text, key, clipboard_get, clipboard_set, set_display. Coordinates are
+type_text, key, clipboard_get, clipboard_set, set_display, upload,
+download. Coordinates are
 framebuffer pixels. There is no listening socket; see docs/MCP.md.
 `
 

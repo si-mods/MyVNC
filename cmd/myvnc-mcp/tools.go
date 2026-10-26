@@ -84,15 +84,25 @@ func newServer(a *agent) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "screenshot", Description: "Image of the latest frame, served from memory without a round trip. " +
 		"scale (0-1, default 0.5) shrinks it; region {x,y,w,h} in framebuffer pixels crops first. The text result gives the framebuffer size, the region and the scale: " +
 		"a point (px,py) of the image is framebuffer (region.x+px/scale, region.y+py/scale). A screenshot taken right after input may still show the old screen."}, a.screenshot)
-	mcp.AddTool(s, &mcp.Tool{Name: "click", Description: "Click at framebuffer pixel x,y. button: left (default), right or middle. double: click twice."}, a.click)
-	mcp.AddTool(s, &mcp.Tool{Name: "move", Description: "Move the pointer to framebuffer pixel x,y."}, a.move)
-	mcp.AddTool(s, &mcp.Tool{Name: "drag", Description: "Press the left button at x1,y1, move to x2,y2 and release (framebuffer pixels)."}, a.drag)
-	mcp.AddTool(s, &mcp.Tool{Name: "scroll", Description: "Scroll at framebuffer pixel x,y. dy > 0 scrolls down, dy < 0 up; dx > 0 right, dx < 0 left; in wheel clicks (at most 50)."}, a.scroll)
-	mcp.AddTool(s, &mcp.Tool{Name: "type_text", Description: "Type text as key presses, one key per character; non-ASCII included. Newline is Return, tab is Tab. At most 10000 characters."}, a.typeText)
+	mcp.AddTool(s, &mcp.Tool{Name: "click", Description: "Click at framebuffer pixel x,y. button: left (default), right or middle. double: click twice." +
+		" Acts on the Mac's shared global pointer and keyboard: it moves the real cursor and is shared with anyone at the Mac."}, a.click)
+	mcp.AddTool(s, &mcp.Tool{Name: "move", Description: "Move the pointer to framebuffer pixel x,y." +
+		" Acts on the Mac's shared global pointer and keyboard: it moves the real cursor and is shared with anyone at the Mac."}, a.move)
+	mcp.AddTool(s, &mcp.Tool{Name: "drag", Description: "Press the left button at x1,y1, move to x2,y2 and release (framebuffer pixels)." +
+		" Acts on the Mac's shared global pointer and keyboard: it moves the real cursor and is shared with anyone at the Mac."}, a.drag)
+	mcp.AddTool(s, &mcp.Tool{Name: "scroll", Description: "Scroll at framebuffer pixel x,y. dy > 0 scrolls down, dy < 0 up; dx > 0 right, dx < 0 left; in wheel clicks (at most 50)." +
+		" Acts on the Mac's shared global pointer and keyboard: it moves the real cursor and is shared with anyone at the Mac."}, a.scroll)
+	mcp.AddTool(s, &mcp.Tool{Name: "type_text", Description: "Type text as key presses, one key per character; non-ASCII included. Newline is Return, tab is Tab. At most 10000 characters." +
+		" Acts on the Mac's shared global pointer and keyboard: it moves the real cursor and is shared with anyone at the Mac."}, a.typeText)
 	mcp.AddTool(s, &mcp.Tool{Name: "key", Description: "Press a key or combo, modifiers joined by +: \"Return\", \"ctrl+alt+Delete\", \"cmd+space\", \"shift+Tab\", \"F5\". " +
-		"Modifiers: ctrl, alt (Option), shift, cmd (Command, also super/win/meta). Keys: a single character, Return, Escape, Tab, space, BackSpace, Delete, Home, End, PageUp, PageDown, Up, Down, Left, Right, F1-F24; \"plus\" is +."}, a.key)
+		"Modifiers: ctrl, alt (Option), shift, cmd (Command, also super/win/meta). Keys: a single character, Return, Escape, Tab, space, BackSpace, Delete, Home, End, PageUp, PageDown, Up, Down, Left, Right, F1-F24; \"plus\" is +." +
+		" Acts on the Mac's shared global pointer and keyboard: it moves the real cursor and is shared with anyone at the Mac."}, a.key)
 	mcp.AddTool(s, &mcp.Tool{Name: "clipboard_get", Description: "The remote clipboard text. If the server does not send it within 1 s, the last text seen (possibly empty) is returned and marked stale."}, a.clipboardGet)
 	mcp.AddTool(s, &mcp.Tool{Name: "clipboard_set", Description: "Set the remote clipboard text; paste it with key cmd+v or ctrl+v."}, a.clipboardSet)
+	mcp.AddTool(s, &mcp.Tool{Name: "upload", Description: "Send a file or folder to the Mac (ARD only). local_path is relative to the one local directory MYVNC_MCP_FILES_DIR (files_disabled if unset); " +
+		"remote_dir is an absolute folder on the Mac, default the user's Downloads. A name the Mac already has is stored as \"name 2.ext\"; the result lists the final remote paths. Limited by MYVNC_MCP_MAX_FILE_MB. Disabled in read-only mode."}, a.upload)
+	mcp.AddTool(s, &mcp.Tool{Name: "download", Description: "Fetch a file or folder from the Mac (ARD only) into MYVNC_MCP_FILES_DIR (files_disabled if unset). remote_path is absolute on the Mac; local_dir an existing folder inside the files directory. " +
+		"An existing local name is never overwritten: the new copy gets \"name (2)\". Limited by MYVNC_MCP_MAX_FILE_MB. Disabled in read-only mode, since it can read any file the Mac user can."}, a.download)
 	mcp.AddTool(s, &mcp.Tool{Name: "set_display", Description: "Ask for a desktop of width x height pixels (a Mac virtual display at density 1 or 2 pixels a point, default 1; otherwise a server resize). " +
 		"Reports the new framebuffer size, or that the server refused."}, a.setDisplay)
 	return s

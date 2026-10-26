@@ -1,7 +1,9 @@
 # myvnc-mcp: let an AI agent operate a Mac or VNC desktop
 
 `myvnc-mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio.
-It holds one long-lived session (Standard mode, no video decoding) and
+It is the primary way for an agent to operate a Mac or VNC desktop: the
+picture, mouse and keyboard, clipboard and file transfer. It holds one
+long-lived session (Standard mode, no video decoding) and
 serves screenshots straight from the latest framebuffer, so a screenshot
 costs no network round trip.
 
@@ -19,11 +21,38 @@ claude mcp add myvnc -- myvnc-mcp
 | Variable | Meaning |
 | --- | --- |
 | `MYVNC_MCP_PASSWORD` | The server password. The only way to give it: it is never a tool argument and never logged. |
-| `MYVNC_MCP_READONLY=1` | `click`, `move`, `drag`, `scroll`, `type_text`, `key`, `clipboard_set` and `set_display` return an error. `connect`, `screenshot`, `status` and `clipboard_get` still work. |
+| `MYVNC_MCP_READONLY=1` | `click`, `move`, `drag`, `scroll`, `type_text`, `key`, `clipboard_set`, `set_display`, `upload` and `download` return an error. `connect`, `screenshot`, `status` and `clipboard_get` still work. |
+| `MYVNC_MCP_FILES_DIR` | The one local directory file transfer may read and write. Unset: `upload` and `download` return `files_disabled`. |
+| `MYVNC_MCP_MAX_FILE_MB` | Size cap of one transfer, default 256. |
 
 With Claude Code: `claude mcp add myvnc -e MYVNC_MCP_PASSWORD=... -- myvnc-mcp`
 (this stores the password in Claude's config; set the variable in the
 environment that starts Claude Code if you prefer).
+
+## Input and isolation
+
+The input tools (`click`, `move`, `drag`, `scroll`, `type_text`, `key`) are
+first-class. Three things to know:
+
+- **By default they act on the Mac's shared global pointer and keyboard.**
+  They move the real cursor and are shared with anyone at the Mac. That is
+  the honest limit when the agent connects as the **same macOS user** as the
+  person at the console.
+- **Isolation over pure VNC is planned, not confirmed.** The idea is to
+  connect as a *different* macOS user (Screen Sharing's "Log In", a separate
+  virtual session); the `user` argument of `connect` already selects the
+  account. This is being verified and is not yet confirmed: do not rely on it.
+- **Fallback when the agent must not disturb a person** and no separate
+  session is available: cua-driver, which runs on the Mac and sends
+  background input that leaves the user's cursor alone. Register it over ssh:
+
+  ```
+  claude mcp add cua-driver -- ssh -T <host> ~/.local/bin/cua-driver mcp
+  ```
+
+  `cua-driver mcp-config --client claude`, run on the Mac, prints the
+  command to use. Its agent cursor overlay is drawn on the Mac's screen, so it
+  shows up in `myvnc-mcp` screenshots.
 
 ## Tools
 
@@ -46,6 +75,8 @@ a point (px, py) of the image is framebuffer `region origin + (px, py) / scale`.
 | `clipboard_get` | |
 | `clipboard_set` | `text` |
 | `set_display` | `width`, `height`, `density` (1 or 2) |
+| `upload` | `local_path` (inside `MYVNC_MCP_FILES_DIR`), `remote_dir` (absolute, default the user's Downloads) |
+| `download` | `remote_path` (absolute), `local_dir` (existing folder inside `MYVNC_MCP_FILES_DIR`) |
 
 `connect` replaces any existing session. On a Mac (ARD) it asks for a
 virtual 1920x1080 display (on a Mac mini it shows up as "Screen Sharing
@@ -59,12 +90,33 @@ is almost all black (under 2% of sampled points lit), or updated in the
 last 300 ms, waits up to 2 s for it to fill and go quiet, then returns what
 it has.
 
-**Input is not isolated.** Only the picture is separate. The pointer and
-keyboard are the Mac's one global pair, shared with the physical session: a
-`move` moves the cursor of anyone using that Mac, to the same coordinates,
-and leaves it there after `disconnect`. Do not run the agent on a Mac while
-a person is working on it. Modifiers for `key` are `ctrl`, `alt` (Option), `shift`
+Only the picture of the virtual display is separate. With the same macOS
+user, the pointer and keyboard are the Mac's one global pair: a `move` moves
+the cursor of anyone using that Mac, to the same coordinates, and leaves it
+there after `disconnect`. Do not run the agent on a Mac while a person is
+working on it unless you use one of the options above. Modifiers for `key` are `ctrl`, `alt` (Option), `shift`
 and `cmd` (Command); a Mac reads Super as Command.
+
+## File transfer
+
+`upload` and `download` need a Mac (ARD) session with encryption up;
+anything else returns `not_supported`. The local side is confined to the one
+directory `MYVNC_MCP_FILES_DIR` (its symlinks are resolved): paths are
+relative to it, `..` is refused, and so is any path whose real location is
+outside it, including through symlinks. With the variable unset the tools
+return `files_disabled`. A transfer over `MYVNC_MCP_MAX_FILE_MB` (default
+256) is refused or canceled with `too_large`.
+
+- `upload` returns the final remote path of each file; the Mac cannot
+  overwrite, so a taken name is stored as `name 2.ext` and marked `renamed`.
+  Symlinks inside an uploaded folder are skipped.
+- `download` never overwrites a local file: a clash keeps both, the new
+  copy as `name (2)`. It returns local paths relative to the files directory.
+- Both are blocked by `MYVNC_MCP_READONLY=1`. An upload changes the Mac, and
+  a download can read any file the Mac user can, which is more than looking
+  at the screen.
+- Paths are not logged. The size of a download is known only as it streams,
+  so the cap cancels it once the Mac reports a size over it.
 
 A screenshot taken right after input may still show the old screen; the
 `frame age` in its text says how old the picture is.
