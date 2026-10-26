@@ -21,6 +21,21 @@ Add it to Claude Code (on Windows the default install directory is
 claude mcp add myvnc -- "<install dir>\MyVNC.exe" --mcp
 ```
 
+## Turning it on
+
+MCP is off by default. Turn it on in MyVNC under Settings -> Agent (MCP)
+("Allow agents to control computers (MCP)"). It sets `MCPEnabled` in
+`config.json`, in the app's user-data directory (`%APPDATA%\MyVNC` on
+Windows). An agent that can run `MyVNC.exe --mcp` can then see and control
+every computer MyVNC can connect to.
+
+While it is off, `MyVNC.exe --mcp` prints "MyVNC MCP is turned off. Turn it on
+in MyVNC Settings -> Agent (MCP), then restart the MCP client." to stderr,
+writes nothing to stdout and exits with code 3. `--mcp --help` still works.
+The switch is read again at each `connect`: turning it off in Settings makes a
+running server refuse new connections with `mcp_disabled`. A session that is
+already open stays open until `disconnect`.
+
 ## Environment
 
 | Variable | Meaning |

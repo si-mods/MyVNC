@@ -1471,7 +1471,8 @@ func main() {
 	// settings or the updater is touched.
 	if len(os.Args) > 1 && os.Args[1] == "--mcp" {
 		attachConsole()
-		os.Exit(mcpserver.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+		os.Exit(mcpserver.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr,
+			mcpserver.ConfigGate(func() (string, error) { return mygo.App.Path(mygo.PathUserData) })))
 	}
 	perf, args, perfErr := perfArgs(os.Args[1:])
 	if perfErr != nil {
