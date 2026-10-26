@@ -3,6 +3,15 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.33
+
+- New: `MyVNC.exe --mcp` runs an MCP server on stdio so an agent can see and operate a Mac
+  (ARD) or VNC desktop: screenshots, mouse and keyboard, clipboard, display size and file
+  transfer. It opens no window and needs no extra program. The password comes from
+  `MYVNC_MCP_PASSWORD`, `MYVNC_MCP_READONLY=1` blocks every input tool, and file transfer is
+  confined to `MYVNC_MCP_FILES_DIR`. The pointer and keyboard are shared with anyone using that
+  Mac. See `docs/MCP.md`.
+
 ## 0.0.32
 
 - The home view now shows the app version next to the title.
