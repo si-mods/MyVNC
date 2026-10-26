@@ -3,6 +3,13 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.31
+
+- Fixed the session panel's switches doing nothing when clicked (#73): full screen,
+  dynamic resolution, view only and the three that save settings never reacted, because
+  `Changed()` on the row `components.Switch` returns never reports a toggle. They now
+  compare the value before and after. Thanks to @3in1sl (#74).
+
 ## 0.0.30
 
 - Fixed High Performance freezing a few frames in: absorbing the first RTCP sender
