@@ -58,7 +58,12 @@ func (a *agent) input(tool string) (*conn, error) {
 	if a.readonly {
 		return nil, fmt.Errorf("read_only: %s is disabled because MYVNC_MCP_READONLY is set", tool)
 	}
-	return a.session()
+	c, err := a.session()
+	if err != nil {
+		return nil, err
+	}
+	c.waitInput() // never report ok for input the Mac would drop
+	return c, nil
 }
 
 // point checks that x, y is a framebuffer pixel.
@@ -77,7 +82,9 @@ func newServer(a *agent) *mcp.Server {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "connect", Description: "Connect to a VNC or Mac Screen Sharing (ARD) server, replacing any current session. " +
 		"The password is read from the environment variable MYVNC_MCP_PASSWORD only. On an ARD server it also asks for a virtual display " +
-		"(1920x1080), a separate screen for your pictures, and waits up to 20 s for the Mac to draw it (a warning line says if it has not). " +
+		"(1920x1080), a separate screen for your pictures, and waits up to 20 s for the Mac to draw it (a warning line says if it has not) and a few seconds more until the Mac accepts input, so connect returns when input works. " +
+		"The default virtual display is the recommended mode: virtual_display:false mirrors the main display, which is unreliable on macOS 27 (only the menu bar may update, the desktop stays black). " +
+		"Close other viewers of the same Mac first: a second High Performance viewer (such as the MyVNC window) turns this picture black and makes set_display time out. " +
 		"Input is NOT isolated: the pointer and keyboard are the Mac's one global pair, shared with anyone using that Mac, and the pointer stays where you left it."}, a.connect)
 	mcp.AddTool(s, &mcp.Tool{Name: "disconnect", Description: "Close the current session."}, a.disconnect)
 	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "Connection state: connected, framebuffer size, server name, encryption, security type and age of the last frame."}, a.status)
@@ -151,6 +158,7 @@ func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectI
 	if c.s.SecurityType() == rfb.SecTypeDH && (in.Virtual == nil || *in.Virtual) && !a.readonly {
 		_, _, st := c.setDisplay(1920, 1080, 1)
 		note = layoutNote(st)
+		c.waitInput()
 	}
 	w, h := c.size()
 	return text(fmt.Sprintf("connected: %dx%d, %s, encrypted=%v%s", w, h,
@@ -531,6 +539,7 @@ func (a *agent) setDisplay(_ context.Context, _ *mcp.CallToolRequest, in display
 		return nil, nil, errors.New("invalid_argument: width 320-8192, height 200-8192, density 1 or 2")
 	}
 	w, h, st := c.setDisplay(in.Width, in.Height, in.Density)
+	c.waitInput()
 	switch st {
 	case laid:
 		return text(fmt.Sprintf("framebuffer is now %dx%d", w, h))

@@ -29,6 +29,7 @@ claude mcp add myvnc -- "<install dir>\MyVNC.exe" --mcp
 | `MYVNC_MCP_READONLY=1` | `click`, `move`, `drag`, `scroll`, `type_text`, `key`, `clipboard_set`, `set_display`, `upload` and `download` return an error. `connect`, `screenshot`, `status` and `clipboard_get` still work. |
 | `MYVNC_MCP_FILES_DIR` | The one local directory file transfer may read and write. Unset: `upload` and `download` return `files_disabled`. |
 | `MYVNC_MCP_MAX_FILE_MB` | Size cap of one transfer, default 256. |
+| `MYVNC_MCP_INPUT_READY_MS` | How long after a virtual display is drawn input waits, default 5000 (see below). |
 
 With Claude Code: `claude mcp add myvnc -e MYVNC_MCP_PASSWORD=... -- "<install dir>\MyVNC.exe" --mcp`
 (this stores the password in Claude's config; set the variable in the
@@ -94,6 +95,22 @@ displays, or refuses, ends the wait at once. A screenshot of a picture that
 is almost all black (under 2% of sampled points lit), or updated in the
 last 300 ms, waits up to 2 s for it to fill and go quiet, then returns what
 it has.
+
+**Input readiness.** A Mac silently drops remote input for some seconds after
+it lays out a virtual display (measured: input at +0 s and +2 s was lost, at
++4 s it worked). No reliable signal says when it starts to listen, so
+`connect` and `set_display` wait `MYVNC_MCP_INPUT_READY_MS` (default 5 s)
+after the picture has settled, and `connect` returns when the Mac accepts
+input. An input tool called before that time waits for the rest of it
+instead of reporting ok for events that would be dropped. Servers without
+virtual displays, and `virtual_display:false`, need no wait.
+
+**Mirror mode and other viewers.** The default virtual display is the
+recommended mode. `virtual_display:false` mirrors the main display, which is
+unreliable on macOS 27: on a macOS 27.2 Mac only the menu bar updated and the
+desktop below stayed black in Standard encoding. Also close other viewers of
+the same Mac first: a concurrent High Performance viewer, such as the MyVNC
+window, turns this picture black and makes `set_display` time out.
 
 Only the picture of the virtual display is separate. With the same macOS
 user, the pointer and keyboard are the Mac's one global pair: a `move` moves

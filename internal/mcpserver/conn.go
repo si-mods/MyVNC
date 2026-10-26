@@ -7,6 +7,7 @@ import (
 	"image"
 	"log/slog"
 	"net"
+	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -35,6 +36,8 @@ type conn struct {
 	clipCh  chan struct{} // a token when the server's clipboard text came
 	laidCh  chan struct{} // a token when a Mac answered a display change
 	user    string
+	gm      sync.Mutex
+	gate    chan struct{}     // closed while the Mac takes input
 	xf      *viewer.Transfers // file transfers; used under mu
 	xfCh    chan struct{}     // a token when a transfer changed
 	refused int               // SetDesktopSize refusals
@@ -56,6 +59,10 @@ var (
 	shotWait = 2 * time.Second
 	// settleCap bounds the wait for a quiet framebuffer after the answer.
 	settleCap = 5 * time.Second
+	// inputReady is how long after a virtual display is drawn the Mac takes
+	// remote input; sooner, it drops the events without a word (measured:
+	// not at 0 or 2 s, yes at 4 s). MYVNC_MCP_INPUT_READY_MS overrides.
+	inputReady = envDuration("MYVNC_MCP_INPUT_READY_MS", 5*time.Second)
 	// settleWait is how long the framebuffer must be quiet before connect
 	// takes a virtual display as drawn: the Mac paints it in tiles.
 	settleWait = 500 * time.Millisecond
@@ -64,9 +71,19 @@ var (
 	shotQuiet = 300 * time.Millisecond
 )
 
+// envDuration reads a number of milliseconds from the environment.
+func envDuration(name string, def time.Duration) time.Duration {
+	if n, err := strconv.Atoi(os.Getenv(name)); err == nil && n >= 0 {
+		return time.Duration(n) * time.Millisecond
+	}
+	return def
+}
+
 func newConn() *conn {
+	open := make(chan struct{})
+	close(open)
 	return &conn{
-		done: make(chan struct{}), clipCh: make(chan struct{}, 1), laidCh: make(chan struct{}, 1), xfCh: make(chan struct{}, 1),
+		gate: open, done: make(chan struct{}), clipCh: make(chan struct{}, 1), laidCh: make(chan struct{}, 1), xfCh: make(chan struct{}, 1),
 		ready: make(chan struct{}), tick: make(chan struct{}),
 	}
 }
@@ -111,6 +128,36 @@ func (c *conn) setDisplay(w, h, density int) (int, int, int) {
 // settleCap. A server without virtual displays has no answer to wait for:
 // it is the new size, or its refusal, that ends the first wait.
 func (c *conn) changeDisplay(w, h int, need bool, ask func()) (rw, rh, state int) {
+	if !need {
+		return c.changeDisplayWait(w, h, need, ask)
+	}
+	// A Mac drops remote input for a while after it lays out a display:
+	// input waits at the gate until inputReady after the picture settles.
+	g := make(chan struct{})
+	c.gm.Lock()
+	c.gate = g
+	c.gm.Unlock()
+	rw, rh, state = c.changeDisplayWait(w, h, need, ask)
+	d := inputReady
+	if state == refusedSize || state == ended {
+		d = 0 // nothing was laid out
+	}
+	time.AfterFunc(d, func() { close(g) })
+	return rw, rh, state
+}
+
+// waitInput waits until the Mac takes input, or the session ends.
+func (c *conn) waitInput() {
+	c.gm.Lock()
+	g := c.gate
+	c.gm.Unlock()
+	select {
+	case <-g:
+	case <-c.done:
+	}
+}
+
+func (c *conn) changeDisplayWait(w, h int, need bool, ask func()) (rw, rh, state int) {
 	from := image.Pt(c.size())
 	select { // an answer to an older request
 	case <-c.laidCh:
