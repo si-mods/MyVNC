@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 // Package mcpserver is the MCP server of "MyVNC --mcp": it lets an AI agent
 // see and operate a Mac (ARD) or VNC desktop over stdio. out is the MCP
 // channel and carries nothing else; logs go to the error writer.

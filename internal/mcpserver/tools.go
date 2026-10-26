@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package mcpserver
 
 import (
@@ -21,6 +23,7 @@ type agent struct {
 	readonly bool
 	log      *slog.Logger
 
+	cmu sync.Mutex // serialises connect and disconnect
 	mu  sync.Mutex
 	cur *conn
 }
@@ -54,7 +57,7 @@ func (a *agent) session() (*conn, error) {
 
 // input returns the live session for a tool that sends input, which
 // read-only mode forbids.
-func (a *agent) input(tool string) (*conn, error) {
+func (a *agent) input(ctx context.Context, tool string) (*conn, error) {
 	if a.readonly {
 		return nil, fmt.Errorf("read_only: %s is disabled because MYVNC_MCP_READONLY is set", tool)
 	}
@@ -62,7 +65,9 @@ func (a *agent) input(tool string) (*conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.waitInput() // never report ok for input the Mac would drop
+	if err := c.waitInput(ctx); err != nil { // never report ok for input the Mac would drop
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -137,6 +142,8 @@ func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectI
 	if err != nil {
 		return nil, nil, err
 	}
+	a.cmu.Lock()
+	defer a.cmu.Unlock()
 	a.mu.Lock()
 	old := a.cur
 	a.cur = nil
@@ -158,7 +165,9 @@ func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectI
 	if c.s.SecurityType() == rfb.SecTypeDH && (in.Virtual == nil || *in.Virtual) && !a.readonly {
 		_, _, st := c.setDisplay(1920, 1080, 1)
 		note = layoutNote(st)
-		c.waitInput()
+		if err := c.waitInput(ctx); err != nil {
+			return nil, nil, err
+		}
 	}
 	w, h := c.size()
 	return text(fmt.Sprintf("connected: %dx%d, %s, encrypted=%v%s", w, h,
@@ -166,7 +175,7 @@ func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectI
 }
 
 // layoutNote says how a virtual display request ended.
-func layoutNote(st int) string {
+func layoutNote(st layoutState) string {
 	switch st {
 	case laid:
 		return "; virtual display ready"
@@ -177,6 +186,8 @@ func layoutNote(st int) string {
 }
 
 func (a *agent) disconnect(context.Context, *mcp.CallToolRequest, none) (*mcp.CallToolResult, any, error) {
+	a.cmu.Lock()
+	defer a.cmu.Unlock()
 	a.mu.Lock()
 	c := a.cur
 	a.cur = nil
@@ -300,8 +311,8 @@ const (
 	btnRight  = 4
 )
 
-func (a *agent) click(_ context.Context, _ *mcp.CallToolRequest, in clickIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("click")
+func (a *agent) click(ctx context.Context, _ *mcp.CallToolRequest, in clickIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "click")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -341,8 +352,8 @@ type pointIn struct {
 	Y int `json:"y" jsonschema:"framebuffer pixel y"`
 }
 
-func (a *agent) move(_ context.Context, _ *mcp.CallToolRequest, in pointIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("move")
+func (a *agent) move(ctx context.Context, _ *mcp.CallToolRequest, in pointIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "move")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -363,8 +374,8 @@ type dragIn struct {
 // dragSteps is how many moves a drag takes, so that the target sees a path.
 const dragSteps = 8
 
-func (a *agent) drag(_ context.Context, _ *mcp.CallToolRequest, in dragIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("drag")
+func (a *agent) drag(ctx context.Context, _ *mcp.CallToolRequest, in dragIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "drag")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -399,8 +410,8 @@ const (
 	wheelRight = 64
 )
 
-func (a *agent) scroll(_ context.Context, _ *mcp.CallToolRequest, in scrollIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("scroll")
+func (a *agent) scroll(ctx context.Context, _ *mcp.CallToolRequest, in scrollIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "scroll")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -459,8 +470,8 @@ type textIn struct {
 	Text string `json:"text"`
 }
 
-func (a *agent) typeText(_ context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("type_text")
+func (a *agent) typeText(ctx context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "type_text")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -475,8 +486,8 @@ type keyIn struct {
 	Combo string `json:"combo" jsonschema:"for example Return, ctrl+alt+Delete, cmd+space"`
 }
 
-func (a *agent) key(_ context.Context, _ *mcp.CallToolRequest, in keyIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("key")
+func (a *agent) key(ctx context.Context, _ *mcp.CallToolRequest, in keyIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "key")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -512,8 +523,8 @@ func (a *agent) clipboardGet(context.Context, *mcp.CallToolRequest, none) (*mcp.
 	return jsonText(map[string]any{"text": clip, "stale": stale})
 }
 
-func (a *agent) clipboardSet(_ context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("clipboard_set")
+func (a *agent) clipboardSet(ctx context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "clipboard_set")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -527,8 +538,8 @@ type displayIn struct {
 	Density int `json:"density,omitempty" jsonschema:"pixels a point on a Mac, 1 (default) or 2"`
 }
 
-func (a *agent) setDisplay(_ context.Context, _ *mcp.CallToolRequest, in displayIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.input("set_display")
+func (a *agent) setDisplay(ctx context.Context, _ *mcp.CallToolRequest, in displayIn) (*mcp.CallToolResult, any, error) {
+	c, err := a.input(ctx, "set_display")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -539,7 +550,9 @@ func (a *agent) setDisplay(_ context.Context, _ *mcp.CallToolRequest, in display
 		return nil, nil, errors.New("invalid_argument: width 320-8192, height 200-8192, density 1 or 2")
 	}
 	w, h, st := c.setDisplay(in.Width, in.Height, in.Density)
-	c.waitInput()
+	if err := c.waitInput(ctx); err != nil {
+		return nil, nil, err
+	}
 	switch st {
 	case laid:
 		return text(fmt.Sprintf("framebuffer is now %dx%d", w, h))

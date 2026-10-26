@@ -93,6 +93,10 @@ after the picture has settled, and `connect` returns when the Mac accepts
 input. An input tool called before that time waits for the rest of it
 instead of reporting ok for events that would be dropped. Servers without
 virtual displays, and `virtual_display:false`, need no wait.
+If the Mac never answers the layout request (the 20 s timeout), `connect`
+still succeeds with a "not laid out yet" warning and the same wait applies,
+but after a timeout the Mac may still drop input until it finishes laying
+out the display: check with `screenshot`.
 
 **Mirror mode and other viewers.** The default virtual display is the
 recommended mode. `virtual_display:false` mirrors the main display, which is

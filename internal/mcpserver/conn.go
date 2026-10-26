@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package mcpserver
 
 import (
@@ -106,8 +108,10 @@ func blank(fb *image.RGBA, r image.Rectangle) bool {
 }
 
 // Outcomes of changeDisplay.
+type layoutState int
+
 const (
-	laid = iota
+	laid layoutState = iota
 	refusedSize
 	timedOut
 	ended
@@ -115,7 +119,7 @@ const (
 
 // setDisplay asks the session for a w×h desktop at density; see
 // changeDisplay.
-func (c *conn) setDisplay(w, h, density int) (int, int, int) {
+func (c *conn) setDisplay(w, h, density int) (int, int, layoutState) {
 	return c.changeDisplay(w, h, c.s.DisplayConfigurationAvailable(), func() {
 		c.do(func(s *viewer.Session) { s.SetDesktopSize(w, h, density) })
 	})
@@ -127,7 +131,7 @@ func (c *conn) setDisplay(w, h, density int) (int, int, int) {
 // layoutWait (timedOut if none), and then for a quiet framebuffer, for up to
 // settleCap. A server without virtual displays has no answer to wait for:
 // it is the new size, or its refusal, that ends the first wait.
-func (c *conn) changeDisplay(w, h int, need bool, ask func()) (rw, rh, state int) {
+func (c *conn) changeDisplay(w, h int, need bool, ask func()) (rw, rh int, state layoutState) {
 	if !need {
 		return c.changeDisplayWait(w, h, need, ask)
 	}
@@ -146,18 +150,24 @@ func (c *conn) changeDisplay(w, h int, need bool, ask func()) (rw, rh, state int
 	return rw, rh, state
 }
 
-// waitInput waits until the Mac takes input, or the session ends.
-func (c *conn) waitInput() {
+// waitInput waits until the Mac takes input, or the session ends, or ctx
+// is done (its error is returned then).
+func (c *conn) waitInput(ctx context.Context) error {
 	c.gm.Lock()
 	g := c.gate
 	c.gm.Unlock()
 	select {
 	case <-g:
 	case <-c.done:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+	return nil
 }
 
-func (c *conn) changeDisplayWait(w, h int, need bool, ask func()) (rw, rh, state int) {
+// changeDisplayWait asks with ask and waits for the answer and the settle, as
+// changeDisplay says, without touching the input gate.
+func (c *conn) changeDisplayWait(w, h int, need bool, ask func()) (rw, rh int, state layoutState) {
 	from := image.Pt(c.size())
 	select { // an answer to an older request
 	case <-c.laidCh:

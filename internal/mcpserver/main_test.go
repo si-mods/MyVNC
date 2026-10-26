@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package mcpserver
 
 import (
@@ -12,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -105,18 +108,23 @@ func TestRegionAndScale(t *testing.T) {
 // fakeVNC speaks RFB 3.8 with security None and a w×h red screen, and
 // reports the client's input as "key SYM down", "ptr MASK X Y", "cut TEXT".
 func fakeVNC(t *testing.T, w, h int) (port int, events chan string) {
+	port, events, _ = fakeVNCLive(t, w, h)
+	return port, events
+}
+
+// fakeVNCLive is fakeVNC for any number of clients; live counts those
+// still connected.
+func fakeVNCLive(t *testing.T, w, h int) (port int, events chan string, live *atomic.Int32) {
 	t.Helper()
+	live = new(atomic.Int32)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
 	events = make(chan string, 1000)
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
+	serve := func(conn net.Conn) {
+		defer live.Add(-1)
 		defer conn.Close()
 		defer func() { recover() }() // the client hung up
 		read := func(n int) []byte {
@@ -173,8 +181,18 @@ func fakeVNC(t *testing.T, w, h int) (port int, events chan string) {
 				return
 			}
 		}
+	}
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			live.Add(1)
+			go serve(conn)
+		}
 	}()
-	return l.Addr().(*net.TCPAddr).Port, events
+	return l.Addr().(*net.TCPAddr).Port, events, live
 }
 
 // mcpClient runs the server in memory and returns a client session on it.

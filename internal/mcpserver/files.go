@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package mcpserver
 
 import (
@@ -148,8 +150,8 @@ func runTransfer(ctx context.Context, c *conn, limit int64, start func(*viewer.T
 // download are both blocked in read-only mode: an upload changes the Mac,
 // and a download reads any file the Mac user can, which is more than
 // looking at the screen.
-func (a *agent) fileSession(tool string) (*conn, error) {
-	c, err := a.input(tool)
+func (a *agent) fileSession(ctx context.Context, tool string) (*conn, error) {
+	c, err := a.input(ctx, tool)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +167,7 @@ type uploadIn struct {
 }
 
 func (a *agent) upload(ctx context.Context, _ *mcp.CallToolRequest, in uploadIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.fileSession("upload")
+	c, err := a.fileSession(ctx, "upload")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -222,7 +224,7 @@ type downloadIn struct {
 }
 
 func (a *agent) download(ctx context.Context, _ *mcp.CallToolRequest, in downloadIn) (*mcp.CallToolResult, any, error) {
-	c, err := a.fileSession("download")
+	c, err := a.fileSession(ctx, "download")
 	if err != nil {
 		return nil, nil, err
 	}
