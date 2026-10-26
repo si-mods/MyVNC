@@ -3,6 +3,12 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.34
+
+- The MCP server is now off by default. Turn it on in Settings, Agent (MCP), then restart the
+  MCP client. While it is off, `MyVNC.exe --mcp` exits with code 3 and a message on stderr, and
+  `connect` of a running server is refused.
+
 ## 0.0.33
 
 - New: `MyVNC.exe --mcp` runs an MCP server on stdio so an agent can see and operate a Mac
