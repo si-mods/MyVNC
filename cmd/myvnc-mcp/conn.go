@@ -50,6 +50,12 @@ var (
 	layoutWait = 20 * time.Second
 	// shotWait is how long a screenshot waits for a blank picture to fill.
 	shotWait = 2 * time.Second
+	// settleWait is how long the framebuffer must be quiet before connect
+	// takes a virtual display as drawn: the Mac paints it in tiles.
+	settleWait = 500 * time.Millisecond
+	// shotQuiet is how old the last update must be for a screenshot not to
+	// wait for a quiet gap.
+	shotQuiet = 300 * time.Millisecond
 )
 
 func newConn() *conn {
@@ -62,10 +68,13 @@ func newConn() *conn {
 // blank reports whether the part r of fb looks empty: a grid of samples
 // that are all black (a stray pixel in a corner does not count).
 func blank(fb *image.RGBA, r image.Rectangle) bool {
-	for j := range 32 {
-		y := r.Min.Y + (2*j+1)*r.Dy()/64
-		for i := range 32 {
-			o := fb.PixOffset(r.Min.X+(2*i+1)*r.Dx()/64, y)
+	for j := range 64 {
+		y := r.Min.Y + (2*j+1)*r.Dy()/128
+		for i := range 64 {
+			if i == 0 && j == 0 {
+				continue // the corner, where the Mac leaves a stray pixel
+			}
+			o := fb.PixOffset(r.Min.X+(2*i+1)*r.Dx()/128, y)
 			if fb.Pix[o]|fb.Pix[o+1]|fb.Pix[o+2] != 0 {
 				return false
 			}
@@ -83,9 +92,11 @@ const (
 )
 
 // waitLaid waits, for at most d, until the desktop is not the from it was
-// when the change was asked, or is want, and shows something. The Mac
-// resizes the framebuffer, black, as soon as it answers, but draws the
-// virtual display only once it has laid it out, which can take seconds.
+// when the change was asked, or is want, shows something, and has had no
+// update for settleWait. The Mac resizes the framebuffer, black, as soon as
+// it answers, but draws the virtual display only once it has laid it out,
+// which can take seconds, and then tile by tile. A desktop that never goes
+// quiet ends at d as laid once it shows something.
 func (c *conn) waitLaid(from, want image.Point, d time.Duration) (w, h, state int) {
 	c.mu.Lock()
 	refused := c.refused
@@ -93,13 +104,18 @@ func (c *conn) waitLaid(from, want image.Point, d time.Duration) (w, h, state in
 	end := time.NewTimer(d)
 	defer end.Stop()
 	for {
+		var wake <-chan time.Time
+		shown := false
 		c.fm.Lock()
 		tick := c.tick
 		if c.snap != nil {
 			w, h = c.snap.Rect.Dx(), c.snap.Rect.Dy()
-			if (image.Pt(w, h) == want || image.Pt(w, h) != from) && !blank(c.snap, c.snap.Rect) {
+			shown = (image.Pt(w, h) == want || image.Pt(w, h) != from) && !blank(c.snap, c.snap.Rect)
+			if q := time.Since(c.at); shown && q >= settleWait {
 				c.fm.Unlock()
 				return w, h, laid
+			} else if shown {
+				wake = time.After(settleWait - q)
 			}
 		}
 		c.fm.Unlock()
@@ -111,9 +127,13 @@ func (c *conn) waitLaid(from, want image.Point, d time.Duration) (w, h, state in
 		}
 		select {
 		case <-tick:
+		case <-wake:
 		case <-c.done:
 			return w, h, ended
 		case <-end.C:
+			if shown {
+				return w, h, laid
+			}
 			return w, h, timedOut
 		}
 	}

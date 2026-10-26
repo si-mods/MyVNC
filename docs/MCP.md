@@ -52,8 +52,10 @@ virtual 1920x1080 display (on a Mac mini it shows up as "Screen Sharing
 Virtual Display"), so the agent's picture is its own screen. The Mac can
 take several seconds to lay it out (9 s measured); `connect` waits up to
 20 s and, if the display is still not drawn, succeeds with a warning that
-screenshots may be blank. A screenshot of a blank picture waits up to 2 s
-for it to fill.
+screenshots may be blank. The Mac draws the display in tiles, so `connect`
+also waits for 500 ms without an update. A screenshot of a blank picture,
+or of one updated in the last 300 ms, waits up to 2 s for it to fill and go
+quiet, then returns what it has.
 
 **Input is not isolated.** Only the picture is separate. The pointer and
 keyboard are the Mac's one global pair, shared with the physical session: a

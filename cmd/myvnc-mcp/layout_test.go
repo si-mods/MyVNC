@@ -26,9 +26,9 @@ func frame(c *conn, w, h int, col [3]byte) {
 }
 
 func shortWaits(t *testing.T) {
-	l, s := layoutWait, shotWait
-	layoutWait, shotWait = 300*time.Millisecond, 300*time.Millisecond
-	t.Cleanup(func() { layoutWait, shotWait = l, s })
+	l, s, q, sq := layoutWait, shotWait, settleWait, shotQuiet
+	layoutWait, shotWait, settleWait, shotQuiet = 400*time.Millisecond, 300*time.Millisecond, 60*time.Millisecond, 40*time.Millisecond
+	t.Cleanup(func() { layoutWait, shotWait, settleWait, shotQuiet = l, s, q, sq })
 }
 
 // The Mac resizes the framebuffer black, then draws it seconds later.

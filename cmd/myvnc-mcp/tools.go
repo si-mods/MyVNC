@@ -220,8 +220,9 @@ func (a *agent) screenshot(_ context.Context, _ *mcp.CallToolRequest, in shotIn)
 	if err := c.waitFrame(1500 * time.Millisecond); err != nil {
 		return nil, nil, err
 	}
-	// A picture that is still blank (a Mac lays out a display late) gets
-	// shotWait to fill before it is returned as it is.
+	// A picture that is blank (a Mac lays out a display late) or still
+	// being drawn gets shotWait to fill and go quiet before it is returned
+	// as it is.
 	timeout := time.After(shotWait)
 	var img *image.RGBA
 	var fw, fh, ow, oh int
@@ -236,7 +237,12 @@ func (a *agent) screenshot(_ context.Context, _ *mcp.CallToolRequest, in shotIn)
 			return nil, nil, err
 		}
 		tick := c.tick
-		if timeout == nil || !blank(fb, r) {
+		var wake <-chan time.Time
+		isBlank, q := blank(fb, r), time.Since(c.at)
+		if !isBlank && q < shotQuiet {
+			wake = time.After(shotQuiet - q)
+		}
+		if timeout == nil || !isBlank && wake == nil {
 			ow, oh = outSize(r.Dx(), r.Dy(), in.Scale)
 			img = scaleRegion(fb, r, ow, oh) // under fm: the read goroutine updates snap in place
 			age = time.Since(c.at)
@@ -245,6 +251,7 @@ func (a *agent) screenshot(_ context.Context, _ *mcp.CallToolRequest, in shotIn)
 		if img == nil {
 			select {
 			case <-tick:
+			case <-wake:
 			case <-timeout:
 				timeout = nil
 			case <-c.done:
