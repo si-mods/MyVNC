@@ -3,6 +3,10 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.32
+
+- The home view now shows the app version next to the title.
+
 ## 0.0.31
 
 - Fixed the session panel's switches doing nothing when clicked (#73): full screen,
