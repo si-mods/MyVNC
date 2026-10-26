@@ -3,6 +3,13 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.0.30
+
+- Fixed High Performance freezing a few frames in: absorbing the first RTCP sender
+  report locked the stream's mutex a second time, so the leg's loop deadlocked and the
+  picture stopped (v0.0.28 and v0.0.29; v0.0.27 crashed earlier on a nil compound).
+  A regression test now feeds a real sender report under the lock.
+
 ## 0.0.29
 
 - High Performance now picks the offer's tiles-per-frame from the virtual display's

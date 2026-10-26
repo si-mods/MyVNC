@@ -704,9 +704,7 @@ func (s *Stream) count(st *LegStats, h RTPHeader, err error, rtcp *SRTCPReceiver
 			st.RTCPOK++
 			if ssrc, ntpSec, ntpFrac, rtpTS, ok := ParseSenderReport(d); ok {
 				s.clock.Note(ssrc, ntpSec, ntpFrac, rtpTS)
-				s.mu.Lock()
 				s.stats.ClockSyncs++
-				s.mu.Unlock()
 			}
 		} else {
 			st.RTCPForged++

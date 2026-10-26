@@ -94,3 +94,28 @@ func TestClockReanchor(t *testing.T) {
 		t.Fatalf("Deadline(after drift) = %v", got)
 	}
 }
+
+// TestCountSenderReportUnderLock: count runs with s.mu held, so absorbing
+// a sender report must not lock it again (it once deadlocked the leg's
+// loop at the first SR, freezing the picture a few frames in).
+func TestCountSenderReportUnderLock(t *testing.T) {
+	m := cppMaster(t)
+	s := &Stream{clock: NewPresentationClock(videoClockRate)}
+	var st LegStats
+	d := NewSRTCPSender(m).Protect(sr(42, 4000000000, 0x80000000, 123456))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.count(&st, RTPHeader{}, ErrRTCP, NewSRTCPReceiver(m), d)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("count deadlocked on s.mu")
+	}
+	if s.stats.ClockSyncs != 1 {
+		t.Fatalf("ClockSyncs = %d", s.stats.ClockSyncs)
+	}
+}
