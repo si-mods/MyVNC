@@ -40,6 +40,83 @@ type conn struct {
 	at    time.Time   // of the last update
 	ready chan struct{}
 	once  sync.Once
+	tick  chan struct{} // closed, and replaced, by each update
+}
+
+// Waits, variables so that tests can shorten them.
+var (
+	// layoutWait is how long connect waits for a Mac to lay out its virtual
+	// display; the Mac has taken 9 s.
+	layoutWait = 20 * time.Second
+	// shotWait is how long a screenshot waits for a blank picture to fill.
+	shotWait = 2 * time.Second
+)
+
+func newConn() *conn {
+	return &conn{
+		done: make(chan struct{}), clipCh: make(chan struct{}, 1),
+		ready: make(chan struct{}), tick: make(chan struct{}),
+	}
+}
+
+// blank reports whether the part r of fb looks empty: a grid of samples
+// that are all black (a stray pixel in a corner does not count).
+func blank(fb *image.RGBA, r image.Rectangle) bool {
+	for j := range 32 {
+		y := r.Min.Y + (2*j+1)*r.Dy()/64
+		for i := range 32 {
+			o := fb.PixOffset(r.Min.X+(2*i+1)*r.Dx()/64, y)
+			if fb.Pix[o]|fb.Pix[o+1]|fb.Pix[o+2] != 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Outcomes of waitLaid.
+const (
+	laid = iota
+	refusedSize
+	timedOut
+	ended
+)
+
+// waitLaid waits, for at most d, until the desktop is not the from it was
+// when the change was asked, or is want, and shows something. The Mac
+// resizes the framebuffer, black, as soon as it answers, but draws the
+// virtual display only once it has laid it out, which can take seconds.
+func (c *conn) waitLaid(from, want image.Point, d time.Duration) (w, h, state int) {
+	c.mu.Lock()
+	refused := c.refused
+	c.mu.Unlock()
+	end := time.NewTimer(d)
+	defer end.Stop()
+	for {
+		c.fm.Lock()
+		tick := c.tick
+		if c.snap != nil {
+			w, h = c.snap.Rect.Dx(), c.snap.Rect.Dy()
+			if (image.Pt(w, h) == want || image.Pt(w, h) != from) && !blank(c.snap, c.snap.Rect) {
+				c.fm.Unlock()
+				return w, h, laid
+			}
+		}
+		c.fm.Unlock()
+		c.mu.Lock()
+		gone := c.refused != refused
+		c.mu.Unlock()
+		if gone {
+			return w, h, refusedSize
+		}
+		select {
+		case <-tick:
+		case <-c.done:
+			return w, h, ended
+		case <-end.C:
+			return w, h, timedOut
+		}
+	}
 }
 
 // post is the Session's UI-thread hook: with OnFrame set there is none,
@@ -71,6 +148,8 @@ func (c *conn) onFrame(fb *image.RGBA, dirty []image.Rectangle) {
 		}
 	}
 	c.at = time.Now()
+	close(c.tick)
+	c.tick = make(chan struct{})
 	c.once.Do(func() { close(c.ready) })
 }
 
@@ -153,10 +232,8 @@ func dial(addr, user, pass string, types []uint32, log *slog.Logger) (*conn, err
 	enc := slices.DeleteFunc(cfg.EncodingList(), func(e int32) bool {
 		return e == rfb.EncodingH264 || e == rfb.EncodingAV1
 	})
-	c := &conn{
-		cancel: cancel, done: make(chan struct{}),
-		clipCh: make(chan struct{}, 1), ready: make(chan struct{}),
-	}
+	c := newConn()
+	c.cancel = cancel
 	opt := rfb.Options{
 		Username:      user,
 		Shared:        true,

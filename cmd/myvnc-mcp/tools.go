@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"log/slog"
 	"os"
 	"sync"
@@ -76,7 +77,8 @@ func newServer(a *agent) *mcp.Server {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "connect", Description: "Connect to a VNC or Mac Screen Sharing (ARD) server, replacing any current session. " +
 		"The password is read from the environment variable MYVNC_MCP_PASSWORD only. On an ARD server it also asks for a virtual display " +
-		"(1920x1080) so you work on your own screen where the Mac supports it; keyboard and mouse may still be shared with the physical session."}, a.connect)
+		"(1920x1080), a separate screen for your pictures, and waits up to 20 s for the Mac to draw it (a warning line says if it has not). " +
+		"Input is NOT isolated: the pointer and keyboard are the Mac's one global pair, shared with anyone using that Mac, and the pointer stays where you left it."}, a.connect)
 	mcp.AddTool(s, &mcp.Tool{Name: "disconnect", Description: "Close the current session."}, a.disconnect)
 	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "Connection state: connected, framebuffer size, server name, encryption, security type and age of the last frame."}, a.status)
 	mcp.AddTool(s, &mcp.Tool{Name: "screenshot", Description: "Image of the latest frame, served from memory without a round trip. " +
@@ -137,37 +139,25 @@ func (a *agent) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectI
 	}
 	note := ""
 	if c.s.SecurityType() == rfb.SecTypeDH && (in.Virtual == nil || *in.Virtual) && !a.readonly {
+		w0, h0 := c.size()
 		c.do(func(s *viewer.Session) { s.SetDesktopSize(1920, 1080, 1) })
-		if w, _, ok := c.waitSize(1920, 1080, 3*time.Second); ok && w > 0 {
-			note = "; virtual display 1920x1080"
-		} else {
-			note = "; virtual display not applied"
-		}
+		_, _, st := c.waitLaid(image.Pt(w0, h0), image.Pt(1920, 1080), layoutWait)
+		note = layoutNote(st)
 	}
 	w, h := c.size()
 	return text(fmt.Sprintf("connected: %dx%d, %s, encrypted=%v%s", w, h,
 		viewer.SecTypeName(c.s.SecurityType()), c.s.Encrypted(), note))
 }
 
-// waitSize waits until the framebuffer is w×h, or the server refused, or d.
-func (c *conn) waitSize(w, h int, d time.Duration) (int, int, bool) {
-	c.mu.Lock()
-	refused := c.refused
-	c.mu.Unlock()
-	end := time.Now().Add(d)
-	for {
-		cw, ch := c.size()
-		c.mu.Lock()
-		gone := c.refused != refused
-		c.mu.Unlock()
-		if cw == w && ch == h {
-			return cw, ch, true
-		}
-		if gone || !c.alive() || time.Now().After(end) {
-			return cw, ch, false
-		}
-		time.Sleep(20 * time.Millisecond)
+// layoutNote says how a virtual display request ended.
+func layoutNote(st int) string {
+	switch st {
+	case laid:
+		return "; virtual display ready"
+	case refusedSize:
+		return "; virtual display refused by the server"
 	}
+	return "\nWARNING: virtual display not laid out yet; screenshots may be blank until the Mac draws it"
 }
 
 func (a *agent) disconnect(context.Context, *mcp.CallToolRequest, none) (*mcp.CallToolResult, any, error) {
@@ -230,18 +220,38 @@ func (a *agent) screenshot(_ context.Context, _ *mcp.CallToolRequest, in shotIn)
 	if err := c.waitFrame(1500 * time.Millisecond); err != nil {
 		return nil, nil, err
 	}
-	c.fm.Lock()
-	fb := c.snap
-	fw, fh := fb.Rect.Dx(), fb.Rect.Dy()
-	r, err := cropRect(fw, fh, in.Region)
-	if err != nil {
+	// A picture that is still blank (a Mac lays out a display late) gets
+	// shotWait to fill before it is returned as it is.
+	timeout := time.After(shotWait)
+	var img *image.RGBA
+	var fw, fh, ow, oh int
+	var r image.Rectangle
+	var age time.Duration
+	for img == nil {
+		c.fm.Lock()
+		fb := c.snap
+		fw, fh = fb.Rect.Dx(), fb.Rect.Dy()
+		if r, err = cropRect(fw, fh, in.Region); err != nil {
+			c.fm.Unlock()
+			return nil, nil, err
+		}
+		tick := c.tick
+		if timeout == nil || !blank(fb, r) {
+			ow, oh = outSize(r.Dx(), r.Dy(), in.Scale)
+			img = scaleRegion(fb, r, ow, oh) // under fm: the read goroutine updates snap in place
+			age = time.Since(c.at)
+		}
 		c.fm.Unlock()
-		return nil, nil, err
+		if img == nil {
+			select {
+			case <-tick:
+			case <-timeout:
+				timeout = nil
+			case <-c.done:
+				timeout = nil
+			}
+		}
 	}
-	ow, oh := outSize(r.Dx(), r.Dy(), in.Scale)
-	img := scaleRegion(fb, r, ow, oh) // under fm: the read goroutine updates snap in place
-	age := time.Since(c.at)
-	c.fm.Unlock()
 	data, mime, err := encodeImage(img, in.Format)
 	if err != nil {
 		return nil, nil, err
@@ -505,10 +515,14 @@ func (a *agent) setDisplay(_ context.Context, _ *mcp.CallToolRequest, in display
 	if in.Width < 320 || in.Width > 8192 || in.Height < 200 || in.Height > 8192 || in.Density < 1 || in.Density > 2 {
 		return nil, nil, errors.New("invalid_argument: width 320-8192, height 200-8192, density 1 or 2")
 	}
+	w0, h0 := c.size()
 	c.do(func(s *viewer.Session) { s.SetDesktopSize(in.Width, in.Height, in.Density) })
-	w, h, ok := c.waitSize(in.Width, in.Height, 3*time.Second)
-	if !ok {
-		return nil, nil, fmt.Errorf("display_unchanged: the framebuffer is %dx%d; the server refused or limited the size", w, h)
+	w, h, st := c.waitLaid(image.Pt(w0, h0), image.Pt(in.Width, in.Height), layoutWait)
+	switch st {
+	case laid:
+		return text(fmt.Sprintf("framebuffer is now %dx%d", w, h))
+	case timedOut:
+		return text(fmt.Sprintf("framebuffer is %dx%d; WARNING: the new display is not laid out yet, screenshots may be blank", w, h))
 	}
-	return text(fmt.Sprintf("framebuffer is now %dx%d", w, h))
+	return nil, nil, fmt.Errorf("display_unchanged: the framebuffer is %dx%d; the server refused or limited the size, or the session ended", w, h)
 }

@@ -48,9 +48,18 @@ a point (px, py) of the image is framebuffer `region origin + (px, py) / scale`.
 | `set_display` | `width`, `height`, `density` (1 or 2) |
 
 `connect` replaces any existing session. On a Mac (ARD) it asks for a
-virtual 1920x1080 display, so the agent works on its own screen where the
-Mac supports it; the keyboard and mouse may still be shared with the
-physical session. Modifiers for `key` are `ctrl`, `alt` (Option), `shift`
+virtual 1920x1080 display (on a Mac mini it shows up as "Screen Sharing
+Virtual Display"), so the agent's picture is its own screen. The Mac can
+take several seconds to lay it out (9 s measured); `connect` waits up to
+20 s and, if the display is still not drawn, succeeds with a warning that
+screenshots may be blank. A screenshot of a blank picture waits up to 2 s
+for it to fill.
+
+**Input is not isolated.** Only the picture is separate. The pointer and
+keyboard are the Mac's one global pair, shared with the physical session: a
+`move` moves the cursor of anyone using that Mac, to the same coordinates,
+and leaves it there after `disconnect`. Do not run the agent on a Mac while
+a person is working on it. Modifiers for `key` are `ctrl`, `alt` (Option), `shift`
 and `cmd` (Command); a Mac reads Super as Command.
 
 A screenshot taken right after input may still show the old screen; the
