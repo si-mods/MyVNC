@@ -161,6 +161,15 @@ type CursorPosHandler interface {
 	CursorPos(p image.Point)
 }
 
+// DisplayLaidHandler may be implemented by a Handler to hear that a Mac
+// answered a display change (SetDisplayConfiguration): its layout of w x h
+// pixels, called once per accepted answer on the Run goroutine, before the
+// framebuffer follows it. The Mac then draws the display, tile by tile, over
+// the seconds after.
+type DisplayLaidHandler interface {
+	DisplayLaid(w, h int)
+}
+
 // ClipboardAnnouncer may be implemented by a Handler to pull the
 // server's extended clipboard lazily, as TigerVNC's
 // handleClipboardAnnounce: ClipboardAnnounced(true) says the server has

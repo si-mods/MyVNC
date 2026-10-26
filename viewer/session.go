@@ -46,14 +46,24 @@ type Session struct {
 	// key LEDs (rfb.LED* bits), on the UI thread.
 	OnBell func()
 	OnLED  func(state uint32)
+	// OnDisplayLaid, when set, hears that the Mac answered a display change
+	// with its layout of w x h pixels (rfb.DisplayLaidHandler), on Run's
+	// goroutine; the Mac draws the display after.
+	OnDisplayLaid func(w, h int)
 	// OnResizeRefused, when set, hears that the server cannot or will not
 	// change its size for SetDesktopSize, on the UI thread.
 	OnResizeRefused func()
 	// OnEncrypted, when set, hears that Encrypted changed, as when ARD
 	// session encryption starts after the first update, on the UI thread.
 	OnEncrypted func(encrypted bool)
-	clip        string // last clipboard text either side sent
-	ptrMask     uint16 // of the last pointer event
+	// OnFrame, when set, makes the session headless: each finished update
+	// goes to it, on Run's goroutine, with the live framebuffer and the
+	// rectangles drawn since the last call (valid only during the call),
+	// and nothing is double-buffered or shown. post must then run its
+	// function at once.
+	OnFrame func(fb *image.RGBA, dirty []image.Rectangle)
+	clip    string // last clipboard text either side sent
+	ptrMask uint16 // of the last pointer event
 
 	c    *rfb.Client
 	post func(func())
@@ -368,6 +378,19 @@ func (s *Session) refused() {
 	})
 }
 
+// DisplayConfigurationAvailable reports whether SetDesktopSize asks a Mac
+// for a virtual display, which OnDisplayLaid then answers.
+func (s *Session) DisplayConfigurationAvailable() bool {
+	return s.c.DisplayConfigurationAvailable()
+}
+
+// DisplayLaid is rfb.DisplayLaidHandler, on Run's goroutine.
+func (s *Session) DisplayLaid(w, h int) {
+	if s.OnDisplayLaid != nil {
+		s.OnDisplayLaid(w, h)
+	}
+}
+
 // DesktopSizeFailed is rfb.DesktopSizeHandler.
 func (s *Session) DesktopSizeFailed(int) { s.refused() }
 
@@ -515,6 +538,11 @@ func (s *Session) UpdateDone() {
 				s.OnEncrypted(enc)
 			}
 		})
+	}
+	if s.OnFrame != nil {
+		s.OnFrame(s.c.Framebuffer(), s.dirty)
+		s.dirty, s.resized = s.dirty[:0], false
+		return
 	}
 	if s.mediaShown.Load() {
 		// The stream draws the picture; the framebuffer has no pixels.

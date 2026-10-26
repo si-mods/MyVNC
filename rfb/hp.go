@@ -750,6 +750,10 @@ func (c *Client) takesDisplayConfiguration() bool {
 	return c.appleARD && c.ardCommands[0x1d>>3]&(0x80>>(0x1d&7)) != 0 && (c.hp == nil || !c.hp.cfg.Mirror)
 }
 
+// DisplayConfigurationAvailable reports whether the server takes
+// SetDisplayConfiguration, and so will answer it with DisplayLaid.
+func (c *Client) DisplayConfigurationAvailable() bool { return c.takesDisplayConfiguration() }
+
 // SetDisplayConfiguration asks a Mac for one virtual display of w x h
 // points at density 1 or 2 pixels a point, refreshed at 60 Hz, as Screen
 // Sharing does as its window is resized; the framebuffer becomes the
@@ -845,12 +849,16 @@ func ardLayout2Size(body []byte) (w, h int, ok bool) {
 // nothing.
 func (c *Client) displayLaid(w, h int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	d := &c.disp
-	if !d.out.IsZero() && (w == d.mode[0] && h == d.mode[1] || w != c.width || h != c.height) {
+	answered := !d.out.IsZero() && (w == d.mode[0] && h == d.mode[1] || w != c.width || h != c.height)
+	if answered {
 		c.log.Info("rfb: the Mac laid out the display", "width", w, "height", h,
 			"after", time.Since(d.out).Round(time.Millisecond))
 		d.out, d.rearm = time.Time{}, true
+	}
+	c.mu.Unlock()
+	if lh, ok := c.h.(DisplayLaidHandler); ok && answered {
+		lh.DisplayLaid(w, h)
 	}
 }
 
