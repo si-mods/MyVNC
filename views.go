@@ -516,6 +516,17 @@ func (a *app) sessionView(c *ui.Context) {
 	a.screenRect, a.pillRect = a.screen.Bounds(c), a.pillBox.Bounds(c)
 }
 
+// switchChanged builds a switch bound to v and reports whether this
+// build flipped it. components.Switch returns the row it draws in, and
+// the toggle's SetChanged lands on the switch inside it, so Changed on
+// what Switch returns never reports the toggle (si-mods/MyVNC#73).
+// Handlers that must react to a flip compare the value instead.
+func switchChanged(c *ui.Context, v *bool, label string, opts ...components.SwitchOptions) bool {
+	before := *v
+	components.Switch(c, v, label, opts...)
+	return *v != before
+}
+
 // dragPill moves the handle along the top edge; a click opens the panel.
 func (a *app) dragPill(ev ui.InputEvent, left, ww float32) bool {
 	switch ev.Kind {
@@ -582,7 +593,7 @@ func (a *app) panel(c *ui.Context) {
 				a.saveConfig()
 			}
 		})
-		if components.Switch(c, &a.cfg.DynamicResolution, locales.DynamicResolution()).Changed() {
+		if switchChanged(c, &a.cfg.DynamicResolution, locales.DynamicResolution()) {
 			a.dyn.Forget()
 			a.dynUrgent = true
 			a.saveConfig()
@@ -595,23 +606,26 @@ func (a *app) panel(c *ui.Context) {
 				}
 			})
 		}
-		if components.Switch(c, &a.cfg.ViewOnly, locales.ViewOnly()).Changed() {
+		if switchChanged(c, &a.cfg.ViewOnly, locales.ViewOnly()) {
 			if a.cfg.ViewOnly && a.sc != nil {
 				a.sendKeys(a.sc.Reset())
 			}
 			a.saveConfig()
 		}
-		fs := a.cfg.FullScreen
-		if components.Switch(c, &fs, locales.FullScreen()).Changed() {
-			a.toggleFullScreen()
+		if switchChanged(c, &a.cfg.FullScreen, locales.FullScreen()) {
+			// The switch flipped a.cfg.FullScreen itself; apply the new
+			// value, as toggleFullScreen would from the keyboard.
+			a.saveConfig()
+			a.dynUrgent = true
+			a.fullScreen(a.cfg.FullScreen)
 		}
-		if components.Switch(c, &a.cfg.Stats, locales.ShowStats()).Changed() {
+		if switchChanged(c, &a.cfg.Stats, locales.ShowStats()) {
 			a.saveConfig()
 		}
-		if components.Switch(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard()).Changed() {
+		if switchChanged(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard()) {
 			a.saveConfig()
 		}
-		if components.Switch(c, &a.cfg.SendClipboard, locales.SendClipboard()).Changed() {
+		if switchChanged(c, &a.cfg.SendClipboard, locales.SendClipboard()) {
 			a.saveConfig()
 		}
 		if a.cfg.AcceptClipboard && !a.cfg.ViewOnly && components.Button(c, locales.FetchClipboard(), components.ButtonGhost).Clicked() {
