@@ -3,6 +3,17 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.1.0
+
+- New look, after GoRex: a gradient window background, cards for computers and settings, and
+  light and dark palettes of its own (the Windows accent color is no longer used).
+- The window draws its own title bar with minimize, maximize (with Windows 11 snap layouts)
+  and close. In a windowed session it shows the computer's name, the security level and a
+  button for the session panel; the remote screen sits below it. Full screen keeps the handle
+  at the top edge, and Ctrl+Alt+M still opens the panel.
+- Settings open as a page of the main window, with the categories in a sidebar.
+- Remote Desktop sessions sit below the title bar and ask for the smaller desktop size.
+
 ## 0.0.34
 
 - The MCP server is now off by default. Turn it on in Settings, Agent (MCP), then restart the
