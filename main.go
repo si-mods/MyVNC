@@ -109,13 +109,14 @@ type app struct {
 	pxScale    float32
 	srvLED     uint32
 	dyn        viewer.Resizer
-	version    string     // the app's version for the home view
-	dynUrgent  bool       // the next size goes at once: a new session, full screen, another monitor
-	dynRefused bool       // the server cannot resize: the session scales to fit instead
-	dynHint    bool       // the session panel says so, until dismissed
-	hpNote     string     // why High Performance fell back, shown until dismissed
-	hpFailed   bool       // it fell back: the panel offers a retry
-	rdp        *win32.RDP // an embedded Remote Desktop session, if one runs
+	version    string       // the app's version for the home view
+	upds       *updateHooks // the updater plugin, nil without one
+	dynUrgent  bool         // the next size goes at once: a new session, full screen, another monitor
+	dynRefused bool         // the server cannot resize: the session scales to fit instead
+	dynHint    bool         // the session panel says so, until dismissed
+	hpNote     string       // why High Performance fell back, shown until dismissed
+	hpFailed   bool         // it fell back: the panel offers a retry
+	rdp        *win32.RDP   // an embedded Remote Desktop session, if one runs
 	rdpAddr    string
 	rdpResize  *time.Timer
 	rdpW, rdpH int32
@@ -1507,6 +1508,12 @@ func main() {
 	mygo.App.SetLocale(a.cfg.Language) // the setting is the config's
 	if perf == nil {                   // perf runs never check for updates
 		mygo.Use(native.New(updater.Options{Language: a.cfg.Language}))
+		a.upds = &updateHooks{
+			check:   updater.CheckForUpdates,
+			auto:    updater.AutomaticChecks,
+			setAuto: updater.SetAutomaticChecks,
+			last:    updater.LastCheck,
+		}
 	}
 	mygo.App.WhenReady(func() {
 		if argErr != nil {

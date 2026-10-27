@@ -45,6 +45,20 @@ func (msgs Messages) Settings() string {
 	return Catalog.Format(msgs.locale, "settings", nil)
 }
 
+// Back says "Back"
+// in the language the app shows.
+//
+// Settings title bar button that applies the settings and returns home.
+func Back() string { return In(i18n.Locale()).Back() }
+
+// Back says "Back"
+// in the language of msgs.
+//
+// Settings title bar button that applies the settings and returns home.
+func (msgs Messages) Back() string {
+	return Catalog.Format(msgs.locale, "back", nil)
+}
+
 // Cancel says "Cancel"
 // in the language the app shows.
 func Cancel() string { return In(i18n.Locale()).Cancel() }
@@ -501,6 +515,122 @@ func SendClipboard() string { return In(i18n.Locale()).SendClipboard() }
 // in the language of msgs.
 func (msgs Messages) SendClipboard() string {
 	return Catalog.Format(msgs.locale, "sendClipboard", nil)
+}
+
+// Updates says "Updates"
+// in the language the app shows.
+//
+// Settings page: checking for and installing app updates.
+func Updates() string { return In(i18n.Locale()).Updates() }
+
+// Updates says "Updates"
+// in the language of msgs.
+//
+// Settings page: checking for and installing app updates.
+func (msgs Messages) Updates() string {
+	return Catalog.Format(msgs.locale, "updates", nil)
+}
+
+// CheckForUpdates says "Check for updates"
+// in the language the app shows.
+func CheckForUpdates() string { return In(i18n.Locale()).CheckForUpdates() }
+
+// CheckForUpdates says "Check for updates"
+// in the language of msgs.
+func (msgs Messages) CheckForUpdates() string {
+	return Catalog.Format(msgs.locale, "checkForUpdates", nil)
+}
+
+// CheckNow says "Check now"
+// in the language the app shows.
+func CheckNow() string { return In(i18n.Locale()).CheckNow() }
+
+// CheckNow says "Check now"
+// in the language of msgs.
+func (msgs Messages) CheckNow() string {
+	return Catalog.Format(msgs.locale, "checkNow", nil)
+}
+
+// UpdateHint says "From this project's signed GitHub releases, installed in place."
+// in the language the app shows.
+//
+// Settings, Updates: under the check row, after the version.
+func UpdateHint() string { return In(i18n.Locale()).UpdateHint() }
+
+// UpdateHint says "From this project's signed GitHub releases, installed in place."
+// in the language of msgs.
+//
+// Settings, Updates: under the check row, after the version.
+func (msgs Messages) UpdateHint() string {
+	return Catalog.Format(msgs.locale, "updateHint", nil)
+}
+
+// AutoUpdate says "Check for updates automatically"
+// in the language the app shows.
+func AutoUpdate() string { return In(i18n.Locale()).AutoUpdate() }
+
+// AutoUpdate says "Check for updates automatically"
+// in the language of msgs.
+func (msgs Messages) AutoUpdate() string {
+	return Catalog.Format(msgs.locale, "autoUpdate", nil)
+}
+
+// AutoUpdateHint says "Once a day, and soon after the app starts."
+// in the language the app shows.
+func AutoUpdateHint() string { return In(i18n.Locale()).AutoUpdateHint() }
+
+// AutoUpdateHint says "Once a day, and soon after the app starts."
+// in the language of msgs.
+func (msgs Messages) AutoUpdateHint() string {
+	return Catalog.Format(msgs.locale, "autoUpdateHint", nil)
+}
+
+// LastCheckLabel says "Last check"
+// in the language the app shows.
+func LastCheckLabel() string { return In(i18n.Locale()).LastCheckLabel() }
+
+// LastCheckLabel says "Last check"
+// in the language of msgs.
+func (msgs Messages) LastCheckLabel() string {
+	return Catalog.Format(msgs.locale, "lastCheckLabel", nil)
+}
+
+// LastChecked says "Last checked {when, date, medium} {when, time, short}"
+// in the language the app shows.
+//
+// Settings, Updates: when the app last checked for updates successfully.
+func LastChecked(when time.Time) string { return In(i18n.Locale()).LastChecked(when) }
+
+// LastChecked says "Last checked {when, date, medium} {when, time, short}"
+// in the language of msgs.
+//
+// Settings, Updates: when the app last checked for updates successfully.
+func (msgs Messages) LastChecked(when time.Time) string {
+	return Catalog.Format(msgs.locale, "lastChecked", map[string]any{"when": when})
+}
+
+// NeverChecked says "Never checked for updates"
+// in the language the app shows.
+func NeverChecked() string { return In(i18n.Locale()).NeverChecked() }
+
+// NeverChecked says "Never checked for updates"
+// in the language of msgs.
+func (msgs Messages) NeverChecked() string {
+	return Catalog.Format(msgs.locale, "neverChecked", nil)
+}
+
+// UpdatesUnavailable says "This build cannot update itself. Download the newest release from GitHub."
+// in the language the app shows.
+//
+// Settings, Updates: without the updater, as in development builds.
+func UpdatesUnavailable() string { return In(i18n.Locale()).UpdatesUnavailable() }
+
+// UpdatesUnavailable says "This build cannot update itself. Download the newest release from GitHub."
+// in the language of msgs.
+//
+// Settings, Updates: without the updater, as in development builds.
+func (msgs Messages) UpdatesUnavailable() string {
+	return Catalog.Format(msgs.locale, "updatesUnavailable", nil)
 }
 
 // AgentMCP says "Agent (MCP)"
@@ -1293,6 +1423,34 @@ func ExportTiger() string { return In(i18n.Locale()).ExportTiger() }
 // in the language of msgs.
 func (msgs Messages) ExportTiger() string {
 	return Catalog.Format(msgs.locale, "exportTiger", nil)
+}
+
+// TigerVNC says "TigerVNC files"
+// in the language the app shows.
+//
+// Settings page: reading and writing .tigervnc files.
+func TigerVNC() string { return In(i18n.Locale()).TigerVNC() }
+
+// TigerVNC says "TigerVNC files"
+// in the language of msgs.
+//
+// Settings page: reading and writing .tigervnc files.
+func (msgs Messages) TigerVNC() string {
+	return Catalog.Format(msgs.locale, "tigerVNC", nil)
+}
+
+// TigerHelp says "A .tigervnc file holds a server address and video settings. Importing one applies its settings and connects; exportin…"
+// in the language the app shows.
+//
+// Settings, TigerVNC files: what the page's two rows do.
+func TigerHelp() string { return In(i18n.Locale()).TigerHelp() }
+
+// TigerHelp says "A .tigervnc file holds a server address and video settings. Importing one applies its settings and connects; exportin…"
+// in the language of msgs.
+//
+// Settings, TigerVNC files: what the page's two rows do.
+func (msgs Messages) TigerHelp() string {
+	return Catalog.Format(msgs.locale, "tigerHelp", nil)
 }
 
 // ImportTigerTitle says "Import .tigervnc"
