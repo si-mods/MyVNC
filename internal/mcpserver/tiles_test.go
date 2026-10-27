@@ -143,6 +143,9 @@ func TestBlank(t *testing.T) {
 // no longer than shotWait.
 func TestScreenshotQuietGap(t *testing.T) {
 	shortWaits(t)
+	// Far above the 10-15 ms between updates here, so that a pause of a
+	// busy CI runner does not read as a quiet gap; still under shotWait.
+	shotQuiet = 150 * time.Millisecond
 	c := newConn()
 	tile(c, 64, 48, image.Rect(0, 0, 32, 48))
 	go func() {
@@ -155,9 +158,12 @@ func TestScreenshotQuietGap(t *testing.T) {
 	}
 	img, _ := png.Decode(bytes.NewReader(res.Content[0].(*mcp.ImageContent).Data))
 	if _, g, _, _ := img.At(50, 10).RGBA(); g>>8 != 200 {
-		t.Errorf("screenshot missed the tile drawn 60 ms later, green = %d", g>>8)
+		t.Errorf("screenshot missed the tile drawn 15 ms later, green = %d", g>>8)
 	}
 
+	c.fm.Lock()
+	tick := c.tick
+	c.fm.Unlock()
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
@@ -170,7 +176,7 @@ func TestScreenshotQuietGap(t *testing.T) {
 			}
 		}
 	}()
-	time.Sleep(30 * time.Millisecond) // updates under way
+	<-tick // updates under way
 	start := time.Now()
 	if _, _, err := (&agent{cur: c}).screenshot(context.Background(), nil, shotIn{}); err != nil {
 		t.Fatal(err)
