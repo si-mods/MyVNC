@@ -3,6 +3,16 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.1.1
+
+- Settings → Updates checks for updates on demand, says when the app last checked, and turns
+  the daily automatic check on or off. Before, the updater could only be reached by waiting for
+  its background check.
+- Import and export of `.tigervnc` files moved from the settings' title bar to a TigerVNC files
+  page of their own.
+- The settings have no OK button any more: a change holds as it is made, and Back (or Escape)
+  returns home.
+
 ## 0.1.0
 
 - New look, after GoRex: a gradient window background, cards for computers and settings, and
