@@ -89,7 +89,9 @@ func TestLanguageSetting(t *testing.T) {
 
 func TestTouchTap(t *testing.T) {
 	server, _ := fakeServer(t, 1, 64, 32)
-	a := newTestApp(t) // 800×600: the 64×32 screen fits as 800×400 from y 100
+	// 800×600 less the title bar: the 64×32 screen fits as 800×400,
+	// centered on y 322.
+	a := newTestApp(t)
 	a.server = server
 	a.connect()
 	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
@@ -97,16 +99,24 @@ func TestTouchTap(t *testing.T) {
 	var got [][3]int
 	a.emb = emulatemb.New(false, func(x, y int, m uint16) { got = append(got, [3]int{x, y, int(m)}) })
 
-	if !a.touchEvent(win32.Touch{ID: 1, Phase: win32.TouchDown, X: 400, Y: 300}) ||
-		!a.touchEvent(win32.Touch{ID: 1, Phase: win32.TouchUp, X: 400, Y: 300}) {
+	const y = titleH + (600-titleH)/2
+	if !a.touchEvent(win32.Touch{ID: 1, Phase: win32.TouchDown, X: 400, Y: y}) ||
+		!a.touchEvent(win32.Touch{ID: 1, Phase: win32.TouchUp, X: 400, Y: y}) {
 		t.Fatal("a finger on the screen was not taken")
 	}
 	if want := [][3]int{{32, 16, 0}, {32, 16, 1}, {32, 16, 0}}; !slices.Equal(got, want) {
 		t.Errorf("tap sent %v, want %v", got, want)
 	}
-	// The session handle is Windows' to turn into a click for mygo.
+	// The title bar is Windows' to turn into a click for mygo.
 	if a.touchEvent(win32.Touch{ID: 2, Phase: win32.TouchDown, X: 400, Y: 8}) ||
 		a.touchEvent(win32.Touch{ID: 2, Phase: win32.TouchUp, X: 400, Y: 8}) {
+		t.Error("a finger on the title bar was taken")
+	}
+	// So is the handle at the top of a full-screen session.
+	a.cfg.FullScreen = true
+	a.tt.Frame()
+	if a.touchEvent(win32.Touch{ID: 4, Phase: win32.TouchDown, X: 400, Y: 8}) ||
+		a.touchEvent(win32.Touch{ID: 4, Phase: win32.TouchUp, X: 400, Y: 8}) {
 		t.Error("a finger on the session handle was taken")
 	}
 	a.cfg.ViewOnly = true

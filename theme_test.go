@@ -6,30 +6,22 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func TestWinUITheme(t *testing.T) {
-	dark := winUITheme(true, ui.Transparent, 1)
-	if dark.Background != ui.Hex("#202020") || dark.Surface != ui.Hex("#2b2b2b") ||
-		dark.Radius != 4 || dark.Spacing != 4 || dark.Font != "Segoe UI Variable Text" ||
-		dark.FontSize != 14 {
+func TestAppTheme(t *testing.T) {
+	dark := themeFor(true, 1)
+	if !dark.Dark || dark.Background != darkColors.surface || dark.Text != darkColors.text ||
+		dark.Accent != ui.Hex("#6cb2ff") || dark.Radius != 9 || dark.Spacing != 4 ||
+		dark.Font != "Segoe UI Variable Text" || dark.FontSize != 14 {
 		t.Errorf("dark theme %+v", dark)
 	}
-	if dark.Accent != ui.Hex("#4cc2ff") {
-		t.Errorf("dark accent %v, want #4cc2ff", dark.Accent)
-	}
-	light := winUITheme(false, ui.Transparent, 1.25)
-	if light.Background != ui.Hex("#f3f3f3") || light.Surface != ui.Hex("#ffffff") ||
-		light.Radius != 4 || light.FontSize != 17.5 {
+	light := themeFor(false, 1.25)
+	if light.Dark || light.Background != lightColors.surface || light.Text != lightColors.text ||
+		light.Accent != ui.Hex("#2e6fd0") || light.FontSize != 17.5 {
 		t.Errorf("light theme %+v", light)
 	}
-	if light.Accent != ui.Hex("#0067c0") {
-		t.Errorf("light accent %v, want #0067c0", light.Accent)
+	if light.Danger != lightColors.danger || light.Warning != lightColors.warn || light.Success != lightColors.ok {
+		t.Errorf("light levels %v %v %v", light.Danger, light.Warning, light.Success)
 	}
-	// The desktop accent wins, lightened in the dark.
-	got := winUITheme(true, ui.Hex("#c00000"), 1)
-	if got.Accent == ui.Hex("#c00000") {
-		t.Error("dark accent was not lightened")
-	}
-	if got := winUITheme(false, ui.Hex("#c00000"), 1); got.Accent != ui.Hex("#c00000") {
-		t.Errorf("light accent %v, want the desktop's", got.Accent)
+	if themeFor(false, 0).FontSize != 14 {
+		t.Error("no text scale is not 1")
 	}
 }

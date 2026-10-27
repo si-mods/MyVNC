@@ -2018,3 +2018,61 @@ func ErrCertRejected() string { return In(i18n.Locale()).ErrCertRejected() }
 func (msgs Messages) ErrCertRejected() string {
 	return Catalog.Format(msgs.locale, "errCertRejected", nil)
 }
+
+// WindowMinimize says "Minimize"
+// in the language the app shows.
+//
+// Title bar button that minimizes the window (Windows).
+func WindowMinimize() string { return In(i18n.Locale()).WindowMinimize() }
+
+// WindowMinimize says "Minimize"
+// in the language of msgs.
+//
+// Title bar button that minimizes the window (Windows).
+func (msgs Messages) WindowMinimize() string {
+	return Catalog.Format(msgs.locale, "windowMinimize", nil)
+}
+
+// WindowMaximize says "Maximize"
+// in the language the app shows.
+//
+// Title bar button that maximizes the window (Windows).
+func WindowMaximize() string { return In(i18n.Locale()).WindowMaximize() }
+
+// WindowMaximize says "Maximize"
+// in the language of msgs.
+//
+// Title bar button that maximizes the window (Windows).
+func (msgs Messages) WindowMaximize() string {
+	return Catalog.Format(msgs.locale, "windowMaximize", nil)
+}
+
+// WindowRestore says "Restore"
+// in the language the app shows.
+//
+// Title bar button of a maximized window, which restores its size
+// (Windows).
+func WindowRestore() string { return In(i18n.Locale()).WindowRestore() }
+
+// WindowRestore says "Restore"
+// in the language of msgs.
+//
+// Title bar button of a maximized window, which restores its size
+// (Windows).
+func (msgs Messages) WindowRestore() string {
+	return Catalog.Format(msgs.locale, "windowRestore", nil)
+}
+
+// WindowClose says "Close"
+// in the language the app shows.
+//
+// Title bar button that closes the window (Windows).
+func WindowClose() string { return In(i18n.Locale()).WindowClose() }
+
+// WindowClose says "Close"
+// in the language of msgs.
+//
+// Title bar button that closes the window (Windows).
+func (msgs Messages) WindowClose() string {
+	return Catalog.Format(msgs.locale, "windowClose", nil)
+}

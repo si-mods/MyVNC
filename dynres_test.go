@@ -132,18 +132,19 @@ func noSize(t *testing.T, sizes chan image.Point, why string) {
 	}
 }
 
-// Dynamic resolution, on by default: the desktop takes the window's size
-// in device pixels at once, a drag's after it settles, another monitor's
-// at once; the HUD says the size.
+// Dynamic resolution, on by default: the desktop takes the size of the
+// screen, the window below the title bar, in device pixels at once, a
+// drag's after it settles, another monitor's at once; the HUD says the
+// size.
 func TestDynamicResolution(t *testing.T) {
 	server, sizes := resizeServer(t, false)
 	a := newTestApp(t)
 	a.cfg.Stats = true
 	a.add(server)
 	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	nextSize(t, sizes, image.Pt(800, 600))
+	nextSize(t, sizes, image.Pt(800, 600-titleH))
 	a.until("the new size", func() bool { w, _ := a.sess.Screen.Size(); return w == 800 })
-	if !a.tt.HasText("Resolution 800×600") {
+	if !a.tt.HasText("Resolution 800×556") {
 		t.Errorf("HUD: %q", a.tt.Texts())
 	}
 
@@ -153,11 +154,11 @@ func TestDynamicResolution(t *testing.T) {
 	a.tt.Advance(100 * time.Millisecond)
 	noSize(t, sizes, "while the window is being dragged")
 	a.tt.Advance(200 * time.Millisecond)
-	nextSize(t, sizes, image.Pt(1000, 700))
+	nextSize(t, sizes, image.Pt(1000, 656))
 
 	a.tt.SetScale(1.5)
 	a.tt.Frame()
-	nextSize(t, sizes, image.Pt(1502, 1052)) // 1001×701 DIPs at 1.5x, even
+	nextSize(t, sizes, image.Pt(1502, 986)) // 1001×657 DIPs at 1.5x, even
 	a.until("the 1.5x size", func() bool { w, _ := a.sess.Screen.Size(); return w == 1502 })
 	if a.tt.HasText("This computer cannot change its resolution, so the picture is scaled to fit the window.") {
 		t.Error("refusal hint after an accepted resize")
@@ -175,7 +176,7 @@ func TestDynamicResolutionRefused(t *testing.T) {
 	a.cfg.Scaling = "1:1"
 	a.add(server)
 	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	nextSize(t, sizes, image.Pt(800, 600))
+	nextSize(t, sizes, image.Pt(800, 600-titleH))
 	a.until("the refusal", func() bool { return a.dynRefused })
 	if a.scaling() != "Fit" {
 		t.Errorf("scaling %q after a refusal", a.scaling())

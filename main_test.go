@@ -512,7 +512,7 @@ func magenta(t *testing.T, a *testApp, x, y int) bool {
 // with no framebuffer update moves the sprite, and the moves reach the
 // server at most once a frame.
 func TestLocalCursorAndPointerPacing(t *testing.T) {
-	server, _ := fakeServer(t, 1, 64, 32) // shown 12.5 times, 800×400 at y 100
+	server, _ := fakeServer(t, 1, 64, 32) // shown 12.5 times, 800×400 at y 78 of the screen, below the title bar
 	a := newTestApp(t)
 	a.add(server)
 	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
@@ -549,7 +549,7 @@ func TestLocalCursorAndPointerPacing(t *testing.T) {
 	// A burst of moves between two frames is one move, the last.
 	sent = nil
 	for i := range 20 {
-		a.pointer(nil, ui.InputEvent{Kind: ui.InputPointerMove, X: float32(100 + i*10), Y: 200})
+		a.pointer(nil, ui.InputEvent{Kind: ui.InputPointerMove, X: float32(100 + i*10), Y: 178})
 	}
 	if len(sent) != 0 {
 		t.Fatalf("moves sent before the frame: %v", sent)

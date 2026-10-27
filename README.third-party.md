@@ -6,20 +6,17 @@
 |---|---|---|
 | [TigerVNC](https://github.com/TigerVNC/tigervnc) (incl. TightVNC/RealVNC code it contains / 含其内的 TightVNC/RealVNC 代码) | GPL-2.0-or-later | The viewer this is a port of: RFB protocol, security types, decoders, keyboard mapping, shortcut handler, gesture and touch handling, middle-button emulation, parameters, and its unit tests; the ARD work on its `ard-auth-support` branch / 本项目移植的查看器:RFB 协议、安全类型、解码器、键盘映射、快捷键处理、手势与触控、中键模拟、参数系统及其单元测试;其 `ard-auth-support` 分支上的 ARD 工作 |
 | [remotex](https://github.com/aleonnet/remotex) | MIT ([LICENSES/remotex-MIT.txt](LICENSES/remotex-MIT.txt)) | ARD High Performance: media offer, reply parsing, SRTP/SRTCP, RTP depacketizer, RTCP feedback, display configuration (`rfb/ard/media`, `rfb/hp.go`) / ARD 高性能通路:媒体 offer、应答解析、SRTP/SRTCP、RTP 解包、RTCP 反馈、显示配置 |
-| [Lucide](https://lucide.dev) | ISC ([LICENSES/lucide-ISC.txt](LICENSES/lucide-ISC.txt)) | The settings, computer and session icons, through Onevra / 设置、计算机与会话图标,经 Onevra 引入 |
+| [Lucide](https://lucide.dev) | ISC ([LICENSES/lucide-ISC.txt](LICENSES/lucide-ISC.txt), [assets/icons/LICENSE](assets/icons/LICENSE)) | The title bar, settings, computer and session icons, as SVG files in `assets/icons` / 标题栏、设置、计算机与会话图标,以 SVG 文件存放于 `assets/icons` |
+| [GoRex](https://github.com/si-mods/gorex) | si-mods' own project / si-mods 自有项目 | The look: palettes, gradient background, cards, title bar and window controls (`theme.go`, `chrome.go`) / 外观:配色、渐变背景、卡片、标题栏与窗口按钮 |
 
 ## Libraries linked into the app / 链接进应用的库
 
 | Project / 项目 | License / 许可证 |
 |---|---|
 | [MyGo](https://github.com/egoist/mygo) | MIT |
-| [Onevra](https://github.com/oneo-me/onevra) | MIT |
 | [purego](https://github.com/ebitengine/purego) | Apache-2.0 |
 | [go-text/typesetting](https://github.com/go-text/typesetting) | Unlicense or BSD-3-Clause |
 | [golang.org/x/image](https://pkg.go.dev/golang.org/x/image), [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | BSD-3-Clause |
-
-Onevra provides the Lucide icon set and native UI component library /
-Onevra 提供 Lucide 图标集与原生界面组件库。
 
 ## References only (no code taken) / 仅作参考(未取用代码)
 
