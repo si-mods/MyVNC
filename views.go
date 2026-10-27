@@ -368,57 +368,58 @@ func (a *app) openSettings() {
 	a.settingsOpen = true
 }
 
-// settingsView is the settings page, in place of the home: a sidebar of
-// pages and the one chosen beside it, as GoRex's. OK, and leaving through
-// Import or Export, applies the values of the page's controls.
-func (a *app) settingsView(c *ui.Context) {
-	apply := func() {
-		a.cfg.Quality, a.cfg.Compress = int(a.quality), int(a.compress)
-		if a.videoMode != a.videoMode0 {
-			a.cfg.SetVideoMode(a.videoMode)
-		}
-		a.cfg.MaxFPS, a.cfg.MaxKbps = int(a.maxFPS), int(a.maxKbps/100)*100
-		a.cfg.GOP = int(a.gop)
-		a.cfg.Orientation = a.orient * 90
-		if a.sess != nil && a.cfg.Orientation != a.orient0*90 {
-			a.sess.SetRotation(a.cfg.Orientation)
-		}
-		a.cfg.Zoom, a.cfg.ClipboardKiB = int(a.zoom), int(a.clipKiB)
-		a.cfg.WheelLines = int(a.wheelLines)
-		a.saveConfig()
-		a.settingsOpen = false
+// syncSettings applies the values of the settings' controls to the config
+// and saves them when they changed, as the settings have no OK button.
+// Those a session takes at once, as its rotation, it takes here.
+func (a *app) syncSettings() {
+	changed := a.cfg.Quality != int(a.quality) || a.cfg.Compress != int(a.compress) ||
+		a.cfg.MaxFPS != int(a.maxFPS) || a.cfg.MaxKbps != int(a.maxKbps/100)*100 ||
+		a.cfg.GOP != int(a.gop) || a.cfg.Orientation != a.orient*90 ||
+		a.cfg.Zoom != int(a.zoom) || a.cfg.ClipboardKiB != int(a.clipKiB) ||
+		a.cfg.WheelLines != int(a.wheelLines) || a.videoMode != a.videoMode0
+	a.cfg.Quality, a.cfg.Compress = int(a.quality), int(a.compress)
+	if a.videoMode != a.videoMode0 {
+		a.cfg.SetVideoMode(a.videoMode)
+		a.videoMode0 = a.videoMode
 	}
+	a.cfg.MaxFPS, a.cfg.MaxKbps = int(a.maxFPS), int(a.maxKbps/100)*100
+	a.cfg.GOP = int(a.gop)
+	a.cfg.Orientation = a.orient * 90
+	if a.sess != nil && a.cfg.Orientation != a.orient0*90 {
+		a.sess.SetRotation(a.cfg.Orientation)
+		a.orient0 = a.orient
+	}
+	a.cfg.Zoom, a.cfg.ClipboardKiB = int(a.zoom), int(a.clipKiB)
+	a.cfg.WheelLines = int(a.wheelLines)
+	if changed {
+		a.saveConfig()
+	}
+}
+
+// closeSettings returns to the home view; the settings are applied as
+// they are changed.
+func (a *app) closeSettings() {
+	a.syncSettings()
+	a.settingsOpen = false
+}
+
+// settingsView is the settings page, in place of the home: a sidebar of
+// pages and the one chosen beside it, as GoRex's. The values of the
+// controls hold as they are changed, and leaving applies them all.
+func (a *app) settingsView(c *ui.Context) {
 	k := colorsOf(c)
 	w, _ := c.Size()
 	narrow := w < 640
 	pages := a.settingsPages()
 	a.page(c, k, func() {
+		b := iconButton(c, k, "chevron-left", locales.Back(), 30, 18).Tooltip(locales.Back())
+		if b.Clicked() {
+			a.closeSettings()
+		}
 		ui.Icon(c, icon("settings")).Size(18, 18).TextColor(k.textMuted).Shrink(0)
 		ui.Text(c, locales.Settings()).FontSize(14).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine().Grow(1).MinWidth(0)
-		if a.importFile != nil {
-			if narrow {
-				if iconButton(c, k, "file-input", locales.ImportTiger(), 30, 17).Tooltip(locales.ImportTiger()).Clicked() {
-					apply()
-					a.importFile()
-				}
-			} else if ui.Button(c, locales.ImportTiger()).Clicked() {
-				apply()
-				a.importFile()
-			}
-		}
-		if a.exportFile != nil {
-			if narrow {
-				if iconButton(c, k, "file-output", locales.ExportTiger(), 30, 17).Tooltip(locales.ExportTiger()).Clicked() {
-					apply()
-					a.exportFile()
-				}
-			} else if ui.Button(c, locales.ExportTiger()).Clicked() {
-				apply()
-				a.exportFile()
-			}
-		}
-		if ui.PrimaryButton(c, locales.Ok()).Clicked() {
-			apply()
+		if ui.Box(c).Size(0, 0).OverlayShortcut(0, ui.KeyEscape) {
+			a.closeSettings()
 		}
 	}, func() {
 		ui.Row(c).Grow(1).MinHeight(0).Gap(8).Padding(0, 8, 8, 8).AlignItems(ui.Stretch).Children(func() {
@@ -445,6 +446,9 @@ func (a *app) settingsView(c *ui.Context) {
 			})
 		})
 	})
+	// The controls set their values as the frame builds them: they hold
+	// at once, without a button to commit them.
+	a.syncSettings()
 }
 
 // settingsPage is a page of the settings: its sidebar item and its rows.
@@ -495,6 +499,35 @@ func settingRow(c *ui.Context, k *colors, label, hint string, control func()) {
 		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(control)
 	})
+}
+
+// settingNote is a page's explanation on a card, above its rows.
+func settingNote(c *ui.Context, k *colors, text string) {
+	card(ui.Row(c).Gap(10).Padding(11, 14).AlignItems(ui.Start), k).Children(func() {
+		ui.Icon(c, icon("info")).Size(16, 16).TextColor(k.iconMuted).Shrink(0)
+		ui.Text(c, text).FontSize(12.5).TextColor(k.textMuted).LineHeight(1.35).Wrap().Grow(1).MinWidth(0)
+	})
+}
+
+// settingAction is a setting that acts rather than holds a value: a card
+// that runs act when clicked, its icon and label, then a chevron.
+func settingAction(c *ui.Context, k *colors, glyph, label string, act func()) {
+	row := card(ui.ButtonBase(c).Label(label).Cursor(ui.CursorPointer).Padding(11, 14).Gap(12).AlignItems(ui.Center), k)
+	switch {
+	case row.Pressed():
+		row.Background(k.cardFocused).Border(1, k.cardBorderFocused).Shadow(0, 1, 2, 0, k.shadow)
+	case row.Hovered():
+		row.Background(k.cardFocused).Border(1, k.cardBorderFocused).Shadow(0, 8, 26, -2, k.shadowFocused)
+	}
+	row.Transition(ui.ElementTransition{Colors: true, Duration: 160 * time.Millisecond})
+	row.Children(func() {
+		ui.Icon(c, icon(glyph)).Size(16, 16).TextColor(k.iconMuted).Shrink(0)
+		ui.Text(c, label).FontSize(13.5).FontWeight(600).TextColor(k.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
+		ui.Icon(c, icon("chevron-right")).Size(15, 15).TextColor(k.iconMuted).Shrink(0)
+	})
+	if row.Clicked() {
+		act()
+	}
 }
 
 // settingStack lays out a setting whose control is too wide to sit beside
@@ -657,7 +690,23 @@ func (a *app) settingsPages() []settingsPage {
 			a.saveConfig()
 		}
 	}}
-	return []settingsPage{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage, agentPage}
+	updatesPage := settingsPage{"updates", "refresh-cw", locales.Updates(), a.updatesView}
+	tigerPage := settingsPage{"tigervnc", "file-input", locales.TigerVNC(), func(c *ui.Context, k *colors) {
+		settingNote(c, k, locales.TigerHelp())
+		if a.importFile != nil {
+			settingAction(c, k, "file-input", locales.ImportTiger(), func() {
+				a.closeSettings()
+				a.importFile()
+			})
+		}
+		if a.exportFile != nil {
+			settingAction(c, k, "file-output", locales.ExportTiger(), func() {
+				a.closeSettings()
+				a.exportFile()
+			})
+		}
+	}}
+	return []settingsPage{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage, agentPage, updatesPage, tigerPage}
 }
 
 func (a *app) connectingView(c *ui.Context) {
