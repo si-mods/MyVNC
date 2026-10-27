@@ -28,7 +28,6 @@ import (
 	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
-	"github.com/oneo-me/onevra/source/components"
 	"github.com/si-mods/MyVNC/internal/mcpserver"
 	"github.com/si-mods/MyVNC/internal/mf"
 	"github.com/si-mods/MyVNC/internal/win32"
@@ -64,7 +63,7 @@ type app struct {
 	server, user, pass string
 	addOpen            bool
 	settingsOpen       bool
-	settingsState      components.SettingsState
+	settingsPage       string // the settings page shown
 	quality, compress  float64
 	maxFPS, maxKbps    float64
 	gop                float64
@@ -120,6 +119,7 @@ type app struct {
 	rdpAddr    string
 	rdpResize  *time.Timer
 	rdpW, rdpH int32
+	winScale   float32 // the window's pixels per DIP, for the RDP control
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -1094,7 +1094,7 @@ func (a *app) prompts(c *ui.Context) {
 			ui.Text(c, locales.ConflictTitle()).Bold()
 			p := j.Conflict.Path
 			ui.Text(c, locales.ConflictMessage(filepath.Base(p), filepath.Dir(p))).Wrap()
-			components.Checkbox(c, &a.conflictAll, locales.ConflictApplyAll())
+			ui.Checkbox(c, &a.conflictAll, locales.ConflictApplyAll())
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, locales.ConflictSkip()).Clicked() {
 					a.answerConflict(j, viewer.Skip, a.conflictAll)
@@ -1223,8 +1223,10 @@ func (a *app) connectRDP(server string) {
 	a.name = "RDP " + host
 	a.title = a.name + " - " + appName
 	a.win.SetTitle(a.title)
+	// Below the title bar; rdpView fits it again each frame.
 	w, h := win32.ClientRect(a.win.NativeHandle())
-	r.Fit(0, 0, w, h)
+	top := a.rdpTop(a.win.IsFullScreen())
+	r.Fit(0, top, w, h-top)
 	r.Show(true)
 	user, domain := a.user, ""
 	if i := strings.LastIndex(user, `\`); i >= 0 {
@@ -1515,14 +1517,20 @@ func main() {
 			}()
 			return
 		}
+		// The view draws the title bar (titleBar), and on Windows the
+		// window's controls; the hidden title bar keeps the window's top
+		// edge, which resizes it.
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:     appName,
-			Width:     1024,
-			Height:    720,
-			MinWidth:  420,
-			MinHeight: 480,
-			StateKey:  "main",
-			Content:   ui.View(a.view),
+			Title:             appName,
+			Width:             1024,
+			Height:            720,
+			MinWidth:          420,
+			MinHeight:         480,
+			StateKey:          "main",
+			TitleBarStyle:     mygo.TitleBarHidden,
+			HideWindowButtons: ownControls,
+			BackgroundColor:   "light-dark(#efe1e6, #231e27)",
+			Content:           ui.View(a.view),
 		})
 		a.win, a.post = win, win.Update
 		a.xfers.Log = a.log

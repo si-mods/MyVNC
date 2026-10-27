@@ -86,7 +86,7 @@ GNU General Public License, version 2 — 见 [LICENSE](LICENSE)。
 
 ## 致谢
 
-TigerVNC(查看器核心)、remotex(ARD 媒体通路)、MyGo 与 Onevra(界面)、
+TigerVNC(查看器核心)、remotex(ARD 媒体通路)、MyGo(界面)、GoRex(外观)、
 purego、go-text/typesetting、golang.org/x/image 与 x/text、Lucide(图标)、
 FFmpeg、PyCryptodome、Parsec(交互灵感)。完整署名见
 [README.third-party.md](README.third-party.md)。

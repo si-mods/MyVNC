@@ -173,5 +173,9 @@
   "errAuthCanceled": "已取消身份验证。",
   "errUnencryptedCanceled": "已取消：该连接未加密。",
   "errHostKeyRejected": "已拒绝该主机密钥。",
-  "errCertRejected": "已拒绝该服务器证书。"
+  "errCertRejected": "已拒绝该服务器证书。",
+  "windowMinimize": "最小化",
+  "windowMaximize": "最大化",
+  "windowRestore": "向下还原",
+  "windowClose": "关闭"
 }

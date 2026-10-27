@@ -95,7 +95,7 @@ contains. Third-party projects and licenses:
 
 ## Acknowledgements
 
-TigerVNC (viewer core), remotex (ARD media), MyGo & Onevra (UI), purego,
+TigerVNC (viewer core), remotex (ARD media), MyGo (UI), GoRex (look), purego,
 go-text/typesetting, golang.org/x/image & x/text, Lucide (icons), FFmpeg,
 PyCryptodome, Parsec (UX inspiration). Full attribution in
 [README.third-party.md](README.third-party.md).

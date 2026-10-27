@@ -66,6 +66,16 @@ func TestViewOnlyMenuSwitchToggles(t *testing.T) {
 	if !a.cfg.ViewOnly {
 		t.Error("cfg.ViewOnly still false after clicking its switch")
 	}
+	// The switch itself, right of its label, flips it once.
+	r, ok := a.tt.Find("View only")
+	if !ok {
+		t.Fatalf("no view only row; texts %q", a.tt.Texts())
+	}
+	a.tt.ClickAt(r.X+r.W+12+18, r.Y+r.H/2)
+	a.tt.Frame()
+	if a.cfg.ViewOnly {
+		t.Error("cfg.ViewOnly still true after clicking the switch")
+	}
 }
 
 // The keyboard path must work independently of the menu.

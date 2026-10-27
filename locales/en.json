@@ -294,5 +294,13 @@
   "errAuthCanceled": "Authentication canceled.",
   "errUnencryptedCanceled": "Canceled: the connection is not encrypted.",
   "errHostKeyRejected": "The host key was rejected.",
-  "errCertRejected": "The server certificate was rejected."
+  "errCertRejected": "The server certificate was rejected.",
+  "windowMinimize": "Minimize",
+  "@windowMinimize": { "description": "Title bar button that minimizes the window (Windows)." },
+  "windowMaximize": "Maximize",
+  "@windowMaximize": { "description": "Title bar button that maximizes the window (Windows)." },
+  "windowRestore": "Restore",
+  "@windowRestore": { "description": "Title bar button of a maximized window, which restores its size (Windows)." },
+  "windowClose": "Close",
+  "@windowClose": { "description": "Title bar button that closes the window (Windows)." }
 }

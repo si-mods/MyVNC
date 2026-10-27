@@ -1,13 +1,18 @@
-// The views, laid out after Parsec: a home of computer cards, a
-// full-window connecting state, and a chrome-free session with a small
-// handle at the top that opens the session panel.
+// The views, laid out after Parsec and drawn after GoRex: a home of
+// computer cards under the app's own title bar, a connecting state, and a
+// session under a title bar that names the computer and opens the session
+// panel; in full screen, a small handle at the top opens the panel.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 package main
 
 import (
+	"bytes"
+	_ "embed"
 	"errors"
 	"image"
+	"image/png"
+	"math"
 	"net/netip"
 	"os"
 	"path"
@@ -17,10 +22,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/i18n"
-
 	"github.com/egoist/mygo/ui"
-	"github.com/oneo-me/onevra/source/components"
-	"github.com/oneo-me/onevra/source/icons/lucide"
 	"github.com/si-mods/MyVNC/internal/win32"
 	"github.com/si-mods/MyVNC/locales"
 	"github.com/si-mods/MyVNC/rfb"
@@ -30,6 +32,7 @@ import (
 func (a *app) view(c *ui.Context) {
 	c.SetTheme(appTheme(c))
 	a.svc = c.Services()
+	c.Root().Background(colorsOf(c).bgBottom)
 	switch {
 	case a.rdp != nil:
 		a.rdpView(c)
@@ -44,114 +47,208 @@ func (a *app) view(c *ui.Context) {
 	a.updateGrab()
 }
 
-// rdpView is the empty page under the embedded Remote Desktop control; the
-// native window covers it.
+// page lays out a view on the window's gradient, under the title bar.
+func (a *app) page(c *ui.Context, k *colors, bar, body func()) {
+	ui.Column(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) { paintBackground(p, r, k) }).Children(func() {
+		a.titleBar(c, k, bar)
+		body()
+	})
+}
+
+//go:embed resources/icon.png
+var appIconPNG []byte
+
+var appIconBitmap *ui.Bitmap
+
+// appIcon is the app's icon, for the title bar.
+func appIcon() *ui.Bitmap {
+	if appIconBitmap == nil {
+		img, err := png.Decode(bytes.NewReader(appIconPNG))
+		if err != nil {
+			return nil
+		}
+		appIconBitmap = ui.NewBitmap(img)
+	}
+	return appIconBitmap
+}
+
+// appTitle is the title bar's left: the app's icon, name and version.
+func (a *app) appTitle(c *ui.Context, k *colors) {
+	ui.Row(c).Gap(9).AlignItems(ui.Center).Shrink(0).Children(func() {
+		if b := appIcon(); b != nil {
+			ui.Image(c, b).Size(22, 22)
+		}
+		ui.Text(c, appName).FontSize(14).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine()
+		if a.version != "" {
+			ui.Text(c, "v"+a.version).FontSize(12).TextColor(k.textFaint).SingleLine()
+		}
+	})
+}
+
+// rdpView is the title bar over the embedded Remote Desktop control; the
+// native window covers the rest.
 func (a *app) rdpView(c *ui.Context) {
-	ui.Box(c).Fill().Background(ui.RGBA(0, 0, 0, 1))
+	k := colorsOf(c)
+	full := a.win != nil && a.win.IsFullScreen()
+	ui.Column(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) { paintBackground(p, r, k) }).Children(func() {
+		if !full {
+			a.titleBar(c, k, func() {
+				ui.Icon(c, icon("monitor")).Size(18, 18).TextColor(k.textMuted).Shrink(0)
+				ui.Text(c, a.name).FontSize(13.5).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine().Ellipsis("…").MinWidth(0)
+				ui.Spacer(c)
+				if iconButton(c, k, "unplug", locales.Disconnect(), 30, 16).Tooltip(locales.Disconnect() + "  Ctrl+Alt+Shift+Q").Clicked() {
+					a.disconnect()
+				}
+			})
+		}
+		ui.Box(c).Grow(1).MinHeight(0).Background(ui.RGBA(0, 0, 0, 1))
+	})
 	if a.rdp != nil && a.win != nil {
 		w, h := win32.ClientRect(a.win.NativeHandle())
-		a.rdp.Fit(0, 0, w, h)
+		if ww, _ := c.Size(); ww > 0 && w > 0 {
+			a.winScale = float32(w) / ww
+		}
+		top := a.rdpTop(full)
+		a.rdp.Fit(0, top, w, h-top)
 		a.rdp.Show(true)
 		a.rdp.Raise()
-		a.scheduleRDPResize(w, h)
+		a.scheduleRDPResize(w, h-top)
 	}
+}
+
+// rdpTop is the height of the title bar over the Remote Desktop control,
+// in the window's pixels.
+func (a *app) rdpTop(full bool) int32 {
+	if full {
+		return 0
+	}
+	s := a.winScale
+	if s <= 0 {
+		s = 1
+	}
+	return int32(math.Round(float64(titleH * s)))
 }
 
 // Home.
 
 func (a *app) homeView(c *ui.Context) {
-	t := c.Theme()
-	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(32, 32, 32+scrollGutter(t), 32).Gap(24).Children(func() {
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, appName).FontSize(28).FontWeight(600)
-				if a.version != "" {
-					ui.Text(c, "v"+a.version).TextColor(t.TextMuted).Margin(0, 0, 0, 10).Grow(1)
-				} else {
-					ui.Box(c).Grow(1)
+	if a.settingsOpen {
+		a.settingsView(c)
+		return
+	}
+	k := colorsOf(c)
+	a.page(c, k, func() {
+		a.appTitle(c, k)
+		ui.Spacer(c)
+		if iconButton(c, k, "settings", locales.Settings(), 30, 17).Tooltip(locales.Settings()).Clicked() {
+			a.openSettings()
+		}
+	}, func() {
+		w, _ := c.Size()
+		inner := min(w, 1120) - 48
+		cols := min(max(int((inner+16)/(236+16)), 1), 4)
+		tracks := make([]ui.Track, cols)
+		for i := range tracks {
+			tracks[i] = ui.Fr(1)
+		}
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(8, 24, 24, 24).Gap(16).Children(func() {
+				if a.rc.active {
+					banner(c, k, k.warn, locales.Reconnecting(a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts),
+						locales.Cancel(), a.cancelReconnect)
 				}
-				if components.IconButton(c, lucide.Settings(), locales.Settings(), components.IconButtonToolbar).Clicked() {
-					a.openSettings()
+				if a.errText != "" {
+					banner(c, k, k.danger, a.errText, locales.Dismiss(), func() { a.errText = "" })
 				}
-			})
-			if a.rc.active {
-				banner(c, t.Warning, locales.Reconnecting(a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts),
-					locales.Cancel(), a.cancelReconnect)
-			}
-			if a.errText != "" {
-				banner(c, t.Danger, a.errText, locales.Dismiss(), func() { a.errText = "" })
-			}
-			ui.Grid(c).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1)).Gap(16).Children(func() {
-				for _, s := range a.cfg.Servers {
-					a.card(c.Key(s), s)
-				}
-				card(c, "+ "+locales.AddComputer(), func() {
-					ui.Text(c, "+").FontSize(40).TextColor(t.TextMuted)
-					ui.Text(c, locales.AddComputer()).Bold()
-				}).OnClick(func() { a.server, a.pass, a.addOpen = "", "", true })
+				ui.Grid(c).ColumnTracks(tracks...).Gap(16).Children(func() {
+					for _, s := range a.cfg.Servers {
+						a.computerCard(c.Key(s), k, s)
+					}
+					a.addCard(c, k)
+				})
 			})
 		})
 	})
-	a.addView(c)
-	a.settingsView(c)
+	a.addView(c, k)
 }
 
-// banner is a dismissible message across the home view.
-func banner(c *ui.Context, color ui.Color, text, button string, act func()) {
-	ui.Row(c).Gap(8).Padding(8, 12).Radius(6).AlignItems(ui.Center).Border(1, color).Children(func() {
-		ui.Text(c, text).TextColor(color).Wrap().Grow(1)
-		ui.Button(c, button).OnClick(act)
-	})
-}
-
-// card is a clickable tile of the home grid.
-func card(c *ui.Context, label string, fn func()) ui.Element {
-	t := c.Theme()
-	el := ui.ButtonBase(c).Label(label).Padding(16).Radius(8).Background(t.Surface).
-		Border(1, t.Border)
-	if el.Hovered() {
-		el.Background(t.SurfaceHover)
+// cardButton is a clickable card of the home grid, which rises under the
+// pointer.
+func cardButton(c *ui.Context, k *colors, label string) ui.Element {
+	el := card(ui.ButtonBase(c).Label(label).Padding(10).Justify(ui.Start).AlignItems(ui.Stretch), k)
+	switch {
+	case el.Pressed():
+		el.Background(k.cardFocused).Border(1, k.cardBorderFocused).Shadow(0, 1, 2, 0, k.shadow)
+	case el.Hovered():
+		el.Background(k.cardFocused).Border(1, k.cardBorderFocused).Shadow(0, 8, 26, -2, k.shadowFocused)
 	}
-	return el.Children(func() {
-		ui.Column(c).Gap(6).Grow(1).AlignItems(ui.Center).Children(fn)
-	})
+	return el.Transition(ui.ElementTransition{Colors: true, Duration: 160 * time.Millisecond})
 }
 
-func (a *app) card(c *ui.Context, server string) {
-	t := c.Theme()
+// thumbH is the height of a card's picture.
+const thumbH = 132
+
+func (a *app) computerCard(c *ui.Context, k *colors, server string) {
 	info := a.cfg.Computers[server]
 	title := server
 	if info.Name != "" {
 		title = info.Name
 	}
-	card(c, server, func() {
-		if th := a.thumbnail(server); th != nil {
-			ui.Image(c, th).Height(120).Fit(ui.Contain).Radius(4)
-		} else {
-			ui.Box(c).Height(120).Center().Children(func() { a.avatar(c, server, info.Name) })
-		}
-		ui.Text(c, title).Bold()
-		if title != server {
-			ui.Text(c, server).TextColor(t.TextMuted)
-		}
-		last := ""
-		switch {
-		case !info.Last.IsZero():
-			last = locales.LastConnected(info.Last.Local())
-		case info.Never:
-			last = locales.NeverConnected()
-		}
-		if last != "" {
-			ui.Text(c, last).TextColor(t.TextMuted).FontSize(t.FontSize - 1)
-		}
-	}).OnClick(func() {
+	el := cardButton(c, k, server)
+	el.Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
+			pic := ui.Box(c).Height(thumbH).Radius(8).Clip().Center().Background(k.hover)
+			pic.Children(func() {
+				if th := a.thumbnail(server); th != nil {
+					ui.Image(c, th).Fill().Fit(ui.Cover)
+				} else {
+					a.avatar(c, k, server, info.Name)
+				}
+			})
+			ui.Column(c).Gap(2).Padding(0, 4, 2, 4).MinWidth(0).Children(func() {
+				ui.Text(c, title).FontSize(13.5).FontWeight(600).TextColor(k.text).SingleLine().Ellipsis("…")
+				if title != server {
+					ui.Text(c, server).FontSize(12).TextColor(k.textMuted).SingleLine().Ellipsis("…")
+				}
+				last := ""
+				switch {
+				case !info.Last.IsZero():
+					last = locales.LastConnected(info.Last.Local())
+				case info.Never:
+					last = locales.NeverConnected()
+				}
+				if last != "" {
+					ui.Text(c, last).FontSize(11.5).TextColor(k.textFaint).SingleLine().Ellipsis("…")
+				}
+			})
+		})
+	})
+	if el.Clicked() {
 		a.server = server
 		a.connect()
-	}).ContextMenu(func(m *ui.Menu) {
+	}
+	el.ContextMenu(func(m *ui.Menu) {
 		if m.Item(locales.RemoveComputer()).Chosen() {
 			a.removeServer(server)
 		}
 	})
+}
+
+// addCard is the last card of the grid, which opens the form of a new
+// computer.
+func (a *app) addCard(c *ui.Context, k *colors) {
+	el := cardButton(c, k, locales.AddComputer())
+	el.Children(func() {
+		ui.Column(c).Grow(1).MinHeight(thumbH + 52).Gap(10).Center().Children(func() {
+			ui.Box(c).Size(44, 44).Radius(22).Center().Background(k.hover).Children(func() {
+				ui.Icon(c, icon("plus")).Size(22, 22).TextColor(k.textMuted)
+			})
+			ui.Text(c, locales.AddComputer()).FontSize(13.5).FontWeight(600).TextColor(k.textMuted)
+		})
+	})
+	if el.Clicked() {
+		a.server, a.pass, a.addOpen = "", "", true
+	}
 }
 
 // removeServer forgets a saved connection: its card, metadata and thumbnail.
@@ -170,14 +267,13 @@ func (a *app) removeServer(server string) {
 // avatar is the picture of a computer: the initials of the desktop name,
 // or of a host name, else a computer, for an IP address would give its
 // first digits.
-func (a *app) avatar(c *ui.Context, server, name string) {
+func (a *app) avatar(c *ui.Context, k *colors, server, name string) {
 	if name == "" {
 		host, _, err := viewer.ParseHostPort(server)
 		host, _, _ = strings.Cut(host, "%") // an IPv6 zone
 		if _, ipErr := netip.ParseAddr(host); err != nil || ipErr == nil {
-			size := c.Theme().FontSize * 2.25
-			ui.Box(c).Size(size, size).Radius(size / 2).Center().Background(c.Theme().TextMuted).Label(server).Children(func() {
-				ui.Icon(c, lucide.Monitor()).TextColor(ui.RGB(255, 255, 255))
+			ui.Box(c).Size(48, 48).Radius(24).Center().Background(k.card).Border(1, k.cardBorder).Label(server).Children(func() {
+				ui.Icon(c, icon("monitor")).Size(22, 22).TextColor(k.iconMuted)
 			})
 			return
 		}
@@ -216,29 +312,42 @@ func (a *app) saveThumbnail(server string, img *image.RGBA) {
 	}
 }
 
+// dialog shows a dialog of the app's look while *open is true; clicking
+// outside it or pressing Escape closes it.
+func dialog(c *ui.Context, k *colors, open *bool, label string, width float32, fn func()) {
+	ui.DialogBase(c, open, func(back, panel ui.Element) {
+		back.Background(k.backdrop)
+		w, h := c.Size()
+		panelLook(panel, k).Label(label).Width(min(width, w-32)).MaxHeight(h - 32).Padding(20).Gap(14)
+		fn()
+	})
+}
+
 // addView is the form of "+ Add computer".
-func (a *app) addView(c *ui.Context) {
-	components.Dialog(c, &a.addOpen, components.DialogOptions{Label: locales.AddComputer()}, func(panel ui.Element) {
-		panel.Width(420).Padding(20).Gap(14)
-		components.Text(c, locales.AddComputer()).FontSize(20).FontWeight(600)
+func (a *app) addView(c *ui.Context, k *colors) {
+	dialog(c, k, &a.addOpen, locales.AddComputer(), 420, func() {
+		ui.Text(c, locales.AddComputer()).FontSize(18).FontWeight(700).TextColor(k.text)
 		submit := false
-		submit = components.TextBox(c, &a.server, components.TextBoxOptions{}).
-			Label(locales.Server()).Placeholder(locales.ServerPlaceholder()).AutoFocus().Submitted() || submit
-		components.TextBox(c, &a.user, components.TextBoxOptions{}).
-			Label(locales.Username()).Placeholder(locales.UsernamePlaceholder())
-		submit = components.TextBox(c, &a.pass, components.TextBoxOptions{}).
-			Label(locales.Password()).Password().Submitted() || submit
-		if components.Switch(c, &a.cfg.Remember, locales.RememberPassword()).Changed() {
+		ui.Field(c, locales.Server(), func() {
+			submit = ui.TextInput(c, &a.server).Placeholder(locales.ServerPlaceholder()).AutoFocus().Submitted() || submit
+		})
+		ui.Field(c, locales.Username(), func() {
+			ui.TextInput(c, &a.user).Placeholder(locales.UsernamePlaceholder())
+		})
+		ui.Field(c, locales.Password(), func() {
+			submit = ui.TextInput(c, &a.pass).Password().Submitted() || submit
+		})
+		if switchRow(c, k, locales.RememberPassword(), &a.cfg.Remember) {
 			if !a.cfg.Remember {
 				a.forgetPassword(a.server)
 			}
 			a.saveConfig()
 		}
-		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if components.Button(c, locales.Cancel(), components.ButtonGhost).Clicked() {
+		ui.Row(c).Gap(8).Justify(ui.End).Padding(4, 0, 0, 0).Children(func() {
+			if ui.Button(c, locales.Cancel()).Clicked() {
 				a.addOpen = false
 			}
-			if components.Button(c, locales.Connect(), components.ButtonPrimary).Clicked() || submit {
+			if ui.PrimaryButton(c, locales.Connect()).Clicked() || submit {
 				a.addOpen = false
 				a.connect()
 			}
@@ -253,9 +362,15 @@ func (a *app) openSettings() {
 	a.orient, a.orient0 = a.cfg.Orientation/90, a.cfg.Orientation/90
 	a.zoom, a.clipKiB = float64(a.cfg.Zoom), float64(a.cfg.ClipboardKiB)
 	a.wheelLines = float64(a.cfg.WheelLines)
+	if a.settingsPage == "" {
+		a.settingsPage = "interface"
+	}
 	a.settingsOpen = true
 }
 
+// settingsView is the settings page, in place of the home: a sidebar of
+// pages and the one chosen beside it, as GoRex's. OK, and leaving through
+// Import or Export, applies the values of the page's controls.
 func (a *app) settingsView(c *ui.Context) {
 	apply := func() {
 		a.cfg.Quality, a.cfg.Compress = int(a.quality), int(a.compress)
@@ -273,236 +388,298 @@ func (a *app) settingsView(c *ui.Context) {
 		a.saveConfig()
 		a.settingsOpen = false
 	}
-	components.Dialog(c, &a.settingsOpen, components.DialogOptions{
-		Label: locales.Settings(), DisableBackdropClose: true, DisableEscapeClose: true,
-	}, func(panel ui.Element) {
-		w, h := c.Size()
-		width := min(float32(860), w-80)
-		height := min(float32(580), h-120)
-		panel.Width(width).Height(height).Padding(0).Gap(0).Clip()
-		components.Settings(c, &a.settingsState, a.settingsCategories(), components.SettingsOptions{
-			Title:  locales.Settings(),
-			Narrow: width < 600,
-			Close:  apply,
-			HeaderActions: func(c *ui.Context) {
-				if a.importFile != nil && components.Button(c, locales.ImportTiger(), components.ButtonGhost).Clicked() {
+	k := colorsOf(c)
+	w, _ := c.Size()
+	narrow := w < 640
+	pages := a.settingsPages()
+	a.page(c, k, func() {
+		ui.Icon(c, icon("settings")).Size(18, 18).TextColor(k.textMuted).Shrink(0)
+		ui.Text(c, locales.Settings()).FontSize(14).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine().Grow(1).MinWidth(0)
+		if a.importFile != nil {
+			if narrow {
+				if iconButton(c, k, "file-input", locales.ImportTiger(), 30, 17).Tooltip(locales.ImportTiger()).Clicked() {
 					apply()
 					a.importFile()
 				}
-				if a.exportFile != nil && components.Button(c, locales.ExportTiger(), components.ButtonGhost).Clicked() {
+			} else if ui.Button(c, locales.ImportTiger()).Clicked() {
+				apply()
+				a.importFile()
+			}
+		}
+		if a.exportFile != nil {
+			if narrow {
+				if iconButton(c, k, "file-output", locales.ExportTiger(), 30, 17).Tooltip(locales.ExportTiger()).Clicked() {
 					apply()
 					a.exportFile()
 				}
-				if components.Button(c, locales.Ok(), components.ButtonPrimary).Clicked() {
-					apply()
+			} else if ui.Button(c, locales.ExportTiger()).Clicked() {
+				apply()
+				a.exportFile()
+			}
+		}
+		if ui.PrimaryButton(c, locales.Ok()).Clicked() {
+			apply()
+		}
+	}, func() {
+		ui.Row(c).Grow(1).MinHeight(0).Gap(8).Padding(0, 8, 8, 8).AlignItems(ui.Stretch).Children(func() {
+			side := ui.Column(c).Shrink(0).Padding(8).Gap(2)
+			if narrow {
+				side.Width(52).Padding(6)
+			} else {
+				side.Width(200)
+			}
+			card(side, k).Children(func() {
+				for _, p := range pages {
+					a.sidebarItem(c, k, p, narrow)
 				}
-			},
+			})
+			ui.Scroll(c).Grow(1).MinWidth(0).Padding(14, 18, 18, 18).Children(func() {
+				ui.Column(c).Gap(10).MaxWidth(720).Children(func() {
+					for _, p := range pages {
+						if p.id == a.settingsPage {
+							ui.Text(c, p.title).FontSize(17).FontWeight(700).TextColor(k.text).Padding(0, 0, 2, 4)
+							p.build(c, k)
+						}
+					}
+				})
+			})
 		})
 	})
 }
 
-// onevraSelect is a Onevra select over values, showing label of the one
-// chosen; its Trigger.Changed reports a new choice.
-func onevraSelect[T comparable](c *ui.Context, value *T, values []T, label func(T) string) *components.SelectParts[T] {
-	sel := components.Select(c, value)
-	sel.Trigger.Children(func() { components.Text(c, label(*value)) })
-	sel.Popup(func(panel ui.Element) {
-		for _, v := range values {
-			item := sel.Item(v)
-			item.Children(func() { components.Text(c, label(v)) })
+// settingsPage is a page of the settings: its sidebar item and its rows.
+type settingsPage struct {
+	id, glyph, title string
+	build            func(c *ui.Context, k *colors)
+}
+
+// sidebarItem is a page's chip in the settings' sidebar; the chosen one
+// has a face of its own.
+func (a *app) sidebarItem(c *ui.Context, k *colors, p settingsPage, narrow bool) {
+	active := a.settingsPage == p.id
+	e := ui.Row(c.Key(p.id)).Height(34).Padding(0, 12, 0, 10).Gap(9).AlignItems(ui.Center).Radius(17).
+		Cursor(ui.CursorPointer).Role(ui.RoleTab).Selected(active).Label(p.title)
+	if narrow {
+		e.Padding(0).Justify(ui.Center).Tooltip(p.title)
+	}
+	if active {
+		e.Background(k.tabActive).Shadow(0, 1, 2, 0, k.shadow).Shadow(0, 2, 8, 0, k.shadow)
+	} else if e.Hovered() {
+		e.Background(k.hover)
+	}
+	e.Transition(ui.ElementTransition{Colors: true, Duration: 160 * time.Millisecond})
+	if e.Clicked() {
+		a.settingsPage = p.id
+	}
+	e.Children(func() {
+		col := k.iconMuted
+		if active {
+			col = k.text
+		}
+		ui.Icon(c, icon(p.glyph)).Size(16, 16).TextColor(col).Shrink(0)
+		if !narrow {
+			ui.Text(c, p.title).FontSize(13.5).FontWeight(500).TextColor(k.text).SingleLine().Ellipsis("…")
 		}
 	})
-	return sel
 }
 
-// selectValue reports whether a Onevra select chose another value.
+// settingRow lays out a setting on a card: its label and hint, and its
+// control beside them.
+func settingRow(c *ui.Context, k *colors, label, hint string, control func()) {
+	card(ui.Row(c).Gap(16).AlignItems(ui.Center).Padding(11, 14), k).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, label).FontSize(13.5).FontWeight(600).TextColor(k.text).Wrap()
+			if hint != "" {
+				ui.Text(c, hint).FontSize(12).TextColor(k.textFaint).LineHeight(1.3).Wrap()
+			}
+		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(control)
+	})
+}
+
+// settingStack lays out a setting whose control is too wide to sit beside
+// its label, as a slider or a segmented control, below it.
+func settingStack(c *ui.Context, k *colors, label string, control func()) {
+	card(ui.Column(c).Gap(10).Padding(11, 14), k).Children(func() {
+		ui.Text(c, label).FontSize(13.5).FontWeight(600).TextColor(k.text).Wrap()
+		control()
+	})
+}
+
+// settingSwitch is a setting of a switch bound to v; a click anywhere on
+// its card flips it. It reports whether this build flipped it.
+func settingSwitch(c *ui.Context, k *colors, label, hint string, v *bool) bool {
+	row := card(ui.Row(c).Gap(16).AlignItems(ui.Center).Padding(11, 14).Cursor(ui.CursorPointer), k)
+	changed := false
+	row.Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, label).FontSize(13.5).FontWeight(600).TextColor(k.text).Wrap()
+			if hint != "" {
+				ui.Text(c, hint).FontSize(12).TextColor(k.textFaint).LineHeight(1.3).Wrap()
+			}
+		})
+		changed = ui.Switch(c, v).Label(label).Changed()
+	})
+	if !changed && row.Clicked() {
+		*v = !*v
+		changed = true
+	}
+	return changed
+}
+
+// selectValue is a select of values, each shown as label says; it
+// reports whether it chose another.
 func selectValue[T comparable](c *ui.Context, value *T, values []T, label func(T) string) bool {
-	return onevraSelect(c, value, values, label).Trigger.Changed()
+	return selectOf(c, value, values, label).Changed()
 }
 
-// settingsCategories builds Onevra's settings surface: one category per
-// page, one row per setting.
-func (a *app) settingsCategories() []components.SettingsCategory {
-	interfacePage := components.SettingsCategory{
-		ID: "interface", Title: locales.Interface(), Icon: lucide.SlidersHorizontal(),
-		Groups: []components.SettingsGroup{{ID: "look", Items: []components.SettingsItem{
-			{ID: "appearance", Title: locales.Appearance(), Build: func(c *ui.Context) {
-				if selectValue(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName) {
-					setThemeSource(a.cfg.Theme)
-					a.saveConfig()
-				}
-			}},
-			{ID: "language", Title: locales.Language(), Build: func(c *ui.Context) {
-				if selectValue(c, &a.cfg.Language, languages, languageName) {
-					a.saveConfig()
-					if a.setLocale != nil {
-						a.setLocale(a.cfg.Language)
-					}
-				}
-			}},
-			{ID: "scaling", Title: locales.Scaling(), Build: func(c *ui.Context) {
-				selectValue(c, &a.cfg.Scaling, viewer.Scalings, scalingName)
-			}},
-			{ID: "zoom", Title: locales.ZoomPercent(), Build: func(c *ui.Context) {
-				components.NumberInput(c, &a.zoom, 50, 200, 10).Label(locales.ZoomPercent())
-			}},
-		}}},
-	}
-	videoPage := components.SettingsCategory{
-		ID: "video", Title: locales.Video(), Icon: lucide.MonitorPlay(),
-		Groups: []components.SettingsGroup{{ID: "picture", Items: []components.SettingsItem{
-			{ID: "profile", Title: locales.Profile(), Build: func(c *ui.Context) {
-				if selectValue(c, &a.cfg.Profile, viewer.Profiles, profileName) {
-					a.cfg.ApplyProfile(a.cfg.Profile)
-					a.quality, a.compress = float64(a.cfg.Quality), float64(a.cfg.Compress)
-					a.maxFPS, a.maxKbps, a.gop = float64(a.cfg.MaxFPS), float64(a.cfg.MaxKbps), float64(a.cfg.GOP)
-					a.videoMode, a.videoMode0 = a.cfg.VideoMode(), a.cfg.VideoMode()
-				}
-			}},
-			{ID: "mode", Title: locales.VideoMode(), Stacked: true, Build: func(c *ui.Context) {
-				tabs := components.Tabs(c, &a.videoMode, components.TabsSegmented,
-					locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy())
-				_ = tabs
-			}},
-			{ID: "encoding", Title: locales.PreferredEncoding(), Build: func(c *ui.Context) {
-				selectValue(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel)
-			}},
-			{ID: "quality", Title: locales.JpegQuality() + ": " + strconv.Itoa(int(a.quality)*10) + " %", Stacked: true, Build: func(c *ui.Context) {
-				components.Slider(c, &a.quality, 0, 9, components.SliderOptions{Step: 1}).Label(locales.JpegQuality())
-			}},
-			{ID: "compression", Title: locales.CompressionLevel(), Build: func(c *ui.Context) {
-				components.NumberInput(c, &a.compress, 0, 9, 1).Label(locales.CompressionLevel())
-			}},
-			{ID: "fps", Title: locales.MaxFPS() + ": " + fpsText(a.maxFPS), Stacked: true, Build: func(c *ui.Context) {
-				components.Slider(c, &a.maxFPS, 0, 60, components.SliderOptions{Step: 1}).Label(locales.MaxFPS())
-			}},
-			{ID: "kbps", Title: locales.H264Kbps() + ": " + kbpsText(a.maxKbps), Stacked: true, Build: func(c *ui.Context) {
-				components.Slider(c, &a.maxKbps, 0, 60000, components.SliderOptions{Step: 500}).Label(locales.H264Kbps())
-			}},
-			{ID: "gop", Title: locales.H264GOP() + ": " + gopText(a.gop), Stacked: true, Build: func(c *ui.Context) {
-				components.Slider(c, &a.gop, 0, 300, components.SliderOptions{Step: 1}).Label(locales.H264GOP())
-			}},
-			{ID: "orientation", Title: locales.Orientation(), Stacked: true, Build: func(c *ui.Context) {
-				components.Tabs(c, &a.orient, components.TabsSegmented, locales.Default(), "90°", "180°", "270°")
-			}},
-			{ID: "decoding", Title: locales.VideoDecoding(), Build: func(c *ui.Context) {
-				selectValue(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
-			}},
-			{ID: "mjpeg-warning", Build: func(c *ui.Context) {
-				if a.videoMode == 2 {
-					components.Text(c, locales.LegacyBandwidthWarning()).TextColor(c.Theme().Warning).Wrap()
-				}
-			}},
-		}}},
-	}
-	clipboardPage := components.SettingsCategory{
-		ID: "clipboard", Title: locales.Clipboard(), Icon: lucide.Clipboard(),
-		Groups: []components.SettingsGroup{{ID: "text", Items: []components.SettingsItem{
-			{ID: "limit", Title: locales.ClipboardLimit(), Build: func(c *ui.Context) {
-				components.NumberInput(c, &a.clipKiB, 1, 64*1024, 64).Label(locales.ClipboardLimit())
-			}},
-			{ID: "accept", Title: locales.AcceptClipboard(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard(), components.SwitchOptions{HideLabel: true})
-			}},
-			{ID: "send", Title: locales.SendClipboard(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.SendClipboard, locales.SendClipboard(), components.SwitchOptions{HideLabel: true})
-			}},
-		}}},
-	}
-	inputPage := components.SettingsCategory{
-		ID: "input", Title: locales.Input(), Icon: lucide.Keyboard(),
-		Groups: []components.SettingsGroup{{ID: "mouse", Items: []components.SettingsItem{
-			{ID: "view", Title: locales.ViewOnly(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.ViewOnly, locales.ViewOnly(), components.SwitchOptions{HideLabel: true})
-			}},
-			{ID: "middle", Title: locales.EmulateMiddleButton(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.EmulateMiddleButton, locales.EmulateMiddleButton(), components.SwitchOptions{HideLabel: true})
-			}},
-			{ID: "wheel", Title: locales.WheelLines(), Build: func(c *ui.Context) {
-				components.NumberInput(c, &a.wheelLines, 0, 15, 1).Label(locales.WheelLines())
-			}},
-		}}},
-	}
-	connectionPage := components.SettingsCategory{
-		ID: "connection", Title: locales.Connection(), Icon: lucide.Plug(),
-		Groups: []components.SettingsGroup{{ID: "session", Items: []components.SettingsItem{
-			{ID: "shared", Title: locales.Shared(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.Shared, locales.Shared(), components.SwitchOptions{HideLabel: true})
-			}},
-			{ID: "reconnect", Title: locales.Reconnect(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.Reconnect, locales.Reconnect(), components.SwitchOptions{HideLabel: true})
-			}},
-			{ID: "hp", Title: locales.HighPerformance(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.HighPerformance, locales.HighPerformance(), components.SwitchOptions{HideLabel: true})
-			}},
-			{ID: "secure", Title: locales.SecureOnly(), Build: func(c *ui.Context) {
-				components.Switch(c, &a.cfg.SecureOnly, locales.SecureOnly(), components.SwitchOptions{HideLabel: true})
-			}},
-		}}},
-	}
-	windowItems := []components.SettingsItem{
-		{ID: "fullscreen", Title: locales.FullScreen(), Build: func(c *ui.Context) {
-			components.Switch(c, &a.cfg.FullScreen, locales.FullScreen(), components.SwitchOptions{HideLabel: true})
-		}},
-		{ID: "dynamic", Title: locales.DynamicResolution(), Build: func(c *ui.Context) {
-			components.Switch(c, &a.cfg.DynamicResolution, locales.DynamicResolution(), components.SwitchOptions{HideLabel: true})
-		}},
-	}
-	if a.displays != nil {
-		if ds := a.displays(); len(ds) > 1 {
-			windowItems = append(windowItems, components.SettingsItem{ID: "display", Title: locales.FullScreenOn(), Build: func(c *ui.Context) {
-				selectValue(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
-					if d == "" {
-						return locales.DisplayCurrent()
-					}
-					return d
-				})
-			}})
+// selectOf is ui.Select choosing one of values into *value, each shown as
+// label says.
+func selectOf[T comparable](c *ui.Context, value *T, values []T, label func(T) string) ui.Element {
+	labels := make([]string, len(values))
+	shown := ""
+	for i, v := range values {
+		labels[i] = label(v)
+		if v == *value {
+			shown = labels[i]
 		}
 	}
-	windowPage := components.SettingsCategory{
-		ID: "window", Title: locales.Window(), Icon: lucide.AppWindow(),
-		Groups: []components.SettingsGroup{{ID: "layout", Items: windowItems}},
+	e := ui.Select(c, &shown, labels).Width(200)
+	if i := slices.Index(labels, shown); i >= 0 {
+		*value = values[i]
 	}
-	agentPage := components.SettingsCategory{
-		ID: "agent", Title: locales.AgentMCP(), Icon: lucide.Bot(),
-		Groups: []components.SettingsGroup{{ID: "mcp", Items: []components.SettingsItem{
-			{ID: "allow", Title: locales.AllowMCP(), Build: func(c *ui.Context) {
-				if switchChanged(c, &a.cfg.MCPEnabled, locales.AllowMCP(), components.SwitchOptions{HideLabel: true}) {
-					a.saveConfig()
-				}
-			}},
-			{ID: "mcp-help", Build: func(c *ui.Context) {
-				components.Text(c, locales.McpHelp()).TextColor(c.Theme().TextMuted).Wrap()
-			}},
-		}}},
-	}
-	return []components.SettingsCategory{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage, agentPage}
+	return e
 }
 
-// scrollGutter is the room a scroll's bar takes at its right edge, so
-// that content does not run under it.
-func scrollGutter(t *ui.Theme) float32 {
-	w := t.ScrollbarWidth
-	if w <= 0 {
-		w = 6
-	}
-	return w + 12
+// settingsPages are the settings: one page per category, one card per
+// setting.
+func (a *app) settingsPages() []settingsPage {
+	interfacePage := settingsPage{"interface", "sliders-horizontal", locales.Interface(), func(c *ui.Context, k *colors) {
+		settingRow(c, k, locales.Appearance(), "", func() {
+			if selectValue(c, &a.cfg.Theme, []string{"", "light", "dark"}, themeName) {
+				setThemeSource(a.cfg.Theme)
+				a.saveConfig()
+			}
+		})
+		settingRow(c, k, locales.Language(), "", func() {
+			if selectValue(c, &a.cfg.Language, languages, languageName) {
+				a.saveConfig()
+				if a.setLocale != nil {
+					a.setLocale(a.cfg.Language)
+				}
+			}
+		})
+		settingRow(c, k, locales.Scaling(), "", func() {
+			selectValue(c, &a.cfg.Scaling, viewer.Scalings, scalingName)
+		})
+		settingRow(c, k, locales.ZoomPercent(), "", func() {
+			ui.NumberInput(c, &a.zoom, 50, 200, 10).Label(locales.ZoomPercent())
+		})
+	}}
+	videoPage := settingsPage{"video", "monitor-play", locales.Video(), func(c *ui.Context, k *colors) {
+		settingRow(c, k, locales.Profile(), "", func() {
+			if selectValue(c, &a.cfg.Profile, viewer.Profiles, profileName) {
+				a.cfg.ApplyProfile(a.cfg.Profile)
+				a.quality, a.compress = float64(a.cfg.Quality), float64(a.cfg.Compress)
+				a.maxFPS, a.maxKbps, a.gop = float64(a.cfg.MaxFPS), float64(a.cfg.MaxKbps), float64(a.cfg.GOP)
+				a.videoMode, a.videoMode0 = a.cfg.VideoMode(), a.cfg.VideoMode()
+			}
+		})
+		settingStack(c, k, locales.VideoMode(), func() {
+			ui.Segmented(c, &a.videoMode, locales.ModeWebRTC(), locales.ModeDirect(), locales.ModeLegacy()).Label(locales.VideoMode())
+			if a.videoMode == 2 {
+				ui.Text(c, locales.LegacyBandwidthWarning()).FontSize(12.5).TextColor(k.warn).Wrap()
+			}
+		})
+		settingRow(c, k, locales.PreferredEncoding(), "", func() {
+			selectValue(c, &a.cfg.Encoding, viewer.Encodings(), encodingLabel)
+		})
+		settingStack(c, k, locales.JpegQuality()+": "+strconv.Itoa(int(a.quality)*10)+" %", func() {
+			ui.Slider(c, &a.quality, 0, 9).Step(1).Label(locales.JpegQuality())
+		})
+		settingRow(c, k, locales.CompressionLevel(), "", func() {
+			ui.NumberInput(c, &a.compress, 0, 9, 1).Label(locales.CompressionLevel())
+		})
+		settingStack(c, k, locales.MaxFPS()+": "+fpsText(a.maxFPS), func() {
+			ui.Slider(c, &a.maxFPS, 0, 60).Step(1).Label(locales.MaxFPS())
+		})
+		settingStack(c, k, locales.H264Kbps()+": "+kbpsText(a.maxKbps), func() {
+			ui.Slider(c, &a.maxKbps, 0, 60000).Step(500).Label(locales.H264Kbps())
+		})
+		settingStack(c, k, locales.H264GOP()+": "+gopText(a.gop), func() {
+			ui.Slider(c, &a.gop, 0, 300).Step(1).Label(locales.H264GOP())
+		})
+		settingStack(c, k, locales.Orientation(), func() {
+			ui.Segmented(c, &a.orient, locales.Default(), "90°", "180°", "270°").Label(locales.Orientation())
+		})
+		settingRow(c, k, locales.VideoDecoding(), "", func() {
+			selectValue(c, &a.cfg.VideoDecoding, viewer.VideoDecodings, videoDecodingName)
+		})
+	}}
+	clipboardPage := settingsPage{"clipboard", "clipboard", locales.Clipboard(), func(c *ui.Context, k *colors) {
+		settingRow(c, k, locales.ClipboardLimit(), "", func() {
+			ui.NumberInput(c, &a.clipKiB, 1, 64*1024, 64).Label(locales.ClipboardLimit())
+		})
+		settingSwitch(c, k, locales.AcceptClipboard(), "", &a.cfg.AcceptClipboard)
+		settingSwitch(c, k, locales.SendClipboard(), "", &a.cfg.SendClipboard)
+	}}
+	inputPage := settingsPage{"input", "keyboard", locales.Input(), func(c *ui.Context, k *colors) {
+		settingSwitch(c, k, locales.ViewOnly(), "", &a.cfg.ViewOnly)
+		settingSwitch(c, k, locales.EmulateMiddleButton(), "", &a.cfg.EmulateMiddleButton)
+		settingRow(c, k, locales.WheelLines(), "", func() {
+			ui.NumberInput(c, &a.wheelLines, 0, 15, 1).Label(locales.WheelLines())
+		})
+	}}
+	connectionPage := settingsPage{"connection", "plug", locales.Connection(), func(c *ui.Context, k *colors) {
+		settingSwitch(c, k, locales.Shared(), "", &a.cfg.Shared)
+		settingSwitch(c, k, locales.Reconnect(), "", &a.cfg.Reconnect)
+		settingSwitch(c, k, locales.HighPerformance(), "", &a.cfg.HighPerformance)
+		settingSwitch(c, k, locales.SecureOnly(), "", &a.cfg.SecureOnly)
+	}}
+	windowPage := settingsPage{"window", "app-window", locales.Window(), func(c *ui.Context, k *colors) {
+		settingSwitch(c, k, locales.FullScreen(), "", &a.cfg.FullScreen)
+		settingSwitch(c, k, locales.DynamicResolution(), "", &a.cfg.DynamicResolution)
+		if a.displays != nil {
+			if ds := a.displays(); len(ds) > 1 {
+				settingRow(c, k, locales.FullScreenOn(), "", func() {
+					selectValue(c, &a.cfg.FullScreenDisplay, append([]string{""}, ds...), func(d string) string {
+						if d == "" {
+							return locales.DisplayCurrent()
+						}
+						return d
+					})
+				})
+			}
+		}
+	}}
+	agentPage := settingsPage{"agent", "bot", locales.AgentMCP(), func(c *ui.Context, k *colors) {
+		if settingSwitch(c, k, locales.AllowMCP(), locales.McpHelp(), &a.cfg.MCPEnabled) {
+			a.saveConfig()
+		}
+	}}
+	return []settingsPage{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage, agentPage}
 }
 
 func (a *app) connectingView(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Center().Gap(12).Children(func() {
-		ui.Spinner(c)
-		ui.Text(c, a.step()).FontSize(18).Bold()
-		ui.Text(c, a.target).TextColor(t.TextMuted)
-		if !a.modal() && ui.Button(c, locales.Cancel()).Clicked() {
-			if a.sess != nil {
-				a.disconnect()
-			} else if a.cancel != nil {
-				a.cancel()
-			}
-		}
+	k := colorsOf(c)
+	a.page(c, k, func() {
+		a.appTitle(c, k)
+		ui.Spacer(c)
+	}, func() {
+		ui.Column(c).Grow(1).Center().Padding(0, 16, titleH, 16).Children(func() {
+			card(ui.Column(c).Width(360).Padding(28, 24).Gap(10).AlignItems(ui.Center), k).Children(func() {
+				ui.Spinner(c).Margin(0, 0, 6, 0)
+				ui.Text(c, a.step()).FontSize(17).FontWeight(700).TextColor(k.text)
+				ui.Text(c, a.target).FontSize(13).TextColor(k.textMuted).Wrap()
+				if !a.modal() && ui.Button(c, locales.Cancel()).Margin(8, 0, 0, 0).Clicked() {
+					if a.sess != nil {
+						a.disconnect()
+					} else if a.cancel != nil {
+						a.cancel()
+					}
+				}
+			})
+		})
 	})
 }
 
@@ -511,38 +688,102 @@ func (a *app) connectingView(c *ui.Context) {
 const pillW, pillH = 72, 16
 
 func (a *app) sessionView(c *ui.Context) {
-	ww, _ := c.Size()
-	ui.Box(c).Fill().Background(ui.RGBA(0, 0, 0, 1)).Children(func() {
-		a.screenView(c)
-		if a.cfg.Stats {
-			a.statsView(c)
-		}
-		if a.hpNote != "" {
-			ui.Box(c).Absolute().Top(pillH + 8).Left(16).Width(max(ww-32, 0)).Radius(6).Background(ui.RGBA(20, 20, 20, 0.85)).Children(func() {
-				banner(c, c.Theme().Warning, a.hpNote, locales.Dismiss(), func() { a.hpNote = "" })
-			})
-		}
-		if j := a.activeTransfer(); j != nil && !a.menuOpen {
-			a.transferChip(c, j)
-		}
-		left := float32(a.cfg.PillPos) * max(ww-pillW, 0)
-		pill := ui.Box(c).Label(locales.SessionMenu()).Absolute().Top(0).Left(left).Size(pillW, pillH).
-			Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M").Bind(&a.pillBox)
-		pill.HandleInput(func(ev ui.InputEvent) bool { return a.dragPill(ev, left, ww) })
-		ui.Popover(c, pill, &a.menuOpen, func() { a.panel(c) })
-	})
-	a.screenRect, a.pillRect = a.screen.Bounds(c), a.pillBox.Bounds(c)
+	k := colorsOf(c)
+	full := a.cfg.FullScreen
+	screenArea := func() {
+		ww, _ := c.Size()
+		ui.Box(c).Grow(1).MinHeight(0).Background(ui.RGBA(0, 0, 0, 1)).Children(func() {
+			if a.sess == nil {
+				return // the title bar's panel disconnected
+			}
+			a.screenView(c)
+			if a.cfg.Stats {
+				a.statsView(c)
+			}
+			if a.hpNote != "" {
+				top := float32(8)
+				if full {
+					top += pillH
+				}
+				ui.Box(c).Absolute().Top(top).Left(16).Width(max(ww-32, 0)).Children(func() {
+					banner(c, k, k.warn, a.hpNote, locales.Dismiss(), func() { a.hpNote = "" })
+				})
+			}
+			if j := a.activeTransfer(); j != nil && !a.menuOpen {
+				a.transferChip(c, j)
+			}
+			if full {
+				left := float32(a.cfg.PillPos) * max(ww-pillW, 0)
+				pill := ui.Box(c).Label(locales.SessionMenu()).Absolute().Top(0).Left(left).Size(pillW, pillH).
+					Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M").Bind(&a.pillBox)
+				pill.HandleInput(func(ev ui.InputEvent) bool { return a.dragPill(ev, left, ww) })
+				a.panelPopover(c, k, pill)
+			}
+		})
+	}
+	if full {
+		ui.Column(c).Fill().Background(ui.RGBA(0, 0, 0, 1)).Children(screenArea)
+	} else {
+		a.page(c, k, func() { a.sessionTitle(c, k) }, screenArea)
+	}
+	a.screenRect = a.screen.Bounds(c)
+	if full {
+		a.pillRect = a.pillBox.Bounds(c)
+	} else {
+		a.pillRect = ui.Rect{}
+	}
 }
 
-// switchChanged builds a switch bound to v and reports whether this
-// build flipped it. components.Switch returns the row it draws in, and
-// the toggle's SetChanged lands on the switch inside it, so Changed on
-// what Switch returns never reports the toggle (si-mods/MyVNC#73).
-// Handlers that must react to a flip compare the value instead.
-func switchChanged(c *ui.Context, v *bool, label string, opts ...components.SwitchOptions) bool {
-	before := *v
-	components.Switch(c, v, label, opts...)
-	return *v != before
+// levelOf is the color, icon and words of the session's protection.
+func (a *app) levelOf(k *colors) (color ui.Color, glyph, text string) {
+	level, kind := a.security()
+	color, glyph, text = k.danger, "lock-open", locales.LevelUnencrypted()
+	switch level {
+	case viewer.LevelSecure:
+		color, glyph, text = k.ok, "shield-check", locales.LevelSecure()
+	case viewer.LevelEncrypted:
+		color, glyph, text = k.warn, "lock", locales.LevelEncrypted()
+	}
+	return color, glyph, text + " · " + kind
+}
+
+// sessionName is the computer's name, or its address until it says one.
+func (a *app) sessionName() string {
+	if a.name != "" {
+		return a.name
+	}
+	return a.sessServer
+}
+
+// sessionTitle is the title bar of a windowed session: the computer, its
+// protection, and the button of the session panel.
+func (a *app) sessionTitle(c *ui.Context, k *colors) {
+	color, glyph, level := a.levelOf(k)
+	ui.Icon(c, icon("monitor")).Size(18, 18).TextColor(k.textMuted).Shrink(0)
+	ui.Column(c).MinWidth(0).Shrink(1).Children(func() {
+		ui.Text(c, a.sessionName()).FontSize(13.5).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine().Ellipsis("…")
+		ui.Row(c).Gap(4).AlignItems(ui.Center).MinWidth(0).Children(func() {
+			ui.Icon(c, icon(glyph)).Size(11, 11).TextColor(color).Shrink(0)
+			ui.Text(c, level).FontSize(11.5).TextColor(color).SingleLine().Ellipsis("…")
+		})
+	})
+	ui.Spacer(c)
+	b := iconButton(c, k, "ellipsis", locales.SessionMenu(), 30, 18).Tooltip(locales.SessionMenu() + "  Ctrl+Alt+M")
+	if a.menuOpen {
+		b.Background(k.pressed)
+	}
+	if b.Clicked() {
+		a.openMenu()
+	}
+	a.panelPopover(c, k, b)
+}
+
+// panelPopover shows the session panel below anchor while it is open.
+func (a *app) panelPopover(c *ui.Context, k *colors, anchor ui.Element) {
+	ui.PopoverBase(c, anchor, &a.menuOpen, func(panel ui.Element) {
+		panelLook(panel.Margin(8, 0, 0, 0).Width(320).Padding(10), k)
+		a.panel(c, k)
+	})
 }
 
 // dragPill moves the handle along the top edge; a click opens the panel.
@@ -581,76 +822,91 @@ type pillDrag struct {
 	grabX     float32
 }
 
-// panel is the session's menu, TigerVNC's F8 menu: opened from the handle
-// or with the shortcut keys (Ctrl+Alt+M).
-func (a *app) panel(c *ui.Context) {
-	t := c.Theme()
-	level, kind := a.security()
-	ui.Column(c).Gap(8).Padding(4).Width(300).Children(func() {
-		ui.Text(c, a.name).Bold()
-		color, text := t.Danger, locales.LevelUnencrypted()
-		switch level {
-		case viewer.LevelSecure:
-			color, text = t.Success, locales.LevelSecure()
-		case viewer.LevelEncrypted:
-			color, text = t.Warning, locales.LevelEncrypted()
+// panelDivider is a faint line between the panel's groups.
+func panelDivider(c *ui.Context, k *colors) {
+	ui.Box(c).Height(1).Margin(4, 6).Background(k.panelBorder)
+}
+
+// panel is the session's menu, TigerVNC's F8 menu: opened from the title
+// bar, the handle in full screen, or with the shortcut keys (Ctrl+Alt+M).
+func (a *app) panel(c *ui.Context, k *colors) {
+	ui.Column(c).Gap(2).Children(func() {
+		if a.cfg.FullScreen {
+			// No title bar says it.
+			color, glyph, level := a.levelOf(k)
+			ui.Column(c).Gap(3).Padding(4, 8).Children(func() {
+				ui.Text(c, a.sessionName()).FontSize(14).FontWeight(700).TextColor(k.text)
+				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, icon(glyph)).Size(12, 12).TextColor(color)
+					ui.Text(c, level).FontSize(12.5).TextColor(color)
+				})
+			})
 		}
-		ui.Text(c, text+" · "+kind).TextColor(color)
 		if a.sess.HighPerformance() {
-			ui.Text(c, locales.StatsMode(a.mediaMode()))
-			if a.hpFailed && components.Button(c, locales.RetryHighPerformance(), components.ButtonGhost).Clicked() {
+			ui.Text(c, locales.StatsMode(a.mediaMode())).FontSize(12.5).TextColor(k.textMuted).Padding(2, 8).Wrap()
+			if a.hpFailed && menuItem(c, k, "refresh-cw", locales.RetryHighPerformance(), k.accent).Clicked() {
 				a.retryMedia()
 				a.menuOpen = false
 			}
 		}
-		ui.Divider(c)
-		ui.Field(c, locales.Scaling(), func() {
-			sel := onevraSelect(c, &a.cfg.Scaling, viewer.Scalings, scalingName)
-			sel.Trigger.Disabled(a.cfg.DynamicResolution)
-			if sel.Trigger.Changed() {
+		if a.cfg.FullScreen || a.sess.HighPerformance() {
+			panelDivider(c, k)
+		}
+		ui.Row(c).Gap(12).Padding(4, 8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, locales.Scaling()).FontSize(13.5).TextColor(k.text).Grow(1)
+			sel := selectOf(c, &a.cfg.Scaling, viewer.Scalings, scalingName).Width(140).Label(locales.Scaling())
+			sel.Disabled(a.cfg.DynamicResolution)
+			if sel.Changed() {
 				a.saveConfig()
 			}
 		})
-		if switchChanged(c, &a.cfg.DynamicResolution, locales.DynamicResolution()) {
-			a.dyn.Forget()
-			a.dynUrgent = true
-			a.saveConfig()
-		}
-		if a.dynHint {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, locales.DynamicResolutionRefused()).TextColor(t.Warning).Wrap().Grow(1)
-				if components.Button(c, locales.Dismiss(), components.ButtonGhost).Clicked() {
-					a.dynHint = false
-				}
-			})
-		}
-		if switchChanged(c, &a.cfg.ViewOnly, locales.ViewOnly()) {
-			if a.cfg.ViewOnly && a.sc != nil {
-				a.sendKeys(a.sc.Reset())
+		ui.Column(c).Padding(0, 6).Children(func() {
+			if switchRow(c, k, locales.DynamicResolution(), &a.cfg.DynamicResolution) {
+				a.dyn.Forget()
+				a.dynUrgent = true
+				a.saveConfig()
 			}
-			a.saveConfig()
+			if a.dynHint {
+				ui.Row(c).Gap(8).Padding(2, 2).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, locales.DynamicResolutionRefused()).FontSize(12.5).TextColor(k.warn).Wrap().Grow(1).MinWidth(0)
+					if textButton(c, k, locales.Dismiss()).Clicked() {
+						a.dynHint = false
+					}
+				})
+			}
+			if switchRow(c, k, locales.ViewOnly(), &a.cfg.ViewOnly) {
+				if a.cfg.ViewOnly && a.sc != nil {
+					a.sendKeys(a.sc.Reset())
+				}
+				a.saveConfig()
+			}
+			if switchRow(c, k, locales.FullScreen(), &a.cfg.FullScreen) {
+				// The switch flipped a.cfg.FullScreen itself; apply the new
+				// value, as toggleFullScreen would from the keyboard.
+				a.saveConfig()
+				a.dynUrgent = true
+				a.fullScreen(a.cfg.FullScreen)
+			}
+			if switchRow(c, k, locales.ShowStats(), &a.cfg.Stats) {
+				a.saveConfig()
+			}
+			if switchRow(c, k, locales.AcceptClipboard(), &a.cfg.AcceptClipboard) {
+				a.saveConfig()
+			}
+			if switchRow(c, k, locales.SendClipboard(), &a.cfg.SendClipboard) {
+				a.saveConfig()
+			}
+		})
+		fetch := a.cfg.AcceptClipboard && !a.cfg.ViewOnly
+		files := a.sess.FileCopyAvailable()
+		if fetch || files {
+			panelDivider(c, k)
 		}
-		if switchChanged(c, &a.cfg.FullScreen, locales.FullScreen()) {
-			// The switch flipped a.cfg.FullScreen itself; apply the new
-			// value, as toggleFullScreen would from the keyboard.
-			a.saveConfig()
-			a.dynUrgent = true
-			a.fullScreen(a.cfg.FullScreen)
-		}
-		if switchChanged(c, &a.cfg.Stats, locales.ShowStats()) {
-			a.saveConfig()
-		}
-		if switchChanged(c, &a.cfg.AcceptClipboard, locales.AcceptClipboard()) {
-			a.saveConfig()
-		}
-		if switchChanged(c, &a.cfg.SendClipboard, locales.SendClipboard()) {
-			a.saveConfig()
-		}
-		if a.cfg.AcceptClipboard && !a.cfg.ViewOnly && components.Button(c, locales.FetchClipboard(), components.ButtonGhost).Clicked() {
+		if fetch && menuItem(c, k, "clipboard-paste", locales.FetchClipboard(), ui.Color{}).Clicked() {
 			a.requestClipboard()
 			a.menuOpen = false
 		}
-		if a.sess.FileCopyAvailable() && components.Button(c, locales.DownloadFile(), components.ButtonGhost).Clicked() {
+		if files && menuItem(c, k, "download", locales.DownloadFile(), ui.Color{}).Clicked() {
 			if a.dlPath == "" {
 				a.dlPath = "/Users/" + a.user + "/"
 			}
@@ -658,14 +914,14 @@ func (a *app) panel(c *ui.Context) {
 			a.menuOpen = false
 		}
 		if len(a.xfers.List) > 0 {
-			a.transfersView(c)
+			a.transfersView(c, k)
 		}
-		ui.Divider(c)
-		if components.Button(c, locales.SendCtrlAltDel(), components.ButtonGhost).Clicked() {
+		panelDivider(c, k)
+		if menuItem(c, k, "keyboard", locales.SendCtrlAltDel(), ui.Color{}).Clicked() {
 			a.ctrlAltDel()
 			a.menuOpen = false
 		}
-		if components.Button(c, locales.Disconnect(), components.ButtonGhost).Clicked() {
+		if menuItem(c, k, "unplug", locales.Disconnect(), k.danger).Clicked() {
 			a.menuOpen = false
 			a.disconnect()
 		}
@@ -674,62 +930,65 @@ func (a *app) panel(c *ui.Context) {
 
 // transfersView lists the file transfers in the session panel, newest
 // first (#43).
-func (a *app) transfersView(c *ui.Context) {
-	ui.Divider(c)
-	ui.Text(c, locales.Transfers()).Bold()
+func (a *app) transfersView(c *ui.Context, k *colors) {
+	panelDivider(c, k)
+	ui.Text(c, locales.Transfers()).FontSize(12).FontWeight(700).TextColor(k.textMuted).Padding(2, 8)
 	for i := len(a.xfers.List) - 1; i >= 0; i-- {
-		a.transferRow(c, a.xfers.List[i])
+		a.transferRow(c, k, a.xfers.List[i])
 	}
 }
 
-func (a *app) transferRow(c *ui.Context, j *viewer.Transfer) {
-	t := c.Theme()
-	ui.Column(c).Key(j.ID).Gap(4).Children(func() {
+func (a *app) transferRow(c *ui.Context, k *colors, j *viewer.Transfer) {
+	ui.Column(c).Key(j.ID).Gap(4).Padding(4, 8).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			icon := lucide.Upload
-			if j.Dir == viewer.Download {
-				icon = lucide.Download
-			}
-			components.Icon(c, icon).Size(14, 14)
-			ui.Text(c, transferName(j)).SingleLine().Grow(1).MinWidth(0)
+			ui.Icon(c, icon(transferGlyph(j))).Size(14, 14).TextColor(k.textMuted).Shrink(0)
+			ui.Text(c, transferName(j)).FontSize(13).TextColor(k.text).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
 			if a.xfers.CanResume(j) {
 				label := locales.TransferResume()
 				if j.State == viewer.TransferFailed {
 					label = locales.TransferRetry()
 				}
-				if components.Button(c, label, components.ButtonGhost).Clicked() {
+				if textButton(c, k, label).Clicked() {
 					a.xfers.Resume(j)
 				}
 			}
 			switch j.State {
 			case viewer.TransferQueued, viewer.TransferRunning, viewer.TransferAsking, viewer.TransferInterrupted:
-				if components.Button(c, locales.Cancel(), components.ButtonGhost).Clicked() {
+				if textButton(c, k, locales.Cancel()).Clicked() {
 					a.xfers.Cancel(j)
 				}
 			default:
-				if components.Button(c, locales.Dismiss(), components.ButtonGhost).Clicked() {
+				if textButton(c, k, locales.Dismiss()).Clicked() {
 					a.xfers.Dismiss(j)
 				}
 			}
 		})
 		if j.State != viewer.TransferDone && j.State != viewer.TransferCanceled && j.State != viewer.TransferFailed {
-			components.Progress(c, j.Progress()).Label(transferName(j))
+			ui.Progress(c, j.Progress()).Label(transferName(j))
 		}
 		if d := transferDetail(j); d != "" {
-			ui.Text(c, d).FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, d).FontSize(11.5).TextColor(k.textFaint)
 		}
-		color := t.TextMuted
+		color := k.textMuted
 		switch j.State {
 		case viewer.TransferFailed:
-			color = t.Danger
+			color = k.danger
 		case viewer.TransferInterrupted:
-			color = t.Warning
+			color = k.warn
 		}
-		ui.Text(c, transferState(j)).FontSize(11).TextColor(color).Wrap()
+		ui.Text(c, transferState(j)).FontSize(11.5).TextColor(color).Wrap()
 		for _, n := range transferNotes(j) {
-			ui.Text(c, n).FontSize(11).TextColor(t.TextMuted).Wrap()
+			ui.Text(c, n).FontSize(11.5).TextColor(k.textMuted).Wrap()
 		}
 	})
+}
+
+// transferGlyph is the icon of a transfer's direction.
+func transferGlyph(j *viewer.Transfer) string {
+	if j.Dir == viewer.Download {
+		return "download"
+	}
+	return "upload"
 }
 
 // transferNotes says what an upload left on the Mac besides the files
@@ -760,16 +1019,12 @@ func (a *app) transferChip(c *ui.Context, j *viewer.Transfer) {
 	if p := j.Progress(); p >= 0 && j.State == viewer.TransferRunning {
 		text += " · " + strconv.Itoa(int(p*100)) + "%"
 	}
-	icon := lucide.Upload
-	if j.Dir == viewer.Download {
-		icon = lucide.Download
-	}
-	chip := ui.ButtonBase(c).Label(locales.Transfers()).Absolute().Bottom(16).Right(16).Padding(4, 10).Radius(6).
-		Background(ui.RGBA(20, 20, 20, 0.85)).TextColor(ui.RGBA(255, 255, 255, 1))
+	chip := ui.ButtonBase(c).Label(locales.Transfers()).Absolute().Bottom(16).Right(16).Padding(6, 12).Radius(10).
+		Background(ui.RGBA(24, 24, 28, 0.88)).Border(1, ui.RGBA(255, 255, 255, 0.1)).Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.35))
 	chip.Children(func() {
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			components.Icon(c, icon).Size(12, 12)
-			ui.Text(c, text).FontSize(12).SingleLine()
+		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icon(transferGlyph(j))).Size(13, 13).TextColor(ui.RGBA(255, 255, 255, 0.85))
+			ui.Text(c, text).FontSize(12).TextColor(ui.RGBA(255, 255, 255, 1)).SingleLine()
 		})
 	})
 	if chip.Clicked() {
@@ -905,7 +1160,7 @@ func (a *app) statsView(c *ui.Context) {
 	if l.FullColour {
 		colour = "full"
 	}
-	ui.Column(c).Absolute().Top(8).Left(8).Padding(6, 8).Radius(6).Background(ui.RGBA(0, 0, 0, 0.6)).Children(func() {
+	ui.Column(c).Absolute().Top(8).Left(8).Padding(8, 10).Radius(10).Gap(1).Background(ui.RGBA(0, 0, 0, 0.6)).Children(func() {
 		// The RFB encoding lines say nothing while the media stream draws;
 		// the mode line names its codec.
 		encoding, requested, dropped := locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
@@ -1078,24 +1333,6 @@ func (a *app) screenView(c *ui.Context) {
 // f in the screen box, not the bars around it.
 func (a *app) overImage(f ui.Rect) bool {
 	return a.ptrX >= f.X && a.ptrY >= f.Y && a.ptrX < f.X+f.W && a.ptrY < f.Y+f.H
-}
-
-// selectLabeled is ui.Select choosing one of values into *v, each shown
-// as label says.
-func selectLabeled(c *ui.Context, v *string, values []string, label func(string) string) ui.Element {
-	labels := make([]string, len(values))
-	shown := ""
-	for i, x := range values {
-		labels[i] = label(x)
-		if x == *v {
-			shown = labels[i]
-		}
-	}
-	e := ui.Select(c, &shown, labels)
-	if i := slices.Index(labels, shown); i >= 0 {
-		*v = values[i]
-	}
-	return e
 }
 
 func profileName(s string) string {
