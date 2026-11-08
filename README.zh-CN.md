@@ -2,16 +2,23 @@
 
 <img src="docs/assets/banner.png" alt="MyVNC" width="500">
 
-**纯 Go 编写的高速 VNC / 远程桌面查看器,运行于 Windows。**
+**纯 Go 编写的高速 VNC / 远程桌面查看器,支持 Windows 与 macOS。**
 
 [English](README.md) · 简体中文
 
 </div>
 
-MyVNC 是面向 Windows 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看器,由纯 Go
+MyVNC 是面向 Windows 与 macOS 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看器,由纯 Go
 与 [MyGo](https://github.com/egoist/mygo) 构建 — 无 Electron,无运行时依赖。
 它是 [TigerVNC](https://github.com/TigerVNC/tigervnc) 查看器的移植版,并扩展了
 苹果远程桌面 (ARD) 高性能媒体通路、自适应画质与文件传输。
+
+## 截图
+
+<p align="center">
+  <img src="docs/assets/screenshot-session.webp" alt="MyVNC 会话窗口正在查看一台 macOS 桌面" width="49%">
+  <img src="docs/assets/screenshot-home.webp" alt="MyVNC 主页的计算机卡片" width="49%">
+</p>
 
 ## 特性
 
@@ -44,6 +51,10 @@ MyVNC 是面向 Windows 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看�
 `MyVNC-<版本>-amd64.exe`。两者均由 CI 构建并附 SHA256 校验,无需安装
 任何运行时。
 
+macOS 请从源码构建:`go tool mygo build` 生成
+`build/darwin-arm64/MyVNC.app`。VNC 与 ARD 会话在两个平台都可用;
+RDP 仅限 Windows。
+
 ## 使用
 
 - 启动 `MyVNC.exe`,添加计算机,点击卡片连接。
@@ -57,12 +68,13 @@ MyVNC 是面向 Windows 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看�
 
 ## 构建
 
-需要 Go 1.27+ 与 Windows。
+需要 Go 1.27+。RDP(内嵌 ActiveX 控件)仅 Windows;查看器本身也可在
+macOS 上构建。
 
 ```
 go tool mygo dev     # 以实时重载运行
 go test ./...        # 测试
-go tool mygo build   # 构建 exe 与安装包到 build/
+go tool mygo build   # 构建 exe 与安装包到 build/(macOS 为 MyVNC.app)
 ```
 
 ## 文档

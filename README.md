@@ -2,18 +2,26 @@
 
 <img src="docs/assets/banner.png" alt="MyVNC" width="500">
 
-**A fast VNC / Remote Desktop viewer for Windows, in pure Go.**
+**A fast VNC / Remote Desktop viewer in pure Go, for Windows and macOS.**
 
 English · [简体中文](README.zh-CN.md)
 
 </div>
 
-MyVNC is a native Windows viewer for VNC (RFB) and Microsoft Remote Desktop
-(RDP), built with pure Go and [MyGo](https://github.com/egoist/mygo) — no
+MyVNC is a native viewer for VNC (RFB) and Microsoft Remote Desktop
+(RDP), for Windows and macOS, built with pure Go and
+[MyGo](https://github.com/egoist/mygo) — no
 Electron, no runtime dependencies. It is a port of the
 [TigerVNC](https://github.com/TigerVNC/tigervnc) viewer, extended with an
 Apple Remote Desktop high-performance media path, adaptive video quality,
 and file transfer.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/assets/screenshot-session.webp" alt="A MyVNC session viewing a macOS desktop" width="49%">
+  <img src="docs/assets/screenshot-home.webp" alt="The MyVNC home screen with computer cards" width="49%">
+</p>
 
 ## Highlights
 
@@ -52,6 +60,10 @@ Grab `MyVNC-Setup-<version>-amd64.exe` (installer) or the portable
 [Releases](https://github.com/si-mods/MyVNC/releases). Both are built and
 checksummed by CI. No installation of runtimes is required.
 
+On macOS, build from source: `go tool mygo build` makes
+`build/darwin-arm64/MyVNC.app`. VNC and ARD sessions work on both
+platforms; RDP is Windows-only.
+
 ## Usage
 
 - Launch `MyVNC.exe`, add a computer, and click its card.
@@ -65,12 +77,13 @@ checksummed by CI. No installation of runtimes is required.
 
 ## Build
 
-Requires Go 1.27+ and Windows.
+Requires Go 1.27+. Windows is needed for RDP (the embedded ActiveX
+control); the viewer itself also builds on macOS.
 
 ```
 go tool mygo dev     # run with live reload
 go test ./...        # tests
-go tool mygo build   # build exe + installer into build/
+go tool mygo build   # build exe + installer into build/ (macOS: MyVNC.app)
 ```
 
 ## Documentation
