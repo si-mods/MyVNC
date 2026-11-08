@@ -1469,6 +1469,65 @@ func usage() string {
 	return b.String()
 }
 
+// takeShotArg strips --shot=path from the arguments and returns the
+// path, "" when absent.
+func takeShotArg(args []string) (rest []string, path string) {
+	rest = make([]string, 0, len(args))
+	for _, s := range args {
+		if p, ok := strings.CutPrefix(s, "--shot="); ok {
+			path = p
+			continue
+		}
+		rest = append(rest, s)
+	}
+	return rest, path
+}
+
+// takeShot is --shot=path: with a server on the command line, wait for
+// the session to settle and capture the window; without one, capture
+// the home view. Either way the app exits when the file is written.
+// Marketing shots need no hands.
+func takeShot(a *app, win *mygo.Window, path string, waitForSession bool) {
+	deadline := time.Now().Add(30 * time.Second)
+	if waitForSession {
+		for time.Now().Before(deadline) {
+			up := make(chan bool)
+			a.post(func() { up <- a.sess != nil })
+			if <-up {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		// Let the desktop arrive, the resize settle and the HUD tick.
+		time.Sleep(3 * time.Second)
+	} else {
+		time.Sleep(1500 * time.Millisecond)
+	}
+	if !time.Now().Before(deadline) {
+		a.log.Warn("shot: session never connected")
+	}
+	b, err := win.CapturePage()
+	if err != nil {
+		a.log.Warn("shot: capture", "err", err)
+		mygo.App.Exit(3)
+		return
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		a.log.Warn("shot: write", "err", err)
+	}
+	a.log.Info("shot: saved", "path", path, "bytes", len(b))
+	// End the session first: the home card's thumbnail is saved on
+	// disconnect, and the app exits cleanly either way.
+	bye := make(chan bool)
+	a.post(func() {
+		a.disconnect()
+		bye <- true
+	})
+	<-bye
+	time.Sleep(800 * time.Millisecond)
+	mygo.App.Exit(0)
+}
+
 func main() {
 	// --mcp, first: an MCP server on stdio. Nothing of the window, the
 	// settings or the updater is touched.
@@ -1481,6 +1540,7 @@ func main() {
 	if perfErr != nil {
 		log.Fatal(perfErr)
 	}
+	args, shotPath := takeShotArg(args)
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if perf != nil {
 		dir, err = os.MkdirTemp("", "myvnc-perftest") // the user's settings stay as they are
@@ -1541,6 +1601,9 @@ func main() {
 		})
 		a.win, a.post = win, win.Update
 		a.xfers.Log = a.log
+		if shotPath != "" {
+			go takeShot(a, win, shotPath, start != "")
+		}
 		if err := win32.RegisterFileDrop(win.NativeHandle(), a.dropFiles); err != nil {
 			a.log.Warn("file drop", "err", err)
 		}
