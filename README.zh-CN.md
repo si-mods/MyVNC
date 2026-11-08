@@ -6,6 +6,8 @@
 
 [English](README.md) · 简体中文
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/myvnc)
+
 </div>
 
 MyVNC 是面向 Windows 与 macOS 的 VNC (RFB) 与微软远程桌面 (RDP) 原生查看器,由纯 Go

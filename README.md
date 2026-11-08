@@ -6,6 +6,8 @@
 
 English · [简体中文](README.zh-CN.md)
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/myvnc)
+
 </div>
 
 MyVNC is a native viewer for VNC (RFB) and Microsoft Remote Desktop
