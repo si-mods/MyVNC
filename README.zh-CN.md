@@ -16,8 +16,7 @@ MyVNC 是面向 Windows 与 macOS 的 VNC (RFB) 与微软远程桌面 (RDP) 原�
 ## 截图
 
 <p align="center">
-  <img src="docs/assets/screenshot-session.webp" alt="MyVNC 会话窗口正在查看一台 macOS 桌面" width="49%">
-  <img src="docs/assets/screenshot-home.webp" alt="MyVNC 主页的计算机卡片" width="49%">
+  <img src="docs/assets/screenshot-home.webp" alt="MyVNC 主页的计算机卡片" width="100%">
 </p>
 
 ## 特性

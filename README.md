@@ -19,8 +19,7 @@ and file transfer.
 ## Screenshots
 
 <p align="center">
-  <img src="docs/assets/screenshot-session.webp" alt="A MyVNC session viewing a macOS desktop" width="49%">
-  <img src="docs/assets/screenshot-home.webp" alt="The MyVNC home screen with computer cards" width="49%">
+  <img src="docs/assets/screenshot-home.webp" alt="The MyVNC home screen with computer cards" width="100%">
 </p>
 
 ## Highlights
