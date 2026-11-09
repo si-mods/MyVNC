@@ -839,7 +839,7 @@ func (a *app) panelPopover(c *ui.Context, k *colors, anchor ui.Element) {
 func (a *app) dragPill(ev ui.InputEvent, left, ww float32) bool {
 	switch ev.Kind {
 	case ui.InputPointerDown:
-		a.pill = pillDrag{on: true, grabX: ev.X}
+		a.pill = pillDrag{on: true, grabX: ev.X, from: a.cfg.PillPos}
 	case ui.InputPointerMove:
 		if !a.pill.on {
 			return false
@@ -854,9 +854,13 @@ func (a *app) dragPill(ev ui.InputEvent, left, ww float32) bool {
 		if !a.pill.on {
 			return false
 		}
-		if a.pill.moved {
+		switch {
+		case ev.Canceled:
+			// The system took the press: no tap, and the drag goes back.
+			a.cfg.PillPos = a.pill.from
+		case a.pill.moved:
 			a.saveConfig()
-		} else {
+		default:
 			a.openMenu()
 		}
 		a.pill = pillDrag{}
@@ -869,6 +873,7 @@ func (a *app) dragPill(ev ui.InputEvent, left, ww float32) bool {
 type pillDrag struct {
 	on, moved bool
 	grabX     float32
+	from      float64 // PillPos when the press began
 }
 
 // panelDivider is a faint line between the panel's groups.
