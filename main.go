@@ -377,7 +377,11 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	if s == nil || s.Screen == nil {
 		return false
 	}
-	a.ptrX, a.ptrY = ev.X, ev.Y
+	switch ev.Kind {
+	case ui.InputPointerDown, ui.InputPointerUp, ui.InputPointerMove, ui.InputScroll:
+		// Keys reach here too, without a position.
+		a.ptrX, a.ptrY = ev.X, ev.Y
+	}
 	if a.cfg.ViewOnly {
 		return false
 	}
