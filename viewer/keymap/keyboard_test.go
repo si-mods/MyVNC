@@ -467,6 +467,13 @@ func TestModifierAutorepeat(t *testing.T) {
 			{up(VK_CONTROL, 0x1d, false), nil},
 		})
 	})
+	t.Run("caps lock", func(t *testing.T) {
+		run(t, NewKeyboard(usLayout()), []step{
+			{down(VK_CAPITAL, 0x3a, false), []Event{press(0x3a, XK_Caps_Lock)}},
+			{down(VK_CAPITAL, 0x3a, false), nil},
+			{up(VK_CAPITAL, 0x3a, false), []Event{release(0x3a, XK_Caps_Lock)}},
+		})
+	})
 	t.Run("letter repeats", func(t *testing.T) {
 		run(t, NewKeyboard(usLayout()), []step{
 			{down('A', 0x1e, false), []Event{press(0x1e, 'a')}},
