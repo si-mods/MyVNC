@@ -420,3 +420,66 @@ func TestKeySyms(t *testing.T) {
 		}
 	}
 }
+
+func TestModifierAutorepeat(t *testing.T) {
+	t.Run("win", func(t *testing.T) {
+		run(t, NewKeyboard(usLayout()), []step{
+			{down(VK_LWIN, 0x5b, true), []Event{press(0xdb, XK_Super_L)}},
+			{down(VK_LWIN, 0x5b, true), nil},
+			{down(VK_LWIN, 0x5b, true), nil},
+			{up(VK_LWIN, 0x5b, true), []Event{release(0xdb, XK_Super_L)}},
+		})
+	})
+	t.Run("shift", func(t *testing.T) {
+		run(t, NewKeyboard(usLayout()), []step{
+			{down(VK_SHIFT, 0x2a, false), []Event{press(0x2a, XK_Shift_L)}},
+			{down(VK_SHIFT, 0x2a, false, VK_LSHIFT), nil},
+			{up(VK_SHIFT, 0x2a, false), []Event{release(0x2a, XK_Shift_L)}},
+		})
+	})
+	t.Run("ctrl", func(t *testing.T) {
+		run(t, NewKeyboard(usLayout()), []step{
+			{down(VK_CONTROL, 0x1d, false), []Event{press(0x1d, XK_Control_L)}},
+			{down(VK_CONTROL, 0x1d, false), nil},
+			{up(VK_CONTROL, 0x1d, false), []Event{release(0x1d, XK_Control_L)}},
+		})
+	})
+	t.Run("ctrl with AltGr layout", func(t *testing.T) {
+		k := NewKeyboard(deLayout())
+		run(t, k, []step{
+			{at(down(VK_CONTROL, 0x1d, false), 1000), nil},
+			// A late repeat flushes the press once, then repeats are dropped.
+			{at(down(VK_CONTROL, 0x1d, false), 1200), []Event{press(0x1d, XK_Control_L)}},
+			{at(down(VK_CONTROL, 0x1d, false), 1300), nil},
+			{up(VK_CONTROL, 0x1d, false), []Event{release(0x1d, XK_Control_L)}},
+		})
+	})
+	t.Run("AltGr", func(t *testing.T) {
+		run(t, NewKeyboard(deLayout()), []step{
+			{at(down(VK_CONTROL, 0x1d, false), 1000), nil},
+			{at(down(VK_MENU, 0x38, true, VK_LCONTROL), 1010), []Event{press(0xb8, XK_ISO_Level3_Shift)}},
+			// Windows repeats both halves; the merge still works.
+			{at(down(VK_CONTROL, 0x1d, false), 1500), nil},
+			{at(down(VK_MENU, 0x38, true, VK_LCONTROL), 1505), nil},
+			{at(down(VK_CONTROL, 0x1d, false), 1550), nil},
+			{at(down(VK_MENU, 0x38, true, VK_LCONTROL), 1555), nil},
+			{up(VK_MENU, 0x38, true), []Event{release(0xb8, XK_ISO_Level3_Shift)}},
+			{up(VK_CONTROL, 0x1d, false), nil},
+		})
+	})
+	t.Run("caps lock", func(t *testing.T) {
+		run(t, NewKeyboard(usLayout()), []step{
+			{down(VK_CAPITAL, 0x3a, false), []Event{press(0x3a, XK_Caps_Lock)}},
+			{down(VK_CAPITAL, 0x3a, false), nil},
+			{up(VK_CAPITAL, 0x3a, false), []Event{release(0x3a, XK_Caps_Lock)}},
+		})
+	})
+	t.Run("letter repeats", func(t *testing.T) {
+		run(t, NewKeyboard(usLayout()), []step{
+			{down('A', 0x1e, false), []Event{press(0x1e, 'a')}},
+			{down('A', 0x1e, false), []Event{press(0x1e, 'a')}},
+			{down('A', 0x1e, false), []Event{press(0x1e, 'a')}},
+			{up('A', 0x1e, false), []Event{release(0x1e, 'a')}},
+		})
+	})
+}

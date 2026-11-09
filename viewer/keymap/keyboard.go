@@ -80,6 +80,16 @@ func (t *Tracker) Down(sys int, code, keysym uint32) Event {
 	return e
 }
 
+// heldOnce reports whether ks is a key a real keyboard presses once while
+// it is held: a modifier or a lock key.
+func heldOnce(ks uint32) bool {
+	switch ks {
+	case XK_ISO_Level3_Shift, XK_Caps_Lock, XK_Num_Lock, XK_Scroll_Lock:
+		return true
+	}
+	return keySymToModifier(ks) != 0
+}
+
 // Up releases the key sys; ok is false if it was not down.
 func (t *Tracker) Up(sys int) (e Event, ok bool) {
 	e, ok = t.down[sys]
@@ -210,6 +220,12 @@ func (k *Keyboard) keyDown(ev WinKey) []Event {
 		sys |= 0x80
 	}
 	sys = fixSystemKeyCode(sys)
+
+	// Windows repeats WM_KEYDOWN for a held key, but a real keyboard sends
+	// one press for a modifier or a lock key. Ordinary keys keep their repeats.
+	if e, ok := k.tracker.down[sys]; ok && heldOnce(e.KeySym) {
+		return out
+	}
 	code := translateSystemKeyCode(sys)
 
 	state := ev.State
