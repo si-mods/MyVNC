@@ -3,6 +3,18 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.1.2
+
+- Holding Shift, Ctrl, Alt, Win, AltGr or a lock key sends the server one press, as a real
+  keyboard does, rather than one for each of Windows' key repeats. A Mac saw about 76 Cmd
+  changes for one held Win key.
+- Built on MyGo 0.8.3. When the system takes a press of the session handle (focus lost
+  mid-press, for example), the handle neither opens the panel nor keeps a half-done drag; and
+  a key press no longer moves the remote cursor to the top-left corner.
+- `MyVNC.exe --shot=path` captures the window to a PNG and exits; with a server on the command
+  line it waits for the session to settle first.
+- 0.1.1 was never published on its own; its changes, below, come with this release.
+
 ## 0.1.1
 
 - Settings → Updates checks for updates on demand, says when the app last checked, and turns
