@@ -70,6 +70,8 @@ const (
 	XK_Control_L         = 0xffe3
 	XK_Control_R         = 0xffe4
 	XK_Caps_Lock         = 0xffe5
+	XK_Meta_L            = 0xffe7
+	XK_Meta_R            = 0xffe8
 	XK_Alt_L             = 0xffe9
 	XK_Alt_R             = 0xffea
 	XK_Super_L           = 0xffeb
