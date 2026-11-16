@@ -12,12 +12,31 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Same-repo work runs on the desk machine yibo-pc, whose self-hosted
+    # runner skips the windows-latest queue. Fork PRs stay on a hosted runner
+    # (their code must never execute on a self-hosted machine), and so do tag
+    # builds: the installer test needs a user with no MyVNC installed, which
+    # yibo-pc is not.
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || startsWith(github.ref, 'refs/tags/v')) && 'windows-latest' || fromJSON('["self-hosted","Windows","X64","yibo-pc"]') }}
     steps:
       - uses: actions/checkout@v4
+
+      # A self-hosted Windows runner can have a stripped PATH; the bash and
+      # pwsh steps below need what a normal logon has.
+      - name: Put bash and pwsh on PATH
+        if: runner.environment == 'self-hosted'
+        shell: powershell
+        run: |
+          @("$env:ProgramFiles\Git\bin", "$env:ProgramFiles\Git\usr\bin", "$env:ProgramFiles\PowerShell\7") |
+            Where-Object { Test-Path $_ } |
+            ForEach-Object { $_ | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8 }
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          # yibo-pc keeps its module cache across runs, so the Actions cache
+          # only adds a multi-minute upload at the end of each build.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: gofmt
         shell: bash
@@ -44,7 +63,7 @@ jobs:
 
       - name: Check the tag matches mygo.json
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
+        shell: powershell
         run: |
           $v = (Get-Content mygo.json -Raw | ConvertFrom-Json).version
           if ($env:GITHUB_REF_NAME -ne "v$v") { throw "tag $env:GITHUB_REF_NAME does not match mygo.json version $v" }
@@ -52,7 +71,7 @@ jobs:
       # Signing is optional: without the secrets the build is unsigned.
       - name: Enable code signing
         id: sign
-        shell: pwsh
+        shell: powershell
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
         run: |
@@ -62,7 +81,7 @@ jobs:
           $cfg = Get-Content mygo.json -Raw | ConvertFrom-Json
           $cfg | Add-Member -NotePropertyName windows -NotePropertyValue ([pscustomobject]@{ certificate = $pfx }) -Force
           $cfg | ConvertTo-Json -Depth 10 | Set-Content mygo.json -Encoding utf8
-          "signed=true" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_OUTPUT -Value 'signed=true' -Encoding ascii
 
       - name: Build
         run: go tool mygo build
@@ -81,7 +100,7 @@ jobs:
 
       - name: Verify signature
         if: steps.sign.outputs.signed == 'true'
-        shell: pwsh
+        shell: powershell
         run: |
           Get-ChildItem build/windows-amd64/*.exe | ForEach-Object {
             $s = Get-AuthenticodeSignature $_
@@ -89,14 +108,18 @@ jobs:
             if ($s.SignerCertificate -eq $null) { throw "$($_.Name) is not signed" }
           }
 
+      # The test installs and uninstalls for the current user, so it needs one
+      # with no MyVNC; yibo-pc has 0.1.1 installed. Tags run on hosted runners,
+      # where it still gates every release.
       - name: Test the installer (install, launch, uninstall)
-        shell: pwsh
+        if: runner.environment == 'github-hosted'
+        shell: powershell
         run: |
           $setup = Get-ChildItem build/windows-amd64 -Filter '*Setup*.exe' | Select-Object -First 1
           .github/scripts/test-installer.ps1 -Installer $setup.FullName
 
       - name: Name the release files and checksum them
-        shell: pwsh
+        shell: powershell
         working-directory: build/windows-amd64
         run: |
           $v = (Get-Content ../../mygo.json -Raw | ConvertFrom-Json).version
