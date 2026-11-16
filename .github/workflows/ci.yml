@@ -23,6 +23,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          # yibo-pc keeps its module cache across runs, so the Actions cache
+          # only adds a multi-minute upload at the end of each build.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: gofmt
         shell: bash
