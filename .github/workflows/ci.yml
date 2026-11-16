@@ -12,7 +12,12 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Same-repo work runs on the desk machine yibo-pc, whose self-hosted
+    # runner skips the windows-latest queue. Fork PRs stay on a hosted runner
+    # (their code must never execute on a self-hosted machine), and so do tag
+    # builds: the installer test needs a user with no MyVNC installed, which
+    # yibo-pc is not.
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || startsWith(github.ref, 'refs/tags/v')) && 'windows-latest' || fromJSON('["self-hosted","Windows","X64","yibo-pc"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
