@@ -15,6 +15,7 @@ from it and fails when the file exists but has no section for the version in `my
   dialog opens on the protocol last connected.
 - The High Performance heartbeat no longer crashes the app when a handshake outlives its 30 s
   beat, as when the credential prompt waits for someone.
+- Built on MyGo 0.9.1.
 
 ## 0.1.2
 
