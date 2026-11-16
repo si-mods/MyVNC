@@ -127,21 +127,25 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 	if opt.HighPerformance != nil {
 		hp := *opt.HighPerformance
 		s.video = newVideoPipe(dec, hp.MaxFPS, func() {
-			if st := s.c.MediaStream(); st != nil {
+			if st := s.mediaStream(); st != nil {
 				st.RequestKeyframe()
 			}
 		}, s.ShowMedia, func(err error) {
 			s.send(input{f: func(c *rfb.Client) error { return c.StopHighPerformance(err) }})
 		}, func(kbps int) {
-			if st := s.c.MediaStream(); st != nil {
+			if st := s.mediaStream(); st != nil {
 				st.SetDecodeCap(kbps)
 			}
-		}, func() { s.c.LimitMediaFrameRate(true) }, &s.n)
+		}, func() {
+			if c := s.c; c != nil {
+				c.LimitMediaFrameRate(true)
+			}
+		}, &s.n)
 		// A thirty-second heartbeat in the log, so a High Performance
 		// teardown explains itself; the stream's stats are nil-safe.
 		s.video.log = opt.Logger
 		s.video.streamStats = func() *media.Stats {
-			if st := s.c.MediaStream(); st != nil {
+			if st := s.mediaStream(); st != nil {
 				stats := st.Stats()
 				return &stats
 			}
@@ -172,6 +176,15 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 	s.encrypted.Store(c.Encrypted())
 	go s.writer()
 	return s, nil
+}
+
+// mediaStream is the High Performance receiver. nil before the handshake
+// ends, since the video pipe's callbacks run while the dial is still going.
+func (s *Session) mediaStream() *media.Stream {
+	if s.c == nil {
+		return nil
+	}
+	return s.c.MediaStream()
 }
 
 // Run reads from the server until the connection ends: nil after Close,

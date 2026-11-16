@@ -58,10 +58,14 @@ RDP 仅限 Windows。
 
 ## 使用
 
-- 启动 `MyVNC.exe`,添加计算机,点击卡片连接。
-- 命令行:`MyVNC.exe [host[:port]]` 或 `MyVNC.exe rdp://host[:port]`。
-  兼容 TigerVNC 命令行选项与 `.tigervnc` 配置文件(完整列表见
-  `MyVNC.exe -h`)。
+- 启动 `MyVNC.exe`,添加计算机 —— 先选 VNC、Apple 远程桌面或远程桌面,
+  再填地址 —— 然后点击卡片连接。端口由协议决定,除非地址里写明
+  (`rdp://host:3399`)。
+- 命令行:`MyVNC.exe [host[:port]]`、`MyVNC.exe ard://host[:port]` 或
+  `MyVNC.exe rdp://host[:port]`。地址可带协议前缀:`vnc://` 与 `ard://`
+  都是 VNC/RFB(Mac 的 ARD 方言无论带不带上缀都会自动识别),`rdp://`
+  走远程桌面;其它前缀在连接前就被拒绝。兼容 TigerVNC 命令行选项与
+  `.tigervnc` 配置文件(完整列表见 `MyVNC.exe -h`)。
 - AI 代理:`MyVNC.exe --mcp` 以 stdio 运行 MCP 服务,不显示窗口
   ([docs/MCP.md](docs/MCP.md)),需先在设置中开启。
 - 会话内:悬浮面板查看统计与视频设置;Ctrl+Alt+Del 发送三键;在主页

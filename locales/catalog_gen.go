@@ -187,14 +187,60 @@ func (msgs Messages) Server() string {
 	return Catalog.Format(msgs.locale, "server", nil)
 }
 
-// ServerPlaceholder says "host[:display] or host::port"
+// ServerPlaceholder says "IP or host name"
 // in the language the app shows.
 func ServerPlaceholder() string { return In(i18n.Locale()).ServerPlaceholder() }
 
-// ServerPlaceholder says "host[:display] or host::port"
+// ServerPlaceholder says "IP or host name"
 // in the language of msgs.
 func (msgs Messages) ServerPlaceholder() string {
 	return Catalog.Format(msgs.locale, "serverPlaceholder", nil)
+}
+
+// Protocol says "Protocol"
+// in the language the app shows.
+//
+// The Add computer form's row that chooses VNC, Apple Remote Desktop or
+// Remote Desktop.
+func Protocol() string { return In(i18n.Locale()).Protocol() }
+
+// Protocol says "Protocol"
+// in the language of msgs.
+//
+// The Add computer form's row that chooses VNC, Apple Remote Desktop or
+// Remote Desktop.
+func (msgs Messages) Protocol() string {
+	return Catalog.Format(msgs.locale, "protocol", nil)
+}
+
+// ProtocolVNC says "VNC"
+// in the language the app shows.
+func ProtocolVNC() string { return In(i18n.Locale()).ProtocolVNC() }
+
+// ProtocolVNC says "VNC"
+// in the language of msgs.
+func (msgs Messages) ProtocolVNC() string {
+	return Catalog.Format(msgs.locale, "protocolVNC", nil)
+}
+
+// ProtocolARD says "Apple Remote Desktop"
+// in the language the app shows.
+func ProtocolARD() string { return In(i18n.Locale()).ProtocolARD() }
+
+// ProtocolARD says "Apple Remote Desktop"
+// in the language of msgs.
+func (msgs Messages) ProtocolARD() string {
+	return Catalog.Format(msgs.locale, "protocolARD", nil)
+}
+
+// ProtocolRDP says "Remote Desktop"
+// in the language the app shows.
+func ProtocolRDP() string { return In(i18n.Locale()).ProtocolRDP() }
+
+// ProtocolRDP says "Remote Desktop"
+// in the language of msgs.
+func (msgs Messages) ProtocolRDP() string {
+	return Catalog.Format(msgs.locale, "protocolRDP", nil)
 }
 
 // Username says "Username"

@@ -686,25 +686,84 @@ func TestStatsOverlayHighPerformance(t *testing.T) {
 	a.disconnect()
 }
 
-func TestRDPTarget(t *testing.T) {
-	cases := []struct {
-		in   string
-		host string
-		port int
-		ok   bool
-	}{
-		{"rdp://192.0.2.20", "192.0.2.20", 3389, true},
-		{"RDP://pc:3390", "pc", 3390, true},
-		{"rdp://[::1]:3389", "::1", 3389, true},
-		{"rdp://", "", 0, false},
-		{"rdp://host:0", "", 0, false},
-		{"rdp://host:99999", "", 0, false},
-	}
-	for _, c := range cases {
-		host, port, err := rdpTarget(c.in)
-		if (err == nil) != c.ok || (c.ok && (host != c.host || port != c.port)) {
-			t.Errorf("rdpTarget(%q) = %q, %d, %v", c.in, host, port, err)
+// An address MyVNC cannot dial is refused before anything is saved or
+// dialled, with the reason in the banner.
+func TestConnectAddressRefused(t *testing.T) {
+	a := newTestApp(t)
+	for _, in := range []string{"ssh://192.0.2.10", "vnc://", "rdp://host:99999", "host/path"} {
+		a.server = in
+		a.connect()
+		if a.connecting || a.errText == "" {
+			t.Fatalf("%q: connecting %v, error %q", in, a.connecting, a.errText)
 		}
+		if slices.Contains(a.cfg.Servers, in) {
+			t.Errorf("%q was saved", in)
+		}
+	}
+}
+
+// "+ Add computer" keeps its form open on an address MyVNC cannot dial, says
+// why, and saves nothing.
+func TestAddComputerRefusesBadAddress(t *testing.T) {
+	a := newTestApp(t)
+	a.add("ssh://192.0.2.10")
+	a.tt.Frame()
+	if !a.addOpen {
+		t.Error("the form closed on a bad address")
+	}
+	if !strings.Contains(a.errText, "unsupported scheme") || !a.tt.HasText(a.errText) {
+		t.Errorf("error %q, texts %q", a.errText, a.tt.Texts())
+	}
+	if a.sess != nil || a.connecting || slices.Contains(a.cfg.Servers, "ssh://192.0.2.10") {
+		t.Errorf("sess %v, connecting %v, saved %v", a.sess, a.connecting, a.cfg.Servers)
+	}
+}
+
+// The protocol select and the host field make the address: VNC stays bare,
+// the others get their scheme, and a typed scheme wins.
+func TestAddAddress(t *testing.T) {
+	for _, tc := range []struct {
+		proto viewer.Scheme
+		field string
+		want  string
+	}{
+		{viewer.SchemeVNC, "192.168.2.8", "192.168.2.8"},
+		{viewer.SchemeARD, "mac-mini.local", "ard://mac-mini.local"},
+		{viewer.SchemeRDP, "192.0.2.20", "rdp://192.0.2.20"},
+		{viewer.SchemeRDP, "  rdp://pc:3390  ", "rdp://pc:3390"},
+		{viewer.SchemeARD, "vnc://pc", "vnc://pc"},
+		{viewer.SchemeVNC, "", ""},
+	} {
+		if got := addAddress(tc.proto, tc.field); got != tc.want {
+			t.Errorf("addAddress(%q, %q) = %q; want %q", tc.proto, tc.field, got, tc.want)
+		}
+	}
+}
+
+// Choosing a protocol in "+ Add computer" and typing a host connects to the
+// address the two make.
+func TestAddComputerProtocol(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.tt.Click("Add computer"); err != nil {
+		t.Fatal(err)
+	}
+	a.typeInto("Server", "192.0.2.20")
+	if err := a.tt.Click("VNC"); err != nil { // the select's trigger
+		t.Fatal(err)
+	}
+	if err := a.tt.Click("Remote Desktop"); err != nil {
+		t.Fatalf("%v; texts %q", err, a.tt.Texts())
+	}
+	if a.proto != viewer.SchemeRDP {
+		t.Errorf("protocol %q", a.proto)
+	}
+	// An address that cannot be dialled keeps the form open.
+	a.typeInto("Server", " not a host")
+	if err := a.tt.Click("Connect"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.addOpen || !strings.Contains(a.errText, "invalid host") {
+		t.Errorf("open %v, error %q", a.addOpen, a.errText)
 	}
 }
 

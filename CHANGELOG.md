@@ -3,6 +3,19 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.1.3
+
+- Connection addresses are validated before anything is saved or dialled: an explicit `vnc://`,
+  `ard://` or `rdp://` scheme picks the protocol (a Mac's ARD dialect is still detected on the
+  wire, so a bare address reaches a Mac too), and an unknown scheme, a host that cannot be
+  dialled or a port out of range is refused with a reason. A bare `host:3389` stays a VNC
+  address, as TigerVNC reads it. The Add computer dialog keeps the form open on a bad address.
+- Add computer asks for a protocol (VNC, Apple Remote Desktop or Remote Desktop) and an address,
+  no port: the port follows the protocol, and a pasted `scheme://host:port` still wins. The
+  dialog opens on the protocol last connected.
+- The High Performance heartbeat no longer crashes the app when a handshake outlives its 30 s
+  beat, as when the credential prompt waits for someone.
+
 ## 0.1.2
 
 - Holding Shift, Ctrl, Alt, Win, AltGr or a lock key sends the server one press, as a real
