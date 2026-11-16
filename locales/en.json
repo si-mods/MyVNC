@@ -28,7 +28,12 @@
     "placeholders": { "when": { "type": "DateTime" } }
   },
   "server": "Server",
-  "serverPlaceholder": "host[:display] or host::port",
+  "serverPlaceholder": "IP or host name",
+  "protocol": "Protocol",
+  "@protocol": { "description": "The Add computer form's row that chooses VNC, Apple Remote Desktop or Remote Desktop." },
+  "protocolVNC": "VNC",
+  "protocolARD": "Apple Remote Desktop",
+  "protocolRDP": "Remote Desktop",
   "username": "Username",
   "usernamePlaceholder": "If the server asks for one",
   "password": "Password",

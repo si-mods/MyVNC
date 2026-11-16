@@ -67,8 +67,13 @@ platforms; RDP is Windows-only.
 
 ## Usage
 
-- Launch `MyVNC.exe`, add a computer, and click its card.
-- Command line: `MyVNC.exe [host[:port]]` or `MyVNC.exe rdp://host[:port]`.
+- Launch `MyVNC.exe`, add a computer — pick VNC, Apple Remote Desktop or
+  Remote Desktop, then type the address — and click its card. The port is the
+  protocol's own unless the address names one (`rdp://host:3399`).
+- Command line: `MyVNC.exe [host[:port]]`, `MyVNC.exe ard://host[:port]`
+  or `MyVNC.exe rdp://host[:port]`. An address may be typed with a scheme:
+  `vnc://` and `ard://` are VNC/RFB (a Mac's ARD dialect is detected either
+  way), `rdp://` is Remote Desktop; anything else is refused before dialling.
   TigerVNC-compatible options and `.tigervnc` files are supported
   (`MyVNC.exe -h` for the list).
 - AI agents: `MyVNC.exe --mcp` runs an MCP server on stdio, with no window

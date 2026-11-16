@@ -323,11 +323,15 @@ func dialog(c *ui.Context, k *colors, open *bool, label string, width float32, f
 	})
 }
 
-// addView is the form of "+ Add computer".
+// addView is the form of "+ Add computer": a protocol and a host, the port
+// following the protocol unless the field holds a full address.
 func (a *app) addView(c *ui.Context, k *colors) {
 	dialog(c, k, &a.addOpen, locales.AddComputer(), 420, func() {
 		ui.Text(c, locales.AddComputer()).FontSize(18).FontWeight(700).TextColor(k.text)
 		submit := false
+		ui.Field(c, locales.Protocol(), func() {
+			selectValue(c, &a.proto, addProtocols, protocolName)
+		})
 		ui.Field(c, locales.Server(), func() {
 			submit = ui.TextInput(c, &a.server).Placeholder(locales.ServerPlaceholder()).AutoFocus().Submitted() || submit
 		})
@@ -348,11 +352,48 @@ func (a *app) addView(c *ui.Context, k *colors) {
 				a.addOpen = false
 			}
 			if ui.PrimaryButton(c, locales.Connect()).Clicked() || submit {
+				// Keep the form open on a bad address, with the reason in
+				// the banner behind it.
+				server := addAddress(a.proto, a.server)
+				if strings.TrimSpace(a.server) == "" {
+					a.errText = "no host"
+					return
+				}
+				if _, err := viewer.ParseURL(server); err != nil {
+					a.errText = err.Error()
+					return
+				}
 				a.addOpen = false
-				a.connect()
+				a.connectTo(server, false)
 			}
 		})
 	})
+}
+
+// addProtocols are the protocols the Add computer dialog offers, in order.
+var addProtocols = []viewer.Scheme{viewer.SchemeVNC, viewer.SchemeARD, viewer.SchemeRDP}
+
+// protocolName names a protocol for people.
+func protocolName(s viewer.Scheme) string {
+	switch s {
+	case viewer.SchemeARD:
+		return locales.ProtocolARD()
+	case viewer.SchemeRDP:
+		return locales.ProtocolRDP()
+	}
+	return locales.ProtocolVNC()
+}
+
+// addAddress names the address the dialog's protocol and host field make. A
+// field that already carries a scheme wins, so a pasted rdp://host:3399
+// connects as RDP; VNC stays bare, TigerVNC's own form, and the port follows
+// the protocol.
+func addAddress(proto viewer.Scheme, field string) string {
+	host := strings.TrimSpace(field)
+	if host == "" || strings.Contains(host, "://") || proto == viewer.SchemeVNC {
+		return host
+	}
+	return string(proto) + "://" + host
 }
 
 func (a *app) openSettings() {

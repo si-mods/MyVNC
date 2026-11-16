@@ -14,7 +14,6 @@ import (
 	"log"
 	"log/slog"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,6 +60,7 @@ type app struct {
 
 	// The home and connecting views.
 	server, user, pass string
+	proto              viewer.Scheme // the Add computer dialog's protocol
 	addOpen            bool
 	settingsOpen       bool
 	settingsPage       string // the settings page shown
@@ -192,7 +192,7 @@ func newApp(dir string) *app {
 		dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")},
 		log: slog.New(slog.DiscardHandler), focused: true, srvLED: keymap.LEDUnknown,
 		mods: keymap.DefaultShortcutModifiers, thumbs: map[string]*ui.Bitmap{},
-		step: locales.StepConnecting, wheelNow: time.Now,
+		step: locales.StepConnecting, wheelNow: time.Now, proto: viewer.SchemeVNC,
 	}
 	a.initTouch()
 	// a.post is the window's, set once it exists.
@@ -208,6 +208,9 @@ func newApp(dir string) *app {
 	a.user = cfg.Username
 	if len(cfg.Servers) > 0 {
 		a.server = cfg.Servers[0]
+		if t, err := viewer.ParseURL(a.server); err == nil {
+			a.proto = t.Scheme // the dialog opens on the protocol last saved
+		}
 	}
 	return a
 }
@@ -812,8 +815,8 @@ func errorText(err error) string {
 func secretKey(addr string) string { return "password " + addr }
 
 func (a *app) forgetPassword(server string) {
-	if addr, err := viewer.Addr(server); err == nil {
-		go mygo.Secrets.Delete(secretKey(addr))
+	if t, err := viewer.ParseURL(server); err == nil {
+		go mygo.Secrets.Delete(secretKey(t.Addr()))
 	}
 }
 
@@ -825,16 +828,18 @@ func (a *app) connectTo(server string, again bool) {
 	if a.connecting {
 		return
 	}
-	if strings.HasPrefix(strings.ToLower(server), "rdp://") {
-		a.connectRDP(server)
-		return
-	}
-	a.disconnectRDP()
-	addr, err := viewer.Addr(server)
+	target, err := viewer.ParseURL(server)
 	if err != nil {
 		a.errText = err.Error()
 		return
 	}
+	a.proto = target.Scheme // the Add computer dialog starts there next time
+	if target.Scheme == viewer.SchemeRDP {
+		a.connectRDP(target, server)
+		return
+	}
+	a.disconnectRDP()
+	addr := target.Addr()
 	if !again {
 		a.cfg.AddServer(server)
 		a.cfg.Username = a.user
@@ -846,11 +851,18 @@ func (a *app) connectTo(server string, again bool) {
 	if !again {
 		a.errText = ""
 	}
+	// An explicit vnc://, ard:// or rdp:// scheme pins the protocol; a bare
+	// address stays VNC and Apple's dialect is still detected on the wire.
+	pinned := target.Scheme.SecurityTypes()
 	secTypes := a.secTypes
-	if a.cfg.SecureOnly {
+	switch {
+	case a.cfg.SecureOnly:
 		secTypes = slices.DeleteFunc(slices.Clone(viewer.SecTypesSecure), func(t uint32) bool {
-			return a.secTypes != nil && !slices.Contains(a.secTypes, t)
+			return (a.secTypes != nil && !slices.Contains(a.secTypes, t)) ||
+				(pinned != nil && !slices.Contains(pinned, t))
 		})
+	case pinned != nil:
+		secTypes = pinned
 	}
 	cfg, user, pass := a.cfg, a.user, a.pass
 	limit30 := false
@@ -1203,12 +1215,8 @@ func (a *app) disconnect() {
 
 // connectRDP starts an embedded Microsoft Remote Desktop session. The
 // system ActiveX control brings NLA, codecs, audio and clipboard.
-func (a *app) connectRDP(server string) {
-	host, port, err := rdpTarget(server)
-	if err != nil {
-		a.errText = err.Error()
-		return
-	}
+func (a *app) connectRDP(target viewer.Target, server string) {
+	host, port := target.Host, target.Port
 	if a.win == nil {
 		return
 	}
@@ -1290,22 +1298,6 @@ func (a *app) disconnectRDP() {
 	a.rdpAddr = ""
 	a.setTitle(false)
 	a.updateGrab()
-}
-
-// rdpTarget parses rdp://host[:port].
-func rdpTarget(server string) (host string, port int, err error) {
-	host = strings.TrimPrefix(strings.TrimPrefix(server, "RDP://"), "rdp://")
-	port = 3389
-	if h, p, e := net.SplitHostPort(host); e == nil {
-		host = h
-		if port, err = strconv.Atoi(p); err != nil || port <= 0 || port > 65535 {
-			return "", 0, fmt.Errorf("rdp: bad port %q", p)
-		}
-	}
-	if host == "" {
-		return "", 0, errors.New("rdp: no host")
-	}
-	return host, port, nil
 }
 
 func (a *app) endSession() {
@@ -1450,7 +1442,9 @@ func (a *app) parseArgs(args []string) (server string, err error) {
 	}
 	if len(rest) == 1 {
 		server = rest[0]
-		if strings.HasPrefix(strings.ToLower(server), "rdp://") {
+		// A scheme names a server, not a .tigervnc path, even though its
+		// slashes would look like one.
+		if t, err := viewer.ParseURL(server); err == nil && t.Scheme != viewer.SchemeVNC {
 			return server, nil
 		}
 		if strings.ContainsAny(server, `/\`) {
@@ -1465,7 +1459,7 @@ func (a *app) parseArgs(args []string) (server string, err error) {
 
 func usage() string {
 	var b strings.Builder
-	b.WriteString("usage: MyVNC [parameters] [host][:displayNum] | rdp://host[:port] | [parameters] file.tigervnc\n\nParameters:\n")
+	b.WriteString("usage: MyVNC [parameters] [vnc://][host][:displayNum] | ard://host[:port] | rdp://host[:port] | [parameters] file.tigervnc\n\nParameters:\n")
 	for _, p := range tigerParams(&viewer.Config{}).Params() {
 		fmt.Fprintf(&b, "  %s - %s (default=%s)\n", p.Name(), p.Description(), p.DefaultStr())
 	}
@@ -1694,7 +1688,8 @@ func main() {
 		})
 		if start != "" {
 			a.server = start
-			if strings.HasPrefix(strings.ToLower(start), "rdp://") {
+			t, err := viewer.ParseURL(start)
+			if err == nil && t.Scheme == viewer.SchemeRDP {
 				// Let the window show and the message loop run first: the
 				// RDP ActiveX is an in-place OLE control and needs both.
 				time.AfterFunc(500*time.Millisecond, func() {

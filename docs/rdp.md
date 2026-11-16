@@ -19,6 +19,12 @@ The username and password from the connection dialog are passed to the
 control. If the password is empty, the control shows its own credential
 prompt. Certificate prompts are suppressed (authentication level 0).
 
+The scheme is what selects RDP: a bare `host:3389` stays a VNC address, as
+TigerVNC reads it, and VNC against an RDP port waits for a banner that never
+comes. `viewer.ParseURL` validates the address first, so an unknown scheme,
+a host that cannot be dialled or a port out of range is refused with a
+reason before anything is saved or dialled.
+
 While an RDP session runs, the native control covers the window and receives
 all input. Press **Ctrl+Alt+Shift+Q** to leave the session.
 
