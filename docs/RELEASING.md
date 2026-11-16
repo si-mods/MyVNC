@@ -18,8 +18,9 @@ build as an artifact. A `v*` tag also publishes a release with
 `build` runs on `yibo-pc`, the desk machine (`D:\actions\myvnc`, labels `self-hosted`,
 `Windows`, `X64`, `yibo-pc`), so pushes and same-repo PRs skip the `windows-latest`
 queue. Fork PRs and `v*` tag builds stay on GitHub's runners: a fork's code must never
-execute on a self-hosted machine, and the installer test refuses a user who already has
-MyVNC installed, as `yibo-pc` does.
+execute on a self-hosted machine, and the installer test — which installs and uninstalls
+for the current user, so it refuses one who already has MyVNC, as `yibo-pc` does — runs
+only on hosted runners.
 
 The runner is started at logon from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 (`wscript.exe D:\actions\myvnc\start-hidden.vbs`), so it runs while that user is logged

@@ -94,7 +94,11 @@ jobs:
             if ($s.SignerCertificate -eq $null) { throw "$($_.Name) is not signed" }
           }
 
+      # The test installs and uninstalls for the current user, so it needs one
+      # with no MyVNC; yibo-pc has 0.1.1 installed. Tags run on hosted runners,
+      # where it still gates every release.
       - name: Test the installer (install, launch, uninstall)
+        if: runner.environment == 'github-hosted'
         shell: pwsh
         run: |
           $setup = Get-ChildItem build/windows-amd64 -Filter '*Setup*.exe' | Select-Object -First 1
