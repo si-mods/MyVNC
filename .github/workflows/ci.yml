@@ -20,6 +20,17 @@ jobs:
     runs-on: ${{ (github.event.pull_request.head.repo.fork || startsWith(github.ref, 'refs/tags/v')) && 'windows-latest' || fromJSON('["self-hosted","Windows","X64","yibo-pc"]') }}
     steps:
       - uses: actions/checkout@v4
+
+      # A self-hosted Windows runner can have a stripped PATH; the bash and
+      # pwsh steps below need what a normal logon has.
+      - name: Put bash and pwsh on PATH
+        if: runner.environment == 'self-hosted'
+        shell: powershell
+        run: |
+          @("$env:ProgramFiles\Git\bin", "$env:ProgramFiles\Git\usr\bin", "$env:ProgramFiles\PowerShell\7") |
+            Where-Object { Test-Path $_ } |
+            ForEach-Object { $_ | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8 }
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
