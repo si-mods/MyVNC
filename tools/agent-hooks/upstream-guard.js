@@ -16,8 +16,9 @@
 
 const { execFileSync } = require("child_process");
 
-// GitHub owners whose repositories the agent may write to.
-const ALLOWED_OWNERS = new Set(["si-mods"]);
+// GitHub owners whose repositories the agent may write to: si-mods ships the
+// app, kyya holds the forks that carry patches to an upstream repository.
+const ALLOWED_OWNERS = new Set(["si-mods", "kyya"]);
 
 // gh commands that change something, by group. A group listed here that is
 // called with any verb below is a write; every other verb of that group reads.
