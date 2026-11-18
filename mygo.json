@@ -1,7 +1,9 @@
 {
   "name": "MyVNC",
   "identifier": "simods.myvnc",
-  "version": "0.1.3",
+  "version": "0.1.4",
+  "publisher": "Super Intelligence Mods",
+  "copyright": "Copyright © 2026 Super Intelligence Mods",
   "out": "build",
   "i18n": { "dir": "locales", "source": "en" },
   "updates": {
