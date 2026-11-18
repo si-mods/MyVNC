@@ -3,6 +3,14 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.1.4
+
+- The executable names who made it, Super Intelligence Mods, in its version resource, where
+  Explorer's Properties → Details and the uninstall list read it. The company field was empty,
+  which antivirus heuristics read as an unsigned binary with no publisher behind it; Defender
+  flagged the 0.1.3 build as Trojan:Win32/Bearfoos.A!ml without ever running it.
+- Built on MyGo 0.9.1.
+
 ## 0.1.3
 
 - Connection addresses are validated before anything is saved or dialled: an explicit `vnc://`,
