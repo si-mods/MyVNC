@@ -108,6 +108,7 @@ type testApp struct {
 
 func newTestApp(t *testing.T) *testApp {
 	a := &testApp{app: newApp(t.TempDir()), t: t, posted: make(chan func(), 1000)}
+	a.secrets = memSecrets{}
 	a.post = func(f func()) { a.posted <- f }
 	a.tt = ui.NewTester(a.view, 800, 600)
 	return a
@@ -372,7 +373,7 @@ func TestReconnect(t *testing.T) {
 	}
 	// An authentication failure is not retried.
 	a.rc = reconnect{active: true, attempt: 1, server: server}
-	a.connected(nil, server, "", "", &rfb.AuthError{Reason: "no"})
+	a.connected(nil, server, "", "", "", &rfb.AuthError{Reason: "no"})
 	if a.rc.active {
 		t.Error("retrying an authentication failure")
 	}
@@ -492,11 +493,11 @@ func TestHomeCards(t *testing.T) {
 	}
 	// A failed connection of a host with no past marks it, a canceled or
 	// successful one does not.
-	a.connected(nil, "new", "", "", errors.New("refused"))
+	a.connected(nil, "new", "", "", "", errors.New("refused"))
 	if !a.cfg.Computers["new"].Never {
 		t.Error("a first failure not noted")
 	}
-	a.connected(nil, "legacy", "", "", nil)
+	a.connected(nil, "legacy", "", "", "", nil)
 	if a.cfg.Computers["legacy"].Never {
 		t.Error("a canceled try marked a computer never connected")
 	}

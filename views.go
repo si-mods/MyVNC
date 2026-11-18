@@ -343,8 +343,9 @@ func (a *app) addView(c *ui.Context, k *colors) {
 		})
 		if switchRow(c, k, locales.RememberPassword(), &a.cfg.Remember) {
 			if !a.cfg.Remember {
-				a.forgetPassword(a.server)
+				a.forgetAllPasswords()
 			}
+			a.credRows = nil
 			a.saveConfig()
 		}
 		ui.Row(c).Gap(8).Justify(ui.End).Padding(4, 0, 0, 0).Children(func() {
@@ -710,6 +711,7 @@ func (a *app) settingsPages() []settingsPage {
 		settingSwitch(c, k, locales.HighPerformance(), "", &a.cfg.HighPerformance)
 		settingSwitch(c, k, locales.SecureOnly(), "", &a.cfg.SecureOnly)
 	}}
+	credentialsPage := settingsPage{"credentials", "lock", locales.Credentials(), a.credentialsView}
 	windowPage := settingsPage{"window", "app-window", locales.Window(), func(c *ui.Context, k *colors) {
 		settingSwitch(c, k, locales.FullScreen(), "", &a.cfg.FullScreen)
 		settingSwitch(c, k, locales.DynamicResolution(), "", &a.cfg.DynamicResolution)
@@ -747,7 +749,58 @@ func (a *app) settingsPages() []settingsPage {
 			})
 		}
 	}}
-	return []settingsPage{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, windowPage, agentPage, updatesPage, tigerPage}
+	return []settingsPage{interfacePage, videoPage, clipboardPage, inputPage, connectionPage, credentialsPage, windowPage, agentPage, updatesPage, tigerPage}
+}
+
+// credentialsView is the settings page of the accounts kept for servers:
+// one row per saved computer, with its account name and whether the system
+// credential store has its password.
+func (a *app) credentialsView(c *ui.Context, k *colors) {
+	settingNote(c, k, locales.CredentialsHelp())
+	if settingSwitch(c, k, locales.RememberPassword(), "", &a.cfg.Remember) {
+		if a.cfg.Remember {
+			a.credRows = nil
+		} else {
+			a.forgetAllPasswords()
+		}
+		a.saveConfig()
+	}
+	if a.credRows == nil {
+		a.refreshCreds()
+	}
+	for _, r := range a.credRows {
+		a.credentialRow(c, k, r)
+	}
+}
+
+// credentialRow is one server on the credentials page.
+func (a *app) credentialRow(c *ui.Context, k *colors, r credRow) {
+	card(ui.Row(c).Gap(12).AlignItems(ui.Center).Padding(11, 14), k).Children(func() {
+		ui.Icon(c, icon("lock")).Size(16, 16).TextColor(k.iconMuted).Shrink(0)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, r.server).FontSize(13.5).FontWeight(600).TextColor(k.text).SingleLine().Ellipsis("…")
+			user := r.user
+			if user == "" {
+				user = locales.NoUsername()
+			}
+			pass := locales.NoSavedPassword()
+			if r.hasPass {
+				pass = locales.PasswordSaved()
+			}
+			ui.Text(c, user+" · "+pass).FontSize(12).TextColor(k.textFaint).SingleLine().Ellipsis("…")
+		})
+		if ui.Button(c, locales.Edit()).Clicked() {
+			a.editCredential(r)
+		}
+		if ui.Button(c, locales.Forget()).Clicked() {
+			a.forgetCredential(r.addr)
+			comp := a.cfg.Computers[r.server]
+			comp.Username = ""
+			a.cfg.Computers[r.server] = comp
+			a.saveConfig()
+			a.credRows = nil
+		}
+	})
 }
 
 func (a *app) connectingView(c *ui.Context) {

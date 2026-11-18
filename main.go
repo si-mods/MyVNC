@@ -122,9 +122,20 @@ type app struct {
 	rdpW, rdpH int32
 	winScale   float32 // the window's pixels per DIP, for the RDP control
 
+	// Credentials: the system's store, one record per server, and the
+	// records the credentials page shows.
+	secrets  secretStore
+	credRows []credRow
+	credOpen bool
+	credFor  string // the server being edited, as in Config.Servers
+	credUser string
+	credPass string // empty keeps the stored password
+	credHas  bool   // a password is stored for credFor
+
 	// Prompts of the connection goroutine.
 	authOpen           bool
 	authUser, authPass string
+	authMsg            string // why the account name is wanted, if it is
 	authReply          chan creds
 	keyOpen            bool
 	keyMsg             string
@@ -193,6 +204,7 @@ func newApp(dir string) *app {
 		log: slog.New(slog.DiscardHandler), focused: true, srvLED: keymap.LEDUnknown,
 		mods: keymap.DefaultShortcutModifiers, thumbs: map[string]*ui.Bitmap{},
 		step: locales.StepConnecting, wheelNow: time.Now, proto: viewer.SchemeVNC,
+		secrets: mygo.Secrets,
 	}
 	a.initTouch()
 	// a.post is the window's, set once it exists.
@@ -814,12 +826,6 @@ func errorText(err error) string {
 
 func secretKey(addr string) string { return "password " + addr }
 
-func (a *app) forgetPassword(server string) {
-	if t, err := viewer.ParseURL(server); err == nil {
-		go mygo.Secrets.Delete(secretKey(t.Addr()))
-	}
-}
-
 func (a *app) connect() { a.connectTo(strings.TrimSpace(a.server), false) }
 
 // connectTo connects to server; again tells a reconnect, which asks
@@ -865,6 +871,9 @@ func (a *app) connectTo(server string, again bool) {
 		secTypes = pinned
 	}
 	cfg, user, pass := a.cfg, a.user, a.pass
+	if c := cfg.Computers[server]; c.Username != "" {
+		user = c.Username // the account this server last took
+	}
 	limit30 := false
 	if again {
 		pass, limit30 = a.sessPass, a.rc.limit30
@@ -873,7 +882,11 @@ func (a *app) connectTo(server string, again bool) {
 	lg.Info("connecting", "server", server, "reconnect", again)
 	go func() {
 		defer cancel()
-		used := ""
+		// What the session authenticates with, for keeping it after:
+		// used is the password, usedUser the account.
+		var used, usedUser string
+		var fromStore, typed, warned bool
+		useStore := cfg.Remember
 		var secType atomic.Uint32
 		opt := rfb.Options{
 			Username:      user,
@@ -893,19 +906,29 @@ func (a *app) connectTo(server string, again bool) {
 			},
 			Password: func() (string, string, error) {
 				t := secType.Load()
-				if viewer.PasswordUnprotected(t) && !again && !slices.Contains(cfg.Unencrypted, addr) {
+				if viewer.PasswordUnprotected(t) && !again && !warned && !slices.Contains(cfg.Unencrypted, addr) {
+					warned = true
 					if err := a.warnUnencrypted(ctx, addr, t); err != nil {
 						return "", "", err
 					}
 				}
-				if pass == "" && cfg.Remember {
-					if b, err := mygo.Secrets.Get(secretKey(addr)); err == nil {
-						pass = string(b)
+				if pass == "" && useStore {
+					if c, ok := a.loadCredential(addr); ok {
+						if c.User != "" {
+							user = c.User
+						}
+						pass, fromStore = c.Pass, c.Pass != ""
 					}
 				}
-				if pass == "" {
+				// ARD, Mac authentication, MS Logon II and Plain need the
+				// account name too; a password alone authenticates nothing.
+				msg, prefill := "", ""
+				if viewer.NeedsUsername(t) && user == "" {
+					msg, prefill = locales.AuthNeedsAccount(), pass
+				}
+				if pass == "" || msg != "" {
 					r, err := ask(a, ctx, func() {
-						a.authOpen, a.authUser, a.authPass = true, user, ""
+						a.authOpen, a.authUser, a.authPass, a.authMsg = true, user, prefill, msg
 					}, &a.authReply)
 					if err != nil {
 						return "", "", err
@@ -913,9 +936,9 @@ func (a *app) connectTo(server string, again bool) {
 					if !r.ok {
 						return "", "", errAuthCanceled
 					}
-					user, pass = r.user, r.pass
+					user, pass, typed, fromStore = r.user, r.pass, true, false
 				}
-				used = pass
+				used, usedUser = pass, user
 				return user, pass, nil
 			},
 			VerifyHostKey: func(key []byte, fp string) error { return a.verifyHostKey(ctx, addr, key, fp) },
@@ -940,14 +963,17 @@ func (a *app) connectTo(server string, again bool) {
 			}
 		}
 		s, err := viewer.Connect(ctx, addr, opt, cfg.DecoderMode(), a.post)
-		if cfg.Remember {
-			var ae *rfb.AuthError
-			switch {
-			case err == nil && used != "":
-				mygo.Secrets.Set(secretKey(addr), []byte(used))
-			case errors.As(err, &ae):
-				mygo.Secrets.Delete(secretKey(addr))
-			}
+		var ae *rfb.AuthError
+		if errors.As(err, &ae) && fromStore && !typed {
+			// A remembered record the server no longer takes: ask, once,
+			// in this same connection rather than sending the user back
+			// to Connect for nothing.
+			lg.Info("remembered credentials were rejected; asking", "reason", ae.Reason)
+			pass, fromStore, useStore = "", false, false
+			s, err = viewer.Connect(ctx, addr, opt, cfg.DecoderMode(), a.post)
+		}
+		if err == nil && used != "" && cfg.Remember {
+			a.saveCredential(addr, credential{User: usedUser, Pass: used})
 		}
 		if ctx.Err() != nil && err != nil {
 			err = nil // canceled
@@ -955,7 +981,10 @@ func (a *app) connectTo(server string, again bool) {
 		if err != nil {
 			lg.Info("connection failed", "err", err)
 		}
-		a.post(func() { a.connected(s, server, addr, used, err) })
+		if usedUser == "" {
+			usedUser = user // no password was asked for, as with security type None
+		}
+		a.post(func() { a.connected(s, server, addr, usedUser, used, err) })
 		if s == nil {
 			return
 		}
@@ -1068,14 +1097,26 @@ func (a *app) prompts(c *ui.Context) {
 			a.authReply <- r
 			a.authReply = nil
 		}
-		a.authOpen = false
+		a.authOpen, a.authMsg = false, ""
 	}
 	if ui.Modal(c, &a.authOpen, func() {
 		ui.Text(c, locales.AuthTitle()).Bold()
+		if a.authMsg != "" {
+			ui.Text(c, a.authMsg).FontSize(12).Wrap()
+		}
 		submit := false
-		ui.Field(c, locales.Username(), func() { ui.TextInput(c, &a.authUser) })
+		ui.Field(c, locales.Username(), func() {
+			in := ui.TextInput(c, &a.authUser)
+			if a.authMsg != "" {
+				in.AutoFocus() // the account is what is missing
+			}
+		})
 		ui.Field(c, locales.Password(), func() {
-			submit = ui.TextInput(c, &a.authPass).Password().AutoFocus().Submitted()
+			in := ui.TextInput(c, &a.authPass).Password()
+			if a.authMsg == "" {
+				in.AutoFocus()
+			}
+			submit = in.Submitted()
 		})
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 			if ui.Button(c, locales.Cancel()).Clicked() {
@@ -1087,6 +1128,29 @@ func (a *app) prompts(c *ui.Context) {
 		})
 	}).Dismissed() {
 		answerAuth(creds{})
+	}
+	if ui.Modal(c, &a.credOpen, func() {
+		ui.Text(c, locales.CredentialTitle(a.credFor)).Bold()
+		ui.Field(c, locales.Username(), func() {
+			ui.TextInput(c, &a.credUser).AutoFocus()
+		})
+		ui.Field(c, locales.Password(), func() {
+			in := ui.TextInput(c, &a.credPass).Password()
+			if a.credHas {
+				in.Placeholder(locales.KeepPassword())
+			}
+		})
+		ui.Text(c, locales.CredentialsHelp()).FontSize(12).Wrap()
+		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			if ui.Button(c, locales.Cancel()).Clicked() {
+				a.credOpen = false
+			}
+			if ui.PrimaryButton(c, locales.Save()).Clicked() {
+				a.saveCredEdit()
+			}
+		})
+	}).Dismissed() {
+		a.credOpen = false
 	}
 	if ui.Modal(c, &a.dlOpen, func() {
 		ui.Text(c, locales.DownloadTitle()).Bold()
@@ -1135,7 +1199,7 @@ func (a *app) prompts(c *ui.Context) {
 		locales.Reject(), locales.AlwaysAccept(), locales.AcceptOnce())
 }
 
-func (a *app) connected(s *viewer.Session, server, addr, pass string, err error) {
+func (a *app) connected(s *viewer.Session, server, addr, user, pass string, err error) {
 	a.connecting, a.cancel = false, nil
 	a.authOpen, a.keyOpen, a.warnOpen, a.certOpen = false, false, false, false
 	if err != nil {
@@ -1163,7 +1227,10 @@ func (a *app) connected(s *viewer.Session, server, addr, pass string, err error)
 	a.sess, a.addr, a.sessServer, a.sessPass, a.secType = s, addr, server, pass, s.SecurityType()
 	s.SetRotation(a.cfg.Orientation)
 	a.step = locales.StepFirstFrame
-	a.cfg.Computers[server] = viewer.Computer{Name: a.cfg.Computers[server].Name, Last: time.Now()}
+	a.cfg.Computers[server] = viewer.Computer{
+		Name: a.cfg.Computers[server].Name, Username: user, Last: time.Now(),
+	}
+	a.credRows = nil // the credentials page reads them again
 	// The desktop name is kept by setName when the server tells it.
 	a.saveConfig()
 	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
@@ -1233,6 +1300,19 @@ func (a *app) connectRDP(target viewer.Target, server string) {
 	a.cfg.AddServer(server)
 	a.cfg.Username = a.user
 	a.saveConfig()
+	addr := target.Addr()
+	user, pass := a.user, a.pass
+	if c := a.cfg.Computers[server]; user == "" && c.Username != "" {
+		user = c.Username
+	}
+	if pass == "" && a.cfg.Remember {
+		if c, ok := a.loadCredential(addr); ok {
+			if c.User != "" {
+				user = c.User
+			}
+			pass = c.Pass
+		}
+	}
 	a.name = "RDP " + host
 	a.title = a.name + " - " + appName
 	a.win.SetTitle(a.title)
@@ -1241,11 +1321,12 @@ func (a *app) connectRDP(target viewer.Target, server string) {
 	top := a.rdpTop(a.win.IsFullScreen())
 	r.Fit(0, top, w, h-top)
 	r.Show(true)
-	user, domain := a.user, ""
+	account := user // with the domain, as the user gave it
+	domain := ""
 	if i := strings.LastIndex(user, `\`); i >= 0 {
 		domain, user = user[:i], user[i+1:]
 	}
-	if err := r.Connect(host, port, user, a.pass, domain); err != nil {
+	if err := r.Connect(host, port, user, pass, domain); err != nil {
 		a.log.Warn("RDP connect", "err", err)
 		a.errText = err.Error()
 		a.disconnectRDP()
@@ -1256,7 +1337,18 @@ func (a *app) connectRDP(target viewer.Target, server string) {
 		mygo.RunOnMain(func() {
 			if a.rdp == r {
 				w, h := r.RemoteSize()
-				a.log.Info("RDP state", "connected", r.Connected(), "width", w, "height", h)
+				connected := r.Connected()
+				a.log.Info("RDP state", "connected", connected, "width", w, "height", h)
+				// The control authenticates by itself; once it says it is
+				// in, the account it was given is the one that worked.
+				if connected && a.cfg.Remember && pass != "" {
+					a.saveCredential(addr, credential{User: account, Pass: pass})
+					a.cfg.Computers[server] = viewer.Computer{
+						Name: a.cfg.Computers[server].Name, Username: account, Last: time.Now(),
+					}
+					a.saveConfig()
+					a.credRows = nil
+				}
 			}
 		})
 	})

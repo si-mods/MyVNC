@@ -283,6 +283,122 @@ func (msgs Messages) RememberPassword() string {
 	return Catalog.Format(msgs.locale, "rememberPassword", nil)
 }
 
+// Credentials says "Credentials"
+// in the language the app shows.
+func Credentials() string { return In(i18n.Locale()).Credentials() }
+
+// Credentials says "Credentials"
+// in the language of msgs.
+func (msgs Messages) Credentials() string {
+	return Catalog.Format(msgs.locale, "credentials", nil)
+}
+
+// CredentialsHelp says "One account per computer, kept in the system credential store. Passwords are saved only while Remember password is on."
+// in the language the app shows.
+func CredentialsHelp() string { return In(i18n.Locale()).CredentialsHelp() }
+
+// CredentialsHelp says "One account per computer, kept in the system credential store. Passwords are saved only while Remember password is on."
+// in the language of msgs.
+func (msgs Messages) CredentialsHelp() string {
+	return Catalog.Format(msgs.locale, "credentialsHelp", nil)
+}
+
+// CredentialTitle says "Credentials for {server}"
+// in the language the app shows.
+//
+// The title of the dialog that edits one computer's account name and
+// password.
+func CredentialTitle(server string) string { return In(i18n.Locale()).CredentialTitle(server) }
+
+// CredentialTitle says "Credentials for {server}"
+// in the language of msgs.
+//
+// The title of the dialog that edits one computer's account name and
+// password.
+func (msgs Messages) CredentialTitle(server string) string {
+	return Catalog.Format(msgs.locale, "credentialTitle", map[string]any{"server": server})
+}
+
+// NoUsername says "No account name"
+// in the language the app shows.
+func NoUsername() string { return In(i18n.Locale()).NoUsername() }
+
+// NoUsername says "No account name"
+// in the language of msgs.
+func (msgs Messages) NoUsername() string {
+	return Catalog.Format(msgs.locale, "noUsername", nil)
+}
+
+// PasswordSaved says "Password saved"
+// in the language the app shows.
+func PasswordSaved() string { return In(i18n.Locale()).PasswordSaved() }
+
+// PasswordSaved says "Password saved"
+// in the language of msgs.
+func (msgs Messages) PasswordSaved() string {
+	return Catalog.Format(msgs.locale, "passwordSaved", nil)
+}
+
+// NoSavedPassword says "No saved password"
+// in the language the app shows.
+func NoSavedPassword() string { return In(i18n.Locale()).NoSavedPassword() }
+
+// NoSavedPassword says "No saved password"
+// in the language of msgs.
+func (msgs Messages) NoSavedPassword() string {
+	return Catalog.Format(msgs.locale, "noSavedPassword", nil)
+}
+
+// Edit says "Edit"
+// in the language the app shows.
+func Edit() string { return In(i18n.Locale()).Edit() }
+
+// Edit says "Edit"
+// in the language of msgs.
+func (msgs Messages) Edit() string {
+	return Catalog.Format(msgs.locale, "edit", nil)
+}
+
+// Forget says "Forget"
+// in the language the app shows.
+func Forget() string { return In(i18n.Locale()).Forget() }
+
+// Forget says "Forget"
+// in the language of msgs.
+func (msgs Messages) Forget() string {
+	return Catalog.Format(msgs.locale, "forget", nil)
+}
+
+// Save says "Save"
+// in the language the app shows.
+func Save() string { return In(i18n.Locale()).Save() }
+
+// Save says "Save"
+// in the language of msgs.
+func (msgs Messages) Save() string {
+	return Catalog.Format(msgs.locale, "save", nil)
+}
+
+// KeepPassword says "Leave empty to keep the saved password"
+// in the language the app shows.
+func KeepPassword() string { return In(i18n.Locale()).KeepPassword() }
+
+// KeepPassword says "Leave empty to keep the saved password"
+// in the language of msgs.
+func (msgs Messages) KeepPassword() string {
+	return Catalog.Format(msgs.locale, "keepPassword", nil)
+}
+
+// AuthNeedsAccount says "This server authenticates an account: enter the account name as well as its password."
+// in the language the app shows.
+func AuthNeedsAccount() string { return In(i18n.Locale()).AuthNeedsAccount() }
+
+// AuthNeedsAccount says "This server authenticates an account: enter the account name as well as its password."
+// in the language of msgs.
+func (msgs Messages) AuthNeedsAccount() string {
+	return Catalog.Format(msgs.locale, "authNeedsAccount", nil)
+}
+
 // PreferredEncoding says "Preferred encoding"
 // in the language the app shows.
 func PreferredEncoding() string { return In(i18n.Locale()).PreferredEncoding() }

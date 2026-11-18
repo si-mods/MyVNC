@@ -3,6 +3,23 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## 0.1.5
+
+- Credentials are managed in one place: Settings → Credentials lists each saved computer with
+  its account name and whether its password is in the system credential store, and edits or
+  forgets them. One record per server holds both the account name and the password, replacing
+  the password-only records of earlier releases; those still work and are upgraded on the next
+  successful sign-in.
+- A remembered password is no longer enough on its own for a Mac's ARD DH, Apple's Mac
+  authentication, MS Logon II or VeNCrypt Plain: the prompt asks for the account name before
+  the first attempt, and the account name that worked is kept for the computer. This fixes
+  macOS Screen Sharing refusing every connection with "Authentication failed" until the name
+  was typed again.
+- A remembered password the server refuses no longer deletes it. The prompt opens in the same
+  connection, prefilled, instead of sending the user back to Connect.
+- Remote Desktop sessions use the same store, and keep the account and password once the
+  control reports it signed in.
+
 ## 0.1.4
 
 - The executable names who made it, Super Intelligence Mods, in its version resource, where

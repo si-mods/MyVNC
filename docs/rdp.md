@@ -15,9 +15,11 @@ MyVNC.exe rdp://192.0.2.20
 MyVNC.exe rdp://192.0.2.20:3399
 ```
 
-The username and password from the connection dialog are passed to the
-control. If the password is empty, the control shows its own credential
-prompt. Certificate prompts are suppressed (authentication level 0).
+The account name and password come from the connection dialog, or from
+Settings → Credentials when the server has a record there. A password the
+control accepts is kept in the system credential store, like a VNC one. If
+no password is given, the control shows its own credential prompt.
+Certificate prompts are suppressed (authentication level 0).
 
 The scheme is what selects RDP: a bare `host:3389` stays a VNC address, as
 TigerVNC reads it, and VNC against an RDP port waits for a banner that never

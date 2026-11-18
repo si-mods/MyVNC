@@ -52,6 +52,18 @@ var SecTypesSecure = []uint32{
 	rfb.SecTypeX509None, rfb.SecTypeDH,
 }
 
+// NeedsUsername reports whether secType authenticates an account, not
+// just a password: ARD DH, Apple's Mac authentication, MS Logon II and
+// Plain all reject a login without the account name, unlike VncAuth.
+func NeedsUsername(secType uint32) bool {
+	switch secType {
+	case rfb.SecTypeDH, rfb.SecTypeMacAuth, rfb.SecTypeMSLogonII,
+		rfb.SecTypePlain, rfb.SecTypeX509Plain:
+		return true
+	}
+	return false
+}
+
 // PasswordUnprotected reports whether a password given for secType
 // travels in clear text or opens a session anyone on the path can read:
 // what the user is warned about.
