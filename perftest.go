@@ -104,7 +104,7 @@ func (p *perfTest) fail(err error) {
 }
 
 // painted notes a frame drawn, on the main thread.
-func (a *app) painted(img *image.RGBA) {
+func (a *app) painted(t *tab, img *image.RGBA) {
 	p := a.perf
 	if p.done || img == p.last {
 		return
@@ -112,7 +112,7 @@ func (a *app) painted(img *image.RGBA) {
 	now := time.Now()
 	p.last = img
 	if p.start.IsZero() {
-		p.start, p.lastT, p.cpu0, p.upd0 = now, now, win32.ProcessCPU(), a.sess.Stats().Updates
+		p.start, p.lastT, p.cpu0, p.upd0 = now, now, win32.ProcessCPU(), t.sess.Stats().Updates
 		time.AfterFunc(p.dur, func() { a.post(a.perfReport) })
 		return
 	}
@@ -153,8 +153,8 @@ func (a *app) perfReport() {
 	sec := time.Since(p.start).Seconds()
 	cpu := (win32.ProcessCPU() - p.cpu0).Seconds() / sec * 100
 	var upd int64
-	if a.sess != nil {
-		upd = a.sess.Stats().Updates - p.upd0
+	if t := a.active; t != nil && t.sess != nil {
+		upd = t.sess.Stats().Updates - p.upd0
 	}
 	ww, wh := a.win.Size()
 	r := fmt.Sprintf("perftest %dx%d %s %.1fs window %dx%d DIPs: painted %.1f fps, received %.1f updates/s, "+

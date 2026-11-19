@@ -12,7 +12,7 @@ func fullscreenSession(t *testing.T) (*testApp, *[]bool) {
 	a.setFullScreen = func(on bool) { applied = append(applied, on) }
 	server, _ := fakeServer(t, 1, 64, 32)
 	a.add(server)
-	a.until("the session", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the session", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	if err := a.tt.Click("Session menu"); err != nil {
 		t.Fatal(err)
 	}

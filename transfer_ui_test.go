@@ -14,9 +14,9 @@ func TestTransferPanelAndConflictDialog(t *testing.T) {
 	server, _ := fakeServer(t, 1, 64, 32)
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	dir := t.TempDir()
-	j := a.xfers.Download("/Users/me/report.pdf", dir) // no ARD session: it waits
+	j := a.tab().xfers.Download("/Users/me/report.pdf", dir) // no ARD session: it waits
 	a.openMenu()
 	a.tt.Frame()
 	for _, s := range []string{"Transfers", "report.pdf", "Waiting to start", "Cancel"} {
@@ -35,7 +35,7 @@ func TestTransferPanelAndConflictDialog(t *testing.T) {
 		}
 	}
 	j.Files, j.Partials = nil, nil
-	a.menuOpen = false
+	a.active.menuOpen = false
 	j.State, j.Conflict = viewer.TransferAsking, &viewer.Conflict{Path: filepath.Join(dir, "report.pdf")}
 	a.tt.Frame()
 	for _, s := range []string{"An item with this name already exists", "Overwrite", "Skip", "Keep both",
@@ -47,7 +47,7 @@ func TestTransferPanelAndConflictDialog(t *testing.T) {
 	if !a.modal() {
 		t.Error("the conflict dialog leaves the keyboard to the session")
 	}
-	a.xfers.Cancel(j)
+	a.tab().xfers.Cancel(j)
 	a.tt.Frame()
 	if a.tt.HasText("Keep both") || a.modal() {
 		t.Errorf("after cancel: texts %q, modal %v", a.tt.Texts(), a.modal())

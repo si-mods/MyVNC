@@ -153,6 +153,132 @@ func (msgs Messages) RemoveComputer() string {
 	return Catalog.Format(msgs.locale, "removeComputer", nil)
 }
 
+// EditComputer says "Edit…"
+// in the language the app shows.
+//
+// Context menu item on a home-view card of a Remote Desktop computer,
+// opening its display settings.
+func EditComputer() string { return In(i18n.Locale()).EditComputer() }
+
+// EditComputer says "Edit…"
+// in the language of msgs.
+//
+// Context menu item on a home-view card of a Remote Desktop computer,
+// opening its display settings.
+func (msgs Messages) EditComputer() string {
+	return Catalog.Format(msgs.locale, "editComputer", nil)
+}
+
+// Resolution says "Resolution"
+// in the language the app shows.
+func Resolution() string { return In(i18n.Locale()).Resolution() }
+
+// Resolution says "Resolution"
+// in the language of msgs.
+func (msgs Messages) Resolution() string {
+	return Catalog.Format(msgs.locale, "resolution", nil)
+}
+
+// FollowWindow says "Follow window"
+// in the language the app shows.
+func FollowWindow() string { return In(i18n.Locale()).FollowWindow() }
+
+// FollowWindow says "Follow window"
+// in the language of msgs.
+func (msgs Messages) FollowWindow() string {
+	return Catalog.Format(msgs.locale, "followWindow", nil)
+}
+
+// CustomSize says "Custom"
+// in the language the app shows.
+func CustomSize() string { return In(i18n.Locale()).CustomSize() }
+
+// CustomSize says "Custom"
+// in the language of msgs.
+func (msgs Messages) CustomSize() string {
+	return Catalog.Format(msgs.locale, "customSize", nil)
+}
+
+// SizeWidth says "Width"
+// in the language the app shows.
+func SizeWidth() string { return In(i18n.Locale()).SizeWidth() }
+
+// SizeWidth says "Width"
+// in the language of msgs.
+func (msgs Messages) SizeWidth() string {
+	return Catalog.Format(msgs.locale, "sizeWidth", nil)
+}
+
+// SizeHeight says "Height"
+// in the language the app shows.
+func SizeHeight() string { return In(i18n.Locale()).SizeHeight() }
+
+// SizeHeight says "Height"
+// in the language of msgs.
+func (msgs Messages) SizeHeight() string {
+	return Catalog.Format(msgs.locale, "sizeHeight", nil)
+}
+
+// DesktopScale says "Scale"
+// in the language the app shows.
+func DesktopScale() string { return In(i18n.Locale()).DesktopScale() }
+
+// DesktopScale says "Scale"
+// in the language of msgs.
+func (msgs Messages) DesktopScale() string {
+	return Catalog.Format(msgs.locale, "desktopScale", nil)
+}
+
+// LocalScale says "Scale the picture on this PC"
+// in the language the app shows.
+func LocalScale() string { return In(i18n.Locale()).LocalScale() }
+
+// LocalScale says "Scale the picture on this PC"
+// in the language of msgs.
+func (msgs Messages) LocalScale() string {
+	return Catalog.Format(msgs.locale, "localScale", nil)
+}
+
+// LocalScaleHint says "For servers that ignore the scale, such as xrdp."
+// in the language the app shows.
+func LocalScaleHint() string { return In(i18n.Locale()).LocalScaleHint() }
+
+// LocalScaleHint says "For servers that ignore the scale, such as xrdp."
+// in the language of msgs.
+func (msgs Messages) LocalScaleHint() string {
+	return Catalog.Format(msgs.locale, "localScaleHint", nil)
+}
+
+// FollowThisPC says "Follow this PC"
+// in the language the app shows.
+func FollowThisPC() string { return In(i18n.Locale()).FollowThisPC() }
+
+// FollowThisPC says "Follow this PC"
+// in the language of msgs.
+func (msgs Messages) FollowThisPC() string {
+	return Catalog.Format(msgs.locale, "followThisPC", nil)
+}
+
+// AppliesNextConnection says "Changes apply at the next connection."
+// in the language the app shows.
+func AppliesNextConnection() string { return In(i18n.Locale()).AppliesNextConnection() }
+
+// AppliesNextConnection says "Changes apply at the next connection."
+// in the language of msgs.
+func (msgs Messages) AppliesNextConnection() string {
+	return Catalog.Format(msgs.locale, "appliesNextConnection", nil)
+}
+
+// BadSize says "Width and height must be from 200 to 8192, and the width must be even."
+// in the language the app shows.
+func BadSize() string { return In(i18n.Locale()).BadSize() }
+
+// BadSize says "Width and height must be from 200 to 8192, and the width must be even."
+// in the language of msgs.
+func (msgs Messages) BadSize() string {
+	return Catalog.Format(msgs.locale, "badSize", nil)
+}
+
 // NeverConnected says "Never connected"
 // in the language the app shows.
 func NeverConnected() string { return In(i18n.Locale()).NeverConnected() }
@@ -2395,4 +2521,108 @@ func WindowClose() string { return In(i18n.Locale()).WindowClose() }
 // Title bar button that closes the window (Windows).
 func (msgs Messages) WindowClose() string {
 	return Catalog.Format(msgs.locale, "windowClose", nil)
+}
+
+// HomeTab says "Computers"
+// in the language the app shows.
+//
+// The last tab of the title bar, the + button, which shows the computer
+// cards to open another session.
+func HomeTab() string { return In(i18n.Locale()).HomeTab() }
+
+// HomeTab says "Computers"
+// in the language of msgs.
+//
+// The last tab of the title bar, the + button, which shows the computer
+// cards to open another session.
+func (msgs Messages) HomeTab() string {
+	return Catalog.Format(msgs.locale, "homeTab", nil)
+}
+
+// CloseTab says "Close {name}"
+// in the language the app shows.
+//
+// A title bar tab's close button, for screen readers.
+func CloseTab(name string) string { return In(i18n.Locale()).CloseTab(name) }
+
+// CloseTab says "Close {name}"
+// in the language of msgs.
+//
+// A title bar tab's close button, for screen readers.
+func (msgs Messages) CloseTab(name string) string {
+	return Catalog.Format(msgs.locale, "closeTab", map[string]any{"name": name})
+}
+
+// Close says "Close"
+// in the language the app shows.
+//
+// A failed tab's button that removes the tab.
+func Close() string { return In(i18n.Locale()).Close() }
+
+// Close says "Close"
+// in the language of msgs.
+//
+// A failed tab's button that removes the tab.
+func (msgs Messages) Close() string {
+	return Catalog.Format(msgs.locale, "close", nil)
+}
+
+// Retry says "Retry"
+// in the language the app shows.
+//
+// A failed tab's button that connects again.
+func Retry() string { return In(i18n.Locale()).Retry() }
+
+// Retry says "Retry"
+// in the language of msgs.
+//
+// A failed tab's button that connects again.
+func (msgs Messages) Retry() string {
+	return Catalog.Format(msgs.locale, "retry", nil)
+}
+
+// CloseSessionsTitle says "Close {count} sessions?"
+// in the language the app shows.
+//
+// Title of the question when the window closes with several sessions open;
+// count is 2 or more.
+func CloseSessionsTitle(count int) string { return In(i18n.Locale()).CloseSessionsTitle(count) }
+
+// CloseSessionsTitle says "Close {count} sessions?"
+// in the language of msgs.
+//
+// Title of the question when the window closes with several sessions open;
+// count is 2 or more.
+func (msgs Messages) CloseSessionsTitle(count int) string {
+	return Catalog.Format(msgs.locale, "closeSessionsTitle", map[string]any{"count": count})
+}
+
+// CloseSessionsMessage says "Closing the window disconnects every computer."
+// in the language the app shows.
+//
+// Message of the question when the window closes with several sessions
+// open.
+func CloseSessionsMessage() string { return In(i18n.Locale()).CloseSessionsMessage() }
+
+// CloseSessionsMessage says "Closing the window disconnects every computer."
+// in the language of msgs.
+//
+// Message of the question when the window closes with several sessions
+// open.
+func (msgs Messages) CloseSessionsMessage() string {
+	return Catalog.Format(msgs.locale, "closeSessionsMessage", nil)
+}
+
+// CloseSessions says "Close All"
+// in the language the app shows.
+//
+// The button that closes the window and its sessions.
+func CloseSessions() string { return In(i18n.Locale()).CloseSessions() }
+
+// CloseSessions says "Close All"
+// in the language of msgs.
+//
+// The button that closes the window and its sessions.
+func (msgs Messages) CloseSessions() string {
+	return Catalog.Format(msgs.locale, "closeSessions", nil)
 }

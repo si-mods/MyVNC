@@ -114,6 +114,15 @@ func newTestApp(t *testing.T) *testApp {
 	return a
 }
 
+// tab is the active tab, or an empty one while the home page shows, for
+// reading.
+func (a *testApp) tab() *tab {
+	if a.active == nil {
+		return &tab{}
+	}
+	return a.active
+}
+
 // until runs posted functions until cond holds.
 func (a *testApp) until(what string, cond func() bool) {
 	a.t.Helper()
@@ -153,12 +162,12 @@ func TestConnectAndDisconnect(t *testing.T) {
 	server, _ := fakeServer(t, 1, 64, 32)
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	if w, h := a.sess.Screen.Size(); w != 64 || h != 32 {
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
+	if w, h := a.tab().sess.Screen.Size(); w != 64 || h != 32 {
 		t.Errorf("screen %dx%d", w, h)
 	}
-	if a.name != "fake" || a.title != "fake - MyVNC (None, unencrypted)" {
-		t.Errorf("name %q, title %q", a.name, a.title)
+	if a.tab().name != "fake" || a.tab().title != "fake - MyVNC (None, unencrypted)" {
+		t.Errorf("name %q, title %q", a.tab().name, a.tab().title)
 	}
 	// No chrome: the screen fills the window, whose middle is red.
 	if a.tt.HasText("Disconnect") {
@@ -173,14 +182,14 @@ func TestConnectAndDisconnect(t *testing.T) {
 	if err := a.tt.Click("Session menu"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.menuOpen || !a.tt.HasText("Unencrypted · None") || !a.tt.HasText("Send Ctrl+Alt+Del") {
+	if !a.tab().menuOpen || !a.tt.HasText("Unencrypted · None") || !a.tt.HasText("Send Ctrl+Alt+Del") {
 		t.Fatalf("panel: texts %q", a.tt.Texts())
 	}
 	if err := a.tt.Click("Disconnect"); err != nil {
 		t.Fatal(err)
 	}
-	if a.sess != nil || !a.tt.HasText("Add computer") || !a.tt.HasText(server) || !a.tt.HasText("fake") {
-		t.Errorf("after disconnect: session %v, texts %q", a.sess, a.tt.Texts())
+	if a.tab().sess != nil || !a.tt.HasText("Add computer") || !a.tt.HasText(server) || !a.tt.HasText("fake") {
+		t.Errorf("after disconnect: session %v, texts %q", a.tab().sess, a.tt.Texts())
 	}
 	if a.cfg.Computers[server].Last.IsZero() || a.thumbs[server] == nil {
 		t.Errorf("computer %+v, thumbnail %v", a.cfg.Computers[server], a.thumbs[server])
@@ -189,11 +198,11 @@ func TestConnectAndDisconnect(t *testing.T) {
 	if err := a.tt.Click("fake"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.connecting || !a.tt.HasText("Connecting…") || a.target != server {
-		t.Errorf("connecting %v, texts %q", a.connecting, a.tt.Texts())
+	if !a.tab().connecting || !a.tt.HasText("Connecting…") || a.tab().target != server {
+		t.Errorf("connecting %v, texts %q", a.tab().connecting, a.tt.Texts())
 	}
 	a.tt.Click("Cancel")
-	a.until("the cancel", func() bool { return !a.connecting })
+	a.until("the cancel", func() bool { return !a.tab().connecting })
 }
 
 func TestPasswordPromptAndLog(t *testing.T) {
@@ -207,19 +216,19 @@ func TestPasswordPromptAndLog(t *testing.T) {
 	a.log = lg
 	a.add(server)
 	// VNC auth: a warning first, over the connecting state.
-	a.until("the warning", func() bool { return a.warnOpen })
+	a.until("the warning", func() bool { return a.tab().warnOpen })
 	if !a.tt.HasText("Unencrypted connection") || !a.tt.HasText("Authenticating…") {
 		t.Fatalf("texts %q", a.tt.Texts())
 	}
 	if err := a.tt.Click("Continue"); err != nil {
 		t.Fatal(err)
 	}
-	a.until("the password prompt", func() bool { return a.authOpen })
+	a.until("the password prompt", func() bool { return a.tab().authOpen })
 	a.tt.Type("secret") // the password input has the focus
 	if err := a.tt.Click("OK"); err != nil {
 		t.Fatal(err)
 	}
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	if r := <-got; len(r) != 16 || bytes.Equal(r, make([]byte, 16)) {
 		t.Errorf("auth response %x", r)
 	}
@@ -245,28 +254,29 @@ func TestUnencryptedAlwaysAndCancel(t *testing.T) {
 	server, _ := fakeServer(t, 2, 8, 8)
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the warning", func() bool { return a.warnOpen })
+	a.until("the warning", func() bool { return a.tab().warnOpen })
 	a.tt.Click("Don't connect")
-	a.until("the error", func() bool { return !a.connecting && a.errText != "" })
-	if a.sess != nil || !strings.Contains(a.errText, "not encrypted") || !a.tt.HasText(a.errText) {
-		t.Fatalf("error %q, texts %q", a.errText, a.tt.Texts())
+	a.until("the error", func() bool { return !a.tab().connecting && a.tab().errText != "" })
+	if a.tab().sess != nil || !strings.Contains(a.tab().errText, "not encrypted") || !a.tt.HasText(a.tab().errText) {
+		t.Fatalf("error %q, texts %q", a.tab().errText, a.tt.Texts())
 	}
-	a.tt.Click("Dismiss")
-	if a.errText != "" {
-		t.Errorf("banner not dismissed")
+	// The failed tab stays until closed.
+	a.tt.Click("Close")
+	if a.active != nil || len(a.tabs) != 0 {
+		t.Errorf("tab not closed: %d tabs", len(a.tabs))
 	}
 
 	server, _ = fakeServer(t, 2, 8, 8)
 	a.add(server)
-	a.until("the warning", func() bool { return a.warnOpen })
+	a.until("the warning", func() bool { return a.tab().warnOpen })
 	a.tt.Click("Always for this server")
-	a.until("the password prompt", func() bool { return a.authOpen })
+	a.until("the password prompt", func() bool { return a.tab().authOpen })
 	addr, _ := viewer.Addr(server)
 	if !slices.Contains(a.cfg.Unencrypted, addr) {
 		t.Errorf("unencrypted %q", a.cfg.Unencrypted)
 	}
 	a.tt.Click("Cancel")
-	a.until("the end", func() bool { return !a.connecting })
+	a.until("the end", func() bool { return !a.tab().connecting })
 }
 
 func TestConnectError(t *testing.T) {
@@ -278,10 +288,19 @@ func TestConnectError(t *testing.T) {
 	l.Close() // nothing listens there now
 	a := newTestApp(t)
 	a.add("127.0.0.1::" + strconv.Itoa(port))
-	a.until("the error", func() bool { return a.errText != "" && !a.connecting })
-	if a.sess != nil || !a.tt.HasText(a.errText) || !a.tt.HasText("Dismiss") {
+	a.until("the error", func() bool { return a.tab().errText != "" && !a.tab().connecting })
+	if a.tab().sess != nil || !a.tt.HasText(a.tab().errText) || !a.tt.HasText("Retry") {
 		t.Errorf("texts %q", a.tt.Texts())
 	}
+	// Retry tries again in the same tab.
+	tb := a.active
+	if err := a.tt.Click("Retry"); err != nil {
+		t.Fatal(err)
+	}
+	if a.active != tb || !tb.connecting || tb.errText != "" {
+		t.Errorf("retry: connecting %v, error %q", tb.connecting, tb.errText)
+	}
+	a.until("the error again", func() bool { return tb.errText != "" && !tb.connecting })
 	a.server = "[::1"
 	a.connect()
 	if a.errText != "unmatched [ in hostname" {
@@ -312,18 +331,19 @@ func TestCertificatePrompt(t *testing.T) {
 	a := newTestApp(t)
 	cert := selfSigned(t, "server.test")
 	verr := errors.New("x509: certificate signed by unknown authority")
+	tb := a.newTab()
 	verify := func(c *x509.Certificate) chan error {
 		ch := make(chan error, 1)
-		go func() { ch <- a.verifyCert(context.Background(), "server.test:5900", c, verr) }()
+		go func() { ch <- a.verifyCert(context.Background(), tb, "server.test:5900", c, verr) }()
 		return ch
 	}
 
 	res := verify(cert)
-	a.until("the prompt", func() bool { return a.certOpen })
+	a.until("the prompt", func() bool { return a.tab().certOpen })
 	fp := viewer.CertFingerprint(cert.Raw)
-	if !a.tt.HasText("Unverified certificate") || !strings.Contains(a.certMsg, fp) ||
-		!strings.Contains(a.certMsg, "CN=server.test") || !strings.Contains(a.certMsg, "unknown authority") {
-		t.Fatalf("message %q", a.certMsg)
+	if !a.tt.HasText("Unverified certificate") || !strings.Contains(a.tab().certMsg, fp) ||
+		!strings.Contains(a.tab().certMsg, "CN=server.test") || !strings.Contains(a.tab().certMsg, "unknown authority") {
+		t.Fatalf("message %q", a.tab().certMsg)
 	}
 	a.tt.Click("Reject")
 	if err := <-res; err == nil {
@@ -331,14 +351,14 @@ func TestCertificatePrompt(t *testing.T) {
 	}
 
 	res = verify(cert)
-	a.until("the prompt", func() bool { return a.certOpen })
+	a.until("the prompt", func() bool { return a.tab().certOpen })
 	a.tt.Click("Accept once")
 	if err := <-res; err != nil {
 		t.Error(err)
 	}
 
 	res = verify(cert)
-	a.until("the prompt", func() bool { return a.certOpen })
+	a.until("the prompt", func() bool { return a.tab().certOpen })
 	a.tt.Click("Always accept")
 	if err := <-res; err != nil {
 		t.Error(err)
@@ -357,30 +377,30 @@ func TestReconnect(t *testing.T) {
 	server, _ := fakeServer(t, 1, 8, 8)
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	s := a.sess
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
+	s := a.tab().sess
 	s.Close()
-	a.disconnected(s, errors.New("connection reset"))
+	a.disconnected(a.active, s, errors.New("connection reset"))
 	a.tt.Frame()
-	if !a.rc.active || a.rc.server != server || !a.tt.HasText("Disconnected: connection reset") {
-		t.Fatalf("reconnect %+v, texts %q", a.rc, a.tt.Texts())
+	if !a.tab().rc.active || a.tab().rc.server != server || !a.tt.HasText("Disconnected: connection reset") {
+		t.Fatalf("reconnect %+v, texts %q", a.tab().rc, a.tt.Texts())
 	}
 	if err := a.tt.Click("Cancel"); err != nil {
 		t.Fatal(err)
 	}
-	if a.rc.active || a.rc.timer != nil {
-		t.Errorf("not canceled: %+v", a.rc)
+	if a.tab().rc.active || a.tab().rc.timer != nil {
+		t.Errorf("not canceled: %+v", a.tab().rc)
 	}
 	// An authentication failure is not retried.
-	a.rc = reconnect{active: true, attempt: 1, server: server}
-	a.connected(nil, server, "", "", "", &rfb.AuthError{Reason: "no"})
-	if a.rc.active {
+	a.active.rc = reconnect{active: true, attempt: 1, server: server}
+	a.connected(a.active, nil, server, "", "", "", &rfb.AuthError{Reason: "no"})
+	if a.tab().rc.active {
 		t.Error("retrying an authentication failure")
 	}
 	// Giving up after the last attempt.
-	a.rc = reconnect{active: true, attempt: viewer.ReconnectAttempts, server: server}
-	a.scheduleReconnect()
-	if a.rc.active {
+	a.active.rc = reconnect{active: true, attempt: viewer.ReconnectAttempts, server: server}
+	a.scheduleReconnect(a.active)
+	if a.tab().rc.active {
 		t.Error("retrying forever")
 	}
 }
@@ -397,8 +417,13 @@ func (usLayout) ToUnicode(vk uint16, s *[256]byte) (rune, int) {
 func (usLayout) VKToChar(vk uint16) uint32 { return uint32(vk) }
 func (usLayout) VKToScan(vk uint16) uint16 { return 0 }
 func (usLayout) ScanToVK(scan uint16) uint16 {
-	if scan == 0x32 {
+	switch scan {
+	case 0x32:
 		return 'M'
+	case 0x02:
+		return '1'
+	case 0xe051:
+		return keymap.VK_NEXT
 	}
 	return 0
 }
@@ -411,15 +436,15 @@ func TestShortcutOpensMenu(t *testing.T) {
 	a.kb = keymap.NewKeyboard(usLayout{})
 	a.sc = keymap.NewShortcuts(a.kb, keymap.DefaultShortcutModifiers)
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	a.keys([]keymap.Event{
 		{Down: true, Code: 0x1d, KeySym: keymap.XK_Control_L},
 		{Down: true, Code: 0x38, KeySym: keymap.XK_Alt_L},
 		{Down: true, Code: 0x32, KeySym: 'm'},
 	})
 	a.tt.Frame()
-	if !a.menuOpen || !a.modal() || !a.tt.HasText("Send Ctrl+Alt+Del") {
-		t.Errorf("menu %v, texts %q", a.menuOpen, a.tt.Texts())
+	if !a.tab().menuOpen || !a.modal() || !a.tt.HasText("Send Ctrl+Alt+Del") {
+		t.Errorf("menu %v, texts %q", a.tab().menuOpen, a.tt.Texts())
 	}
 	a.disconnect()
 }
@@ -429,7 +454,7 @@ func TestStatsOverlay(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Stats = true
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	a.tt.Advance(time.Second)
 	a.tt.Advance(time.Second)
 	if !a.tt.HasText("Encoding Raw") || !a.tt.HasText("Encrypted no") {
@@ -493,11 +518,11 @@ func TestHomeCards(t *testing.T) {
 	}
 	// A failed connection of a host with no past marks it, a canceled or
 	// successful one does not.
-	a.connected(nil, "new", "", "", "", errors.New("refused"))
+	a.connected(a.newTab(), nil, "new", "", "", "", errors.New("refused"))
 	if !a.cfg.Computers["new"].Never {
 		t.Error("a first failure not noted")
 	}
-	a.connected(nil, "legacy", "", "", "", nil)
+	a.connected(a.newTab(), nil, "legacy", "", "", "", nil)
 	if a.cfg.Computers["legacy"].Never {
 		t.Error("a canceled try marked a computer never connected")
 	}
@@ -516,18 +541,18 @@ func TestLocalCursorAndPointerPacing(t *testing.T) {
 	server, _ := fakeServer(t, 1, 64, 32) // shown 12.5 times, 800×400 at y 78 of the screen, below the title bar
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	for i := 0; i < len(img.Pix); i += 4 {
 		copy(img.Pix[i:], []byte{255, 0, 255, 255})
 	}
-	a.sess.CursorImage, a.sess.Hotspot = ui.NewBitmap(img), image.Pt(0, 0) // 25×25 DIPs
+	a.tab().sess.CursorImage, a.tab().sess.Hotspot = ui.NewBitmap(img), image.Pt(0, 0) // 25×25 DIPs
 	type move struct {
 		x, y int
 		mask uint16
 	}
 	var sent []move
-	a.emb = emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, move{x, y, m}) })
+	a.active.emb = emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, move{x, y, m}) })
 
 	a.tt.Move(100, 200)
 	if !magenta(t, a, 110, 210) || magenta(t, a, 30, 30) {
@@ -550,7 +575,7 @@ func TestLocalCursorAndPointerPacing(t *testing.T) {
 	// A burst of moves between two frames is one move, the last.
 	sent = nil
 	for i := range 20 {
-		a.pointer(nil, ui.InputEvent{Kind: ui.InputPointerMove, X: float32(100 + i*10), Y: 178})
+		a.pointer(a.active, nil, ui.InputEvent{Kind: ui.InputPointerMove, X: float32(100 + i*10), Y: 178})
 	}
 	if len(sent) != 0 {
 		t.Fatalf("moves sent before the frame: %v", sent)
@@ -565,7 +590,7 @@ func TestLocalCursorAndPointerPacing(t *testing.T) {
 	}
 	// Buttons go at once, in order, and take the move waiting with them.
 	sent = nil
-	a.pointer(nil, ui.InputEvent{Kind: ui.InputPointerMove, X: 50, Y: 150})
+	a.pointer(a.active, nil, ui.InputEvent{Kind: ui.InputPointerMove, X: 50, Y: 150})
 	a.tt.Press(60, 160)
 	a.tt.Move(70, 170)
 	a.tt.Release(70, 170)
@@ -650,18 +675,18 @@ func TestTitleFollowsARDEncryption(t *testing.T) {
 	server := fakeARD(t, update)
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the password prompt", func() bool { return a.authOpen })
+	a.until("the password prompt", func() bool { return a.tab().authOpen })
 	a.tt.Type("secret")
 	if err := a.tt.Click("OK"); err != nil {
 		t.Fatal(err)
 	}
 	// The desktop name, which also sets the title, comes before the update.
-	a.until("the desktop name", func() bool { return a.sess != nil && a.name == "Mac" })
-	if !strings.HasSuffix(a.title, "(ARD DH, unencrypted)") {
-		t.Errorf("title before the switch %q", a.title)
+	a.until("the desktop name", func() bool { return a.tab().sess != nil && a.tab().name == "Mac" })
+	if !strings.HasSuffix(a.tab().title, "(ARD DH, unencrypted)") {
+		t.Errorf("title before the switch %q", a.tab().title)
 	}
 	close(update)
-	a.until("the encrypted title", func() bool { return strings.HasSuffix(a.title, "(ARD DH, encrypted)") })
+	a.until("the encrypted title", func() bool { return strings.HasSuffix(a.tab().title, "(ARD DH, encrypted)") })
 	a.disconnect()
 }
 
@@ -672,14 +697,14 @@ func TestStatsOverlayHighPerformance(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Stats = true
 	a.add(ardServer(t))
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	if !a.tt.HasText("Encoding Raw") {
 		t.Fatalf("standard texts %q", a.tt.Texts())
 	}
 	a.tt.Advance(time.Second)
 	a.tt.Advance(time.Second)
-	a.sess.ShowMedia(image.NewRGBA(image.Rect(0, 0, 64, 32)), "HEVC 4:4:4 64×32", mf.Info{})
-	a.until("the media picture", func() bool { return a.sess.Media != "" })
+	a.tab().sess.ShowMedia(image.NewRGBA(image.Rect(0, 0, 64, 32)), "HEVC 4:4:4 64×32", mf.Info{})
+	a.until("the media picture", func() bool { return a.tab().sess.Media != "" })
 	a.tt.Advance(time.Second)
 	if a.tt.HasText("FPS 0") || !a.tt.HasText("Dropped 0/s") || a.tt.HasText("Encoding Raw") || a.tt.HasText("Asked") {
 		t.Errorf("texts %q", a.tt.Texts())
@@ -694,8 +719,8 @@ func TestConnectAddressRefused(t *testing.T) {
 	for _, in := range []string{"ssh://192.0.2.10", "vnc://", "rdp://host:99999", "host/path"} {
 		a.server = in
 		a.connect()
-		if a.connecting || a.errText == "" {
-			t.Fatalf("%q: connecting %v, error %q", in, a.connecting, a.errText)
+		if a.tab().connecting || a.errText == "" {
+			t.Fatalf("%q: connecting %v, error %q", in, a.tab().connecting, a.errText)
 		}
 		if slices.Contains(a.cfg.Servers, in) {
 			t.Errorf("%q was saved", in)
@@ -715,8 +740,8 @@ func TestAddComputerRefusesBadAddress(t *testing.T) {
 	if !strings.Contains(a.errText, "unsupported scheme") || !a.tt.HasText(a.errText) {
 		t.Errorf("error %q, texts %q", a.errText, a.tt.Texts())
 	}
-	if a.sess != nil || a.connecting || slices.Contains(a.cfg.Servers, "ssh://192.0.2.10") {
-		t.Errorf("sess %v, connecting %v, saved %v", a.sess, a.connecting, a.cfg.Servers)
+	if a.tab().sess != nil || a.tab().connecting || slices.Contains(a.cfg.Servers, "ssh://192.0.2.10") {
+		t.Errorf("sess %v, connecting %v, saved %v", a.tab().sess, a.tab().connecting, a.cfg.Servers)
 	}
 }
 
@@ -801,9 +826,10 @@ func TestRemoveServer(t *testing.T) {
 
 func TestWheelSteps(t *testing.T) {
 	a := &app{wheelNow: func() time.Time { return time.Time{} }} // never accelerating
+	tb := &tab{}
 	count := func(ev ui.InputEvent, bit uint16) int {
 		n := 0
-		for _, b := range a.wheel(ev) {
+		for _, b := range a.wheel(tb, ev) {
 			if b == bit {
 				n++
 			}
@@ -840,8 +866,9 @@ func TestWheelSteps(t *testing.T) {
 
 func TestWheelLinesSetting(t *testing.T) {
 	a := &app{cfg: viewer.Config{WheelLines: 6}, wheelNow: func() time.Time { return time.Time{} }}
+	tb := &tab{}
 	n := 0
-	for _, b := range a.wheel(ui.InputEvent{DY: -99}) { // one notch of a system set to three lines
+	for _, b := range a.wheel(tb, ui.InputEvent{DY: -99}) { // one notch of a system set to three lines
 		if b == 8 {
 			n++
 		}
@@ -851,7 +878,7 @@ func TestWheelLinesSetting(t *testing.T) {
 	}
 	// A touchpad crossing is a sixth of a notch: 33 DIPs is two clicks.
 	n = 0
-	for _, b := range a.wheel(ui.InputEvent{DY: -33, Precise: true}) {
+	for _, b := range a.wheel(tb, ui.InputEvent{DY: -33, Precise: true}) {
 		if b == 8 {
 			n++
 		}
@@ -864,9 +891,10 @@ func TestWheelLinesSetting(t *testing.T) {
 func TestWheelAcceleration(t *testing.T) {
 	now := time.Unix(0, 0)
 	a := &app{wheelNow: func() time.Time { return now }}
+	tb := &tab{}
 	steps := func() int {
 		n := 0
-		for _, b := range a.wheel(ui.InputEvent{DY: -99}) {
+		for _, b := range a.wheel(tb, ui.InputEvent{DY: -99}) {
 			if b == 8 {
 				n++
 			}
@@ -899,7 +927,8 @@ func TestWheelAcceleration(t *testing.T) {
 func TestWheelMacClicks(t *testing.T) {
 	a := &app{cfg: viewer.Config{}, wheelNow: func() time.Time { return time.Time{} },
 		log: slog.New(slog.DiscardHandler)}
-	count := func(ev ui.InputEvent) int { return len(a.wheel(ev)) }
+	tb := &tab{}
+	count := func(ev ui.InputEvent) int { return len(a.wheel(tb, ev)) }
 	// A notional Mac path: scrollLines' lines*10 clicks per event.
 	lines := 3.0 // one notch of a three-line system
 	if n := int(math.Round(math.Abs(lines) * appleClicksPerLine)); n != 30 {
@@ -919,27 +948,27 @@ func TestWheelPacing(t *testing.T) {
 	s := &viewer.Session{}
 	var sent []uint16
 	a := &app{cfg: viewer.Config{}, wheelNow: func() time.Time { return time.Time{} },
-		sess: s, emb: emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, m) }),
 		log: slog.New(slog.DiscardHandler)}
-	a.wheelPend = []uint16{8, 8, 8}
+	tb := &tab{sess: s, emb: emulatemb.New(false, func(x, y int, m uint16) { sent = append(sent, m) })}
+	tb.wheelPend = []uint16{8, 8, 8}
 	f := ui.Rect{W: 100, H: 100}
-	a.flushPointer(f, 100, 100)
+	a.flushPointer(tb, f, 100, 100)
 	if len(sent) != 2 || sent[0] != 8 || sent[1] != 0 {
 		t.Fatalf("first frame sent %v, want one pair of click 8", sent)
 	}
-	a.flushPointer(f, 100, 100)
-	a.flushPointer(f, 100, 100)
+	a.flushPointer(tb, f, 100, 100)
+	a.flushPointer(tb, f, 100, 100)
 	if len(sent) != 6 {
 		t.Fatalf("three frames sent %d events, want 6", len(sent))
 	}
-	if len(a.wheelPend) != 0 {
-		t.Errorf("%d clicks still pending", len(a.wheelPend))
+	if len(tb.wheelPend) != 0 {
+		t.Errorf("%d clicks still pending", len(tb.wheelPend))
 	}
 	// View-only drops what waits instead of sending it.
-	a.wheelPend = []uint16{8}
+	tb.wheelPend = []uint16{8}
 	a.cfg.ViewOnly = true
-	a.flushPointer(f, 100, 100)
-	if len(a.wheelPend) != 0 || len(sent) != 6 {
+	a.flushPointer(tb, f, 100, 100)
+	if len(tb.wheelPend) != 0 || len(sent) != 6 {
 		t.Errorf("view-only flush sent %v", sent)
 	}
 }

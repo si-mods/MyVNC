@@ -119,15 +119,15 @@ func TestARDAsksForTheAccountName(t *testing.T) {
 	a.server = server
 	a.connect()
 
-	a.until("the account prompt", func() bool { return a.authOpen })
-	if a.authMsg == "" {
+	a.until("the account prompt", func() bool { return a.tab().authOpen })
+	if a.tab().authMsg == "" {
 		t.Error("the prompt does not say the account is needed")
 	}
 	a.tt.Type("yibo") // the account name has the focus
 	if err := a.tt.Click("OK"); err != nil {
 		t.Fatal(err)
 	}
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 
 	if got := a.cfg.Computers[server].Username; got != "yibo" {
 		t.Errorf("username %q", got)
@@ -151,12 +151,12 @@ func TestARDRetriesRejectedPassword(t *testing.T) {
 	a.server = server
 	a.connect()
 
-	a.until("the prompt after the refusal", func() bool { return a.authOpen })
+	a.until("the prompt after the refusal", func() bool { return a.tab().authOpen })
 	a.tt.Type("secret") // the password has the focus
 	if err := a.tt.Click("OK"); err != nil {
 		t.Fatal(err)
 	}
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 
 	c, ok := a.loadCredential(addr)
 	if !ok || c.User != "yibo" || c.Pass != "secret" {

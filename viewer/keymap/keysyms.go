@@ -12,8 +12,10 @@ const (
 	XK_space             = 0x0020
 	XK_G                 = 0x0047
 	XK_M                 = 0x004d
+	XK_T                 = 0x0054
 	XK_g                 = 0x0067
 	XK_m                 = 0x006d
+	XK_t                 = 0x0074
 	XK_BackSpace         = 0xff08
 	XK_Tab               = 0xff09
 	XK_Clear             = 0xff0b

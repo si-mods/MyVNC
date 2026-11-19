@@ -1,9 +1,11 @@
 package viewer
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/si-mods/MyVNC/internal/mf"
@@ -107,5 +109,30 @@ func TestApplyProfile(t *testing.T) {
 	got, err := LoadConfig(path)
 	if err != nil || got.Profile != "LAN" {
 		t.Errorf("loaded profile %q, %v", got.Profile, err)
+	}
+}
+
+// The display choices of a Remote Desktop computer are saved, and a
+// computer with none keeps them out of the file.
+func TestComputerDisplayRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := DefaultConfig()
+	c.Computers = map[string]Computer{
+		"rdp://pc": {Name: "pc", Width: 1920, Height: 1080, Scale: 150, LocalScale: true},
+		"plain":    {Name: "plain"},
+	}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Computers["rdp://pc"]; got.Width != 1920 || got.Height != 1080 || got.Scale != 150 || !got.LocalScale {
+		t.Errorf("loaded %+v", got)
+	}
+	b, _ := json.Marshal(c.Computers["plain"])
+	if strings.Contains(string(b), "Width") || strings.Contains(string(b), "Scale") {
+		t.Errorf("plain computer saved as %s", b)
 	}
 }

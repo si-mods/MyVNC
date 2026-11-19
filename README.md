@@ -30,6 +30,10 @@ and file transfer.
   the system Remote Desktop ActiveX control — enter `rdp://host[:port]` as
   the address. NLA, RemoteFX/H.264, audio and clipboard are handled by
   Windows itself.
+- **Tabs.** Several sessions in one window, VNC, ARD and RDP mixed, one
+  tab each. A tab in the background stays connected and reconnects by
+  itself; it is muted, and a High Performance stream drops to 2 pictures
+  a second until the tab shows again.
 - **Apple Remote Desktop High Performance.** HEVC 4:4:4 or H.264 over
   SRTP at the Mac's source frame rate, decoded on the GPU through Media
   Foundation (D3D11/DXVA), with NAT punch, packet reordering and AV1 when
@@ -80,6 +84,21 @@ platforms; RDP is Windows-only.
   ([docs/MCP.md](docs/MCP.md)); off until you turn it on in Settings.
 - In-session: overlay panel for stats and video settings;
   Ctrl+Alt+Del sends Ctrl+Alt+Del; right-click a home card to remove it.
+- Tabs: each computer opens in its own tab of the title bar; `+` shows the
+  computer cards to open another. Opening a computer that has a tab shows
+  that tab. In full screen the session panel lists the tabs. Shortcuts
+  (the shortcut modifiers, Ctrl+Alt by default):
+
+  | Keys | Action |
+  |---|---|
+  | Ctrl+Alt+Page Down / Page Up | Next / previous tab |
+  | Ctrl+Alt+1 … 8 | Tab 1 … 8 |
+  | Ctrl+Alt+9 | Last tab |
+  | Ctrl+Alt+T | Computers (the `+` tab) |
+  | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab, where no session takes the keys |
+  | Ctrl+Alt+Shift+Q | Close a Remote Desktop tab |
+
+  No shortcut closes a VNC tab; use its close button or Disconnect.
 
 ## Build
 
@@ -98,6 +117,7 @@ go tool mygo build   # build exe + installer into build/ (macOS: MyVNC.app)
 |---|---|
 | [docs/MCP.md](docs/MCP.md) | `MyVNC.exe --mcp`: MCP server for AI agents |
 | [docs/rdp.md](docs/rdp.md) | RDP sessions: usage, credentials, limits |
+| [docs/tabs.md](docs/tabs.md) | Tabs: several sessions in one window |
 | [docs/bandwidth.md](docs/bandwidth.md) | Link measurement, quality policy, server-side requirements |
 | [docs/ard-drag.md](docs/ard-drag.md) | ARD drag-and-drop and file transfer internals |
 | [docs/RELEASING.md](docs/RELEASING.md) | Release workflow |

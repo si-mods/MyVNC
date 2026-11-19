@@ -199,6 +199,32 @@ func TestShortcuts(t *testing.T) {
 			{adown, []Event{alt}, ActionNone},
 			{down(VK_RETURN, 0x1c, false, VK_LCONTROL, VK_LMENU), []Event{ctrlUp, altUp}, ActionFullScreen},
 		}},
+		{"next tab", []st{
+			{cdown, []Event{ctrl}, ActionNone},
+			{adown, []Event{alt}, ActionNone},
+			{down(VK_NEXT, 0x51, true, VK_LCONTROL, VK_LMENU), []Event{ctrlUp, altUp}, ActionNextTab},
+			{up(VK_NEXT, 0x51, true), nil, ActionNone},
+		}},
+		{"previous tab", []st{
+			{cdown, []Event{ctrl}, ActionNone},
+			{adown, []Event{alt}, ActionNone},
+			{down(VK_PRIOR, 0x49, true, VK_LCONTROL, VK_LMENU), []Event{ctrlUp, altUp}, ActionPrevTab},
+		}},
+		{"tab 1, then tab 9", []st{
+			{cdown, []Event{ctrl}, ActionNone},
+			{adown, []Event{alt}, ActionNone},
+			{down('1', 0x02, false, VK_LCONTROL, VK_LMENU), []Event{ctrlUp, altUp}, ActionTab1},
+			{up('1', 0x02, false), nil, ActionNone},
+			{down('9', 0x0a, false, VK_LCONTROL, VK_LMENU), nil, ActionTab1 + 8},
+		}},
+		{"home tab", []st{
+			{cdown, []Event{ctrl}, ActionNone},
+			{adown, []Event{alt}, ActionNone},
+			{down('T', 0x14, false, VK_LCONTROL, VK_LMENU), []Event{ctrlUp, altUp}, ActionHomeTab},
+		}},
+		{"page down alone passes", []st{
+			{down(VK_NEXT, 0x51, true), []Event{press(0xd1, XK_Next)}, ActionNone},
+		}},
 		{"unknown shortcut eats the key", []st{
 			{cdown, []Event{ctrl}, ActionNone},
 			{adown, []Event{alt}, ActionNone},
@@ -245,6 +271,18 @@ func TestShortcuts(t *testing.T) {
 			t.Fatalf("second reset: %#v", got)
 		}
 	})
+}
+
+func TestTabAction(t *testing.T) {
+	for ks, want := range map[uint32]Action{
+		XK_Next: ActionNextTab, XK_Prior: ActionPrevTab, XK_T: ActionHomeTab, XK_t: ActionHomeTab,
+		'1': ActionTab1, '5': ActionTab1 + 4, '9': ActionTab1 + 8,
+		'0': ActionNone, XK_KP_0 + 1: ActionNone, XK_G: ActionNone, XK_Tab: ActionNone,
+	} {
+		if got := TabAction(ks); got != want {
+			t.Errorf("TabAction(%#x) = %d, want %d", ks, got, want)
+		}
+	}
 }
 
 func TestLED(t *testing.T) {

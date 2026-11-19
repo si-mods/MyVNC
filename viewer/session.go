@@ -89,6 +89,9 @@ type Session struct {
 	free    chan struct{} // a token while imgs[back] is not shown
 	audio   *audioOut
 
+	muted      atomic.Bool // the audio plays silence
+	background atomic.Bool // as SetBackground last said
+
 	encrypted atomic.Bool
 	n         counters
 
@@ -160,7 +163,7 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 		// with an AudioOff option, as there is no AAC decoder off
 		// Windows and the units would pile up for nothing.
 		if !hp.AudioOff {
-			s.hpAudio = newHPAudio(hp.AudioConfig)
+			s.hpAudio = newHPAudio(hp.AudioConfig, &s.muted)
 			hp.OnAudio = s.hpAudio.push
 		}
 		opt.HighPerformance = &hp
@@ -177,6 +180,27 @@ func connect(opt rfb.Options, dec mf.Mode, post func(func()), dial func(rfb.Opti
 	go s.writer()
 	return s, nil
 }
+
+// SetBackground limits a High Performance session while its tab is not
+// shown: two pictures a second and a lower decode cap. Off lifts them and
+// asks for a keyframe. A Standard session ignores it; any goroutine.
+func (s *Session) SetBackground(on bool) {
+	s.background.Store(on)
+	if s.video != nil {
+		s.video.setBackground(on)
+	}
+}
+
+// Background reports what SetBackground last said.
+func (s *Session) Background() bool { return s.background.Load() }
+
+// SetMuted silences the session's audio, Standard and High Performance,
+// or gives it back. The audio keeps reading and dropping its samples, so
+// nothing piles up and the devices stay open; any goroutine.
+func (s *Session) SetMuted(on bool) { s.muted.Store(on) }
+
+// Muted reports whether the audio is silenced.
+func (s *Session) Muted() bool { return s.muted.Load() }
 
 // mediaStream is the High Performance receiver. nil before the handshake
 // ends, since the video pipe's callbacks run while the dial is still going.

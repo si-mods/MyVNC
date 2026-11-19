@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/egoist/mygo/audio"
 	"github.com/si-mods/MyVNC/internal/mf"
@@ -33,7 +34,8 @@ type hpAudio struct {
 	once   sync.Once
 	pcm    chan []byte // decoded, from the decode goroutine to Read
 
-	p *audio.Player
+	p     *audio.Player
+	muted *atomic.Bool // the session's: silence, still reading; nil for never
 
 	// the endless decoder's state, the player's goroutine
 	buf []byte // pending samples not yet read
@@ -42,8 +44,9 @@ type hpAudio struct {
 // newHPAudio opens the audio path. The Mac's offer names 48 kHz stereo
 // AAC-ELD+SBR; its AudioSpecificConfig is what the decoder MFT is
 // opened with. nil when no decoder is here, as on macOS.
-func newHPAudio(asc []byte) *hpAudio {
+func newHPAudio(asc []byte, muted *atomic.Bool) *hpAudio {
 	a := &hpAudio{
+		muted:  muted,
 		aus:    make(chan *media.AudioUnit, audioHPQueue),
 		closed: make(chan struct{}),
 		pcm:    make(chan []byte, audioHPQueue),
@@ -145,5 +148,6 @@ func (a *hpAudio) Read(out []float32) (int, error) {
 		n++
 	}
 	a.buf = a.buf[n*2:]
+	silence(out[:n], a.muted)
 	return n, nil
 }

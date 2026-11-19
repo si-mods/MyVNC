@@ -216,7 +216,26 @@ const (
 	ActionMenu              // modifiers+M: open the viewer menu
 	ActionFullScreen        // modifiers+Enter: toggle full screen
 	ActionUngrab            // modifiers pressed and released alone: release the grab
+	ActionNextTab           // modifiers+Page Down: show the next tab
+	ActionPrevTab           // modifiers+Page Up: show the previous tab
+	ActionHomeTab           // modifiers+T: show the home tab
+	ActionTab1              // modifiers+1 to 9: ActionTab1+n shows tab n+1; 9 the last tab
 )
+
+// TabAction is the tab shortcut of the key with keysym ks, or ActionNone.
+func TabAction(ks uint32) Action {
+	switch {
+	case ks == XK_Next:
+		return ActionNextTab
+	case ks == XK_Prior:
+		return ActionPrevTab
+	case ks == XK_T || ks == XK_t:
+		return ActionHomeTab
+	case ks >= '1' && ks <= '9':
+		return ActionTab1 + Action(ks-'1')
+	}
+	return ActionNone
+}
 
 // Shortcuts sits between Keyboard and the server, as TigerVNC's Viewport
 // does: it takes the shortcut keys out of the event stream and keeps the
@@ -294,6 +313,10 @@ func (s *Shortcuts) press(e Event, out []Event) ([]Event, Action) {
 				switch k {
 				case XK_space, XK_G, XK_g, XK_M, XK_m, XK_KP_Enter, XK_Return:
 					ks = k
+				default:
+					if TabAction(k) != ActionNone {
+						ks = k
+					}
 				}
 				if ks != NoSymbol {
 					break
@@ -317,7 +340,7 @@ func (s *Shortcuts) press(e Event, out []Event) ([]Event, Action) {
 			case XK_KP_Enter, XK_Return:
 				return out, ActionFullScreen
 			}
-			return out, ActionNone
+			return out, TabAction(ks)
 		}
 	}
 	s.sent[e.Code] = e

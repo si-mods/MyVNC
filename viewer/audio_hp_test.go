@@ -9,7 +9,7 @@ import (
 func TestHPAudioPushDropsWhenFull(t *testing.T) {
 	// No decoder off Windows: the run goroutine ends at once, but push
 	// must not block the media receiver and must drop past the queue.
-	a := newHPAudio(nil)
+	a := newHPAudio(nil, nil)
 	defer a.close()
 	for i := range audioHPQueue * 3 {
 		a.push(&media.AudioUnit{Sequence: uint16(i), Data: []byte{1, 2, 3, 4}})
@@ -17,7 +17,7 @@ func TestHPAudioPushDropsWhenFull(t *testing.T) {
 }
 
 func TestHPAudioCloseEndsRead(t *testing.T) {
-	a := newHPAudio(nil)
+	a := newHPAudio(nil, nil)
 	go a.close()
 	// Read returns EOF once the stream has closed, however it blocks
 	// first: give it a moment to be in Read before closing.
@@ -33,7 +33,7 @@ func TestHPAudioCloseEndsRead(t *testing.T) {
 }
 
 func TestHPAudioReadConvertsPCM(t *testing.T) {
-	a := newHPAudio(nil)
+	a := newHPAudio(nil, nil)
 	defer a.close()
 	// One S16LE stereo frame: left 0x0001, right 0xffff.
 	a.pcm <- []byte{1, 0, 0xff, 0xff}
