@@ -33,6 +33,8 @@
   "localScaleHint": "For servers that ignore the scale, such as xrdp.",
   "followThisPC": "Follow this PC",
   "appliesNextConnection": "Changes apply at the next connection.",
+  "clearSavedPassword": "Clear saved password",
+  "@clearSavedPassword": { "description": "Button of the Edit dialog of a Remote Desktop computer that deletes its password from the system credential store." },
   "badSize": "Width and height must be from 200 to 8192, and the width must be even.",
   "neverConnected": "Never connected",
   "lastConnected": "Last connected {when, date, medium} {when, time, short}",
@@ -351,6 +353,11 @@
   "errUnencryptedCanceled": "Canceled: the connection is not encrypted.",
   "errHostKeyRejected": "The host key was rejected.",
   "errCertRejected": "The server certificate was rejected.",
+  "rdpDisconnected": "The Remote Desktop session ended (code {code}).",
+  "@rdpDisconnected": {
+    "description": "Error of a Remote Desktop tab whose session ended, when the control gives no text for the reason.",
+    "placeholders": { "code": { "type": "int", "example": "2308" } }
+  },
   "windowMinimize": "Minimize",
   "@windowMinimize": { "description": "Title bar button that minimizes the window (Windows)." },
   "windowMaximize": "Maximize",

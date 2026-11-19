@@ -5,7 +5,13 @@ package win32
 import "errors"
 
 // RDP is unavailable outside Windows.
-type RDP struct{}
+type RDP struct {
+	OnEvent         func(name string, arg int32)
+	OnLoginComplete func()
+	OnLogonError    func(code int32)
+	OnDisconnected  func(reason int32)
+	AdviseErr       error
+}
 
 func NewRDP(parent uintptr) (*RDP, error) { return nil, errors.New("win32: RDP needs Windows") }
 func (r *RDP) Connect(host string, port int, user, password, domain string) error {
@@ -25,4 +31,6 @@ func (r *RDP) DPIPercent() int32                               { return 100 }
 func (r *RDP) Scale() int32                                    { return 0 }
 func (r *RDP) SetZoom(percent int32) error                     { return nil }
 func (r *RDP) SetSmartSizing(on bool) error                    { return nil }
+func (r *RDP) EventIDs() map[string]int32                      { return nil }
+func (r *RDP) ErrorDescription(reason int32) string            { return "" }
 func ClientRect(hwnd uintptr) (w, h int32)                     { return 0, 0 }

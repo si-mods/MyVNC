@@ -24,6 +24,12 @@ from it and fails when the file exists but has no section for the version in `my
   common size or a custom one) and the scale of its desktop, per computer, or to zoom the
   picture on this PC for servers that ignore the scale, such as xrdp. The defaults still
   follow the window size and the scale of this PC. Changes apply at the next connection.
+- Remote Desktop sign-in: without a password from the dialog or the credential store, the
+  tab asks for the account and password before it connects, so the server gets them and
+  xrdp no longer shows its own login form. A password is saved only after the server
+  reports that the login completed; one that failed is not saved, and a stored one that
+  failed is not sent again when you choose Retry. A session that ends shows why, with
+  Retry. The Edit dialog of a Remote Desktop computer can clear its saved password.
 - Remote Desktop fixes: the desktop size asked for at connect is used (it went to the wrong
   object and the control took its window's); a resize sends the physical size in millimeters
   and a valid device scale factor; tooltips of the title bar show beside their buttons, where

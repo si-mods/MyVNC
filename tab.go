@@ -34,6 +34,7 @@ type tab struct {
 	addr       string // of sess
 	server     string // what the user chose, as in Config.Servers
 	pass       string // kept for reconnecting, never written anywhere
+	user       string // the account typed in this tab's prompt (Remote Desktop)
 	secType    uint32
 	name       string
 	title      string // shown in the title bar
@@ -68,12 +69,18 @@ type tab struct {
 	rdpLocal                   bool // this PC scales the picture; see localDesktop
 	rdpZoomed                  bool // the control zooms the picture for rdpLocal
 	rdpAside                   bool // hidden while a window dialog shows
+	// What the control signs in with, until it says whether it worked.
+	rdpLogin *rdpLogin
+	// The stored password did not sign in to this tab's server: Retry
+	// asks instead of sending it again.
+	storeFailed bool
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
 	authUser, authPass string
 	authMsg            string // why the account name is wanted, if it is
 	authReply          chan creds
+	authDone           func(creds) // the answer, on the main thread, for Remote Desktop
 	keyOpen            bool
 	keyMsg             string
 	keyReply           chan int

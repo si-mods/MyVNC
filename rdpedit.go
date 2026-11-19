@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/si-mods/MyVNC/internal/win32"
 	"github.com/si-mods/MyVNC/locales"
+	"github.com/si-mods/MyVNC/viewer"
 )
 
 // The choices of the Edit dialog of a Remote Desktop computer.
@@ -99,6 +100,20 @@ func localDesktop(w, h, scale int32) (int32, int32) {
 func (a *app) editRDP(server string) {
 	c := a.cfg.Computers[server]
 	a.editFor, a.editForm, a.editErr, a.editOpen = server, newRDPForm(c.Width, c.Height, c.Scale, c.LocalScale), "", true
+	a.editHasPass = false
+	if t, err := viewer.ParseURL(server); err == nil {
+		cr, ok := a.loadCredential(t.Addr())
+		a.editHasPass = ok && cr.Pass != ""
+	}
+}
+
+// clearEditPassword deletes the stored password of the computer being
+// edited; its account name stays.
+func (a *app) clearEditPassword() {
+	if t, err := viewer.ParseURL(a.editFor); err == nil {
+		a.forgetCredential(t.Addr())
+	}
+	a.editHasPass, a.credRows = false, nil
 }
 
 // editView is the Edit dialog of a Remote Desktop computer: the size of its
@@ -136,6 +151,9 @@ func (a *app) editView(c *ui.Context, k *colors) {
 			})
 		})
 		settingSwitch(c, k, locales.LocalScale(), locales.LocalScaleHint(), &a.editForm.local)
+		if a.editHasPass && ui.Button(c, locales.ClearSavedPassword()).Clicked() {
+			a.clearEditPassword()
+		}
 		if a.editErr != "" {
 			ui.Text(c, a.editErr).FontSize(12.5).TextColor(k.danger).Wrap()
 		}
