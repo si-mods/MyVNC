@@ -61,14 +61,14 @@ func TestHighPerformanceFallbackBanner(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Stats = true
 	a.add(ardServer(t))
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	if !a.sess.HighPerformance() || !a.tt.HasText("Mode Standard") {
-		t.Fatalf("High Performance %v, texts %q", a.sess.HighPerformance(), a.tt.Texts())
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
+	if !a.tab().sess.HighPerformance() || !a.tt.HasText("Mode Standard") {
+		t.Fatalf("High Performance %v, texts %q", a.tab().sess.HighPerformance(), a.tt.Texts())
 	}
 	nat := "High Performance media did not arrive. A router with NAT between this PC and the Mac is likely blocking it " +
 		"(the Mac sends UDP 5900/5901 to the address it sees); an SSH tunnel cannot carry it either. " +
 		"High Performance needs a direct UDP path. Using Standard mode."
-	a.sess.OnMediaFallback(rfb.ErrMediaNotArrived) // as the session's rfb.HighPerformance.OnFallback does
+	a.tab().sess.OnMediaFallback(rfb.ErrMediaNotArrived) // as the session's rfb.HighPerformance.OnFallback does
 	a.tt.Frame()
 	if !a.tt.HasText(nat) {
 		t.Fatalf("no banner: %q", a.tt.Texts())
@@ -80,7 +80,7 @@ func TestHighPerformanceFallbackBanner(t *testing.T) {
 		t.Error("banner after Dismiss")
 	}
 
-	a.sess.OnMediaFallback(rfb.ErrMediaOtherViewer)
+	a.tab().sess.OnMediaFallback(rfb.ErrMediaOtherViewer)
 	a.tt.Frame()
 	if err := a.tt.Click("Session menu"); err != nil {
 		t.Fatal(err)
@@ -92,8 +92,8 @@ func TestHighPerformanceFallbackBanner(t *testing.T) {
 	if err := a.tt.Click("Retry High Performance"); err != nil {
 		t.Fatal(err)
 	}
-	if a.hpFailed || a.hpNote != "" || a.tt.HasText("Retry High Performance") {
-		t.Errorf("after retry: failed %v, note %q", a.hpFailed, a.hpNote)
+	if a.tab().hpFailed || a.tab().hpNote != "" || a.tt.HasText("Retry High Performance") {
+		t.Errorf("after retry: failed %v, note %q", a.tab().hpFailed, a.tab().hpNote)
 	}
 	a.disconnect()
 }
@@ -124,15 +124,16 @@ func TestReconnectKeepsFrameRateLimit(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Stats, a.cfg.HighPerformance = true, true
 	server := ardServer(t)
-	a.rc = reconnect{active: true, server: server, limit30: true}
-	a.connectTo(server, true)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	if !a.sess.Stats().MediaFrameRate30 {
+	tb := a.newTab()
+	tb.rc = reconnect{active: true, server: server, limit30: true}
+	a.connectTo(tb, server, true)
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
+	if !a.tab().sess.Stats().MediaFrameRate30 {
 		t.Fatal("the reconnected session asks for 60 fps")
 	}
 	a.tt.Advance(time.Second)
-	a.sess.ShowMedia(image.NewRGBA(image.Rect(0, 0, 64, 32)), "HEVC 4:4:4 64×32", mf.Info{})
-	a.until("the media picture", func() bool { return a.sess.Media != "" })
+	a.tab().sess.ShowMedia(image.NewRGBA(image.Rect(0, 0, 64, 32)), "HEVC 4:4:4 64×32", mf.Info{})
+	a.until("the media picture", func() bool { return a.tab().sess.Media != "" })
 	a.tt.Advance(time.Second)
 	a.tt.Advance(time.Second)
 	if !a.tt.HasText("Decoder-limited: asking the Mac for 30 fps") {

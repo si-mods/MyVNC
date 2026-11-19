@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -115,6 +116,14 @@ type videoPipe struct {
 	recv, drops atomic.Int64
 	win         decodeWindow
 	lim         decodeLimiter
+	// background is a hidden session: showCap and capNow follow it. capMu
+	// guards limCap, the limiter's cap, and sentCap, what setCap last got.
+	background atomic.Bool
+	setCap     func(kbps int)
+	capMu      sync.Mutex
+	limCap     int
+	sentCap    int
+	capChecked bool // run's goroutine: the stream's cap was sent once
 	// bands decodes compound pictures (tilesPerFrame > 1), one decoder
 	// per band; nil until the first compound unit.
 	bands bandComposer
@@ -136,11 +145,13 @@ type videoPipe struct {
 func newVideoPipe(m mf.Mode, maxFPS int, keyframe func(), show func(*image.RGBA, string, mf.Info), noCodec func(error), setCap func(kbps int), limitFPS func(), n *counters) *videoPipe {
 	p := &videoPipe{units: make(chan *media.Unit, videoQueue), done: make(chan struct{}), mode: m,
 		maxFPS: maxFPS, keyframe: keyframe, show: show, noCodec: noCodec, n: n}
+	p.setCap = setCap
 	p.lim.set = func(kbps int) {
 		n.mediaCapKbps.Store(int64(kbps))
-		if setCap != nil {
-			setCap(kbps)
-		}
+		p.capMu.Lock()
+		p.limCap = kbps
+		p.sendCap(false)
+		p.capMu.Unlock()
 	}
 	p.lim.limitFPS = limitFPS
 	go p.run()
@@ -163,6 +174,73 @@ func (p *videoPipe) push(u *media.Unit) {
 }
 
 func (p *videoPipe) close() { close(p.done) }
+
+// Background limits for a session whose tab is not shown.
+const (
+	backgroundFPS  = 2    // pictures shown a second
+	backgroundKbps = 2000 // decode cap, kbit/s
+)
+
+// showCap is the display cap now, 0 for the stream's rate. The background
+// cap never raises a lower one the user set.
+func (p *videoPipe) showCap() int {
+	if p.background.Load() {
+		if p.maxFPS > 0 {
+			return min(backgroundFPS, p.maxFPS)
+		}
+		return backgroundFPS
+	}
+	return p.maxFPS
+}
+
+// capNow is the decode cap the stream gets: the smaller of the limiter's
+// and the background cap, ignoring zeros. capMu is held.
+func (p *videoPipe) capNow() int {
+	c := p.limCap
+	if p.background.Load() && (c == 0 || c > backgroundKbps) {
+		c = backgroundKbps
+	}
+	return c
+}
+
+// sendCap tells setCap the cap when it changed, or always with force.
+// capMu is held.
+func (p *videoPipe) sendCap(force bool) {
+	c := p.capNow()
+	if (c != p.sentCap || force) && p.setCap != nil {
+		p.setCap(c)
+	}
+	p.sentCap = c
+}
+
+// setBackground turns the background limits on or off, any goroutine, and
+// says if it changed. Off asks for a keyframe so the picture is sharp.
+func (p *videoPipe) setBackground(on bool) bool {
+	if !p.background.CompareAndSwap(!on, on) {
+		return false
+	}
+	p.capMu.Lock()
+	p.sendCap(false)
+	p.capMu.Unlock()
+	if !on {
+		p.keyframe()
+	}
+	return true
+}
+
+// resendCap sends a cap that is not the limiter's own once the stream is
+// up, as setCap does nothing before; run's goroutine, at the first unit.
+func (p *videoPipe) resendCap() {
+	if p.capChecked {
+		return
+	}
+	p.capChecked = true
+	p.capMu.Lock()
+	if p.capNow() != 0 {
+		p.sendCap(true)
+	}
+	p.capMu.Unlock()
+}
 
 // heartbeatTick logs the High Performance stream's health once every
 // thirty seconds; the reference implementation's 30 s heartbeat, at
@@ -228,6 +306,7 @@ func (p *videoPipe) run() {
 		case <-p.done:
 			return
 		}
+		p.resendCap()
 		if p.rebuildReq.CompareAndSwap(true, false) && dec != nil {
 			// The stall ladder gave up on this decoder: reopen it and
 			// start over from a keyframe.
@@ -278,8 +357,8 @@ func (p *videoPipe) run() {
 			hw.ok(u.Key)
 			if img != nil {
 				p.lastPic.Store(time.Now().UnixNano())
-				if p.maxFPS > 0 {
-					if gap := time.Second / time.Duration(p.maxFPS); time.Since(p.lastShow) < gap {
+				if fps := p.showCap(); fps > 0 {
+					if gap := time.Second / time.Duration(fps); time.Since(p.lastShow) < gap {
 						continue // decoded for its references, not shown
 					}
 					p.lastShow = time.Now()
@@ -321,8 +400,8 @@ func (p *videoPipe) run() {
 		if len(frames) > 0 {
 			p.lastPic.Store(time.Now().UnixNano())
 			f := frames[len(frames)-1]
-			if p.maxFPS > 0 {
-				if gap := time.Second / time.Duration(p.maxFPS); time.Since(p.lastShow) < gap {
+			if fps := p.showCap(); fps > 0 {
+				if gap := time.Second / time.Duration(fps); time.Since(p.lastShow) < gap {
 					continue // decoded for its references, not shown
 				}
 				p.lastShow = time.Now()

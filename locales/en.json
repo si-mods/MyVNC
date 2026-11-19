@@ -21,6 +21,19 @@
   "removeComputer": "Remove computer",
   "@removeComputer": { "description": "Context menu item on a home-view card, removing the saved connection." },
   "@addComputer": { "description": "The last card of the home view, and the title of its form." },
+  "editComputer": "Edit…",
+  "@editComputer": { "description": "Context menu item on a home-view card of a Remote Desktop computer, opening its display settings." },
+  "resolution": "Resolution",
+  "followWindow": "Follow window",
+  "customSize": "Custom",
+  "sizeWidth": "Width",
+  "sizeHeight": "Height",
+  "desktopScale": "Scale",
+  "localScale": "Scale the picture on this PC",
+  "localScaleHint": "For servers that ignore the scale, such as xrdp.",
+  "followThisPC": "Follow this PC",
+  "appliesNextConnection": "Changes apply at the next connection.",
+  "badSize": "Width and height must be from 200 to 8192, and the width must be even.",
   "neverConnected": "Never connected",
   "lastConnected": "Last connected {when, date, medium} {when, time, short}",
   "@lastConnected": {
@@ -345,5 +358,25 @@
   "windowRestore": "Restore",
   "@windowRestore": { "description": "Title bar button of a maximized window, which restores its size (Windows)." },
   "windowClose": "Close",
-  "@windowClose": { "description": "Title bar button that closes the window (Windows)." }
+  "@windowClose": { "description": "Title bar button that closes the window (Windows)." },
+  "homeTab": "Computers",
+  "@homeTab": { "description": "The last tab of the title bar, the + button, which shows the computer cards to open another session." },
+  "closeTab": "Close {name}",
+  "@closeTab": {
+    "description": "A title bar tab's close button, for screen readers.",
+    "placeholders": { "name": { "type": "String", "example": "mac-mini" } }
+  },
+  "close": "Close",
+  "@close": { "description": "A failed tab's button that removes the tab." },
+  "retry": "Retry",
+  "@retry": { "description": "A failed tab's button that connects again." },
+  "closeSessionsTitle": "Close {count} sessions?",
+  "@closeSessionsTitle": {
+    "description": "Title of the question when the window closes with several sessions open; count is 2 or more.",
+    "placeholders": { "count": { "type": "int", "example": "3" } }
+  },
+  "closeSessionsMessage": "Closing the window disconnects every computer.",
+  "@closeSessionsMessage": { "description": "Message of the question when the window closes with several sessions open." },
+  "closeSessions": "Close All",
+  "@closeSessions": { "description": "The button that closes the window and its sessions." }
 }

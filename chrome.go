@@ -37,21 +37,46 @@ func (a *app) titleBar(c *ui.Context, k *colors, fn func()) {
 	}
 	ui.Row(c).Height(titleH).Shrink(0).Padding(0, max(bar.Right, 8), 0, left).Gap(10).AlignItems(ui.Center).DragWindow().Children(func() {
 		fn()
-		windowControls(c, k, a.win)
+		windowControls(c, k, a.win, a.rdpShown())
 	})
+}
+
+// rdpShown reports whether a Remote Desktop control covers the window
+// under the title bar.
+func (a *app) rdpShown() bool { return a.active != nil && a.active.rdp != nil }
+
+// barTip is e's tooltip in the title bar. Under the title bar a Remote
+// Desktop control, a native window, would cover it: then it goes beside
+// e, before it or, with after, after it.
+func barTip(c *ui.Context, k *colors, e ui.Element, s string, beside, after bool) ui.Element {
+	if !beside {
+		return e.Tooltip(s)
+	}
+	e.Description(s)
+	ui.TooltipBase(c, e, func(tip ui.Element) {
+		if after {
+			tip.AttachTo(e, ui.AnchorEnd, ui.AnchorStart).MarginStart(6)
+		} else {
+			tip.AttachTo(e, ui.AnchorStart, ui.AnchorEnd).MarginEnd(6)
+		}
+		tip.Padding(5, 8).Radius(5).Background(k.text).TextColor(k.card).FontSize(12).
+			Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.2))
+		tip.Children(func() { ui.Text(c, s) })
+	})
+	return e
 }
 
 // windowControls draws the buttons that minimize, maximize and close the
 // window, when it has none of its own; close's face turns red, as
 // Windows has it.
-func windowControls(c *ui.Context, k *colors, win *mygo.Window) {
+func windowControls(c *ui.Context, k *colors, win *mygo.Window, beside bool) {
 	if !ownControls || win == nil || win.IsFullScreen() {
 		return
 	}
 	maximized := win.IsMaximized()
 	ui.Row(c).Gap(2).AlignItems(ui.Center).Shrink(0).Children(func() {
 		ui.Box(c).Size(1, 16).Margin(0, 6).Background(k.tabSep)
-		if iconButton(c, k, "minus", locales.WindowMinimize(), 30, 16).Tooltip(locales.WindowMinimize()).Clicked() {
+		if barTip(c, k, iconButton(c, k, "minus", locales.WindowMinimize(), 30, 16), locales.WindowMinimize(), beside, false).Clicked() {
 			win.Minimize()
 		}
 		glyph, label := "square", locales.WindowMaximize()
@@ -59,7 +84,7 @@ func windowControls(c *ui.Context, k *colors, win *mygo.Window) {
 			glyph, label = "copy", locales.WindowRestore()
 		}
 		// MaximizeButton shows Windows 11's snap layouts over the button.
-		if iconButton(c, k, glyph, label, 30, 13).Tooltip(label).MaximizeButton().Clicked() {
+		if barTip(c, k, iconButton(c, k, glyph, label, 30, 13), label, beside, false).MaximizeButton().Clicked() {
 			if maximized {
 				win.Unmaximize()
 			} else {
@@ -67,7 +92,8 @@ func windowControls(c *ui.Context, k *colors, win *mygo.Window) {
 			}
 		}
 		b := ui.Box(c).Size(30, 30).Center().Radius(30 / 2.6).Cursor(ui.CursorPointer).Role(ui.RoleButton).
-			Label(locales.WindowClose()).Tooltip(locales.WindowClose())
+			Label(locales.WindowClose())
+		barTip(c, k, b, locales.WindowClose(), beside, false)
 		col := k.iconMuted
 		if b.Pressed() {
 			b.Background(closeRed.Alpha(0.8))

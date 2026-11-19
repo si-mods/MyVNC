@@ -62,6 +62,10 @@ type app struct {
 	server, user, pass string
 	proto              viewer.Scheme // the Add computer dialog's protocol
 	addOpen            bool
+	editOpen           bool // the Edit dialog of a Remote Desktop computer
+	editFor            string
+	editForm           rdpForm
+	editErr            string
 	settingsOpen       bool
 	settingsPage       string // the settings page shown
 	quality, compress  float64
@@ -73,54 +77,26 @@ type app struct {
 	orient0            int
 	zoom, clipKiB      float64
 	wheelLines         float64
-	connecting         bool
-	cancel             context.CancelFunc
-	step               func() string // what connecting does, said in the language shown
-	target             string        // what it connects to
-	errText            string
-	rc                 reconnect
+	errText            string                // the home page's own error: a bad address, an import
 	thumbs             map[string]*ui.Bitmap // by server, nil for none
 
+	// The connections, one a tab.
+	tabs     []*tab
+	active   *tab // nil: the home page is shown
+	nextTab  int  // the last tab's id
+	closeAsk bool // "Close N sessions?" shows
+	closeOK  bool // the user said yes: the window closes
+
 	// The session view.
-	sess       *viewer.Session
-	addr       string // of sess
-	sessServer string // what the user chose, as in Config.Servers
-	emb        *emulatemb.Emulator
-	pill       pillDrag
-	stats      statsSample
-	sessPass   string // kept for reconnecting, never written anywhere
-	secType    uint32
-	name       string
-	title      string // shown in the title bar
-	screen     ui.Handle
-	buttons    uint16
-	ptrX, ptrY float32 // pointer in the screen box
-	ptrMove    bool    // a move to ptrX, ptrY waits for the next frame
-	scrollAcc  [2]float32
-	wheelPend  []uint16 // wheel clicks waiting, one pair a frame (flushPointer)
-	wheelLast  time.Time
-	wheelAccel float32          // 1-3, from how fast the wheel repeats
-	sysLines   int              // the system's lines per notch, as notches report
-	wheelNow   func() time.Time // injectable, for the tests
-	svc        ui.Services
-	menuOpen   bool
-	focused    bool
-	ungrabbed  bool // the user released the grab with the shortcut keys
-	pxScale    float32
-	srvLED     uint32
-	dyn        viewer.Resizer
-	version    string       // the app's version for the home view
-	upds       *updateHooks // the updater plugin, nil without one
-	dynUrgent  bool         // the next size goes at once: a new session, full screen, another monitor
-	dynRefused bool         // the server cannot resize: the session scales to fit instead
-	dynHint    bool         // the session panel says so, until dismissed
-	hpNote     string       // why High Performance fell back, shown until dismissed
-	hpFailed   bool         // it fell back: the panel offers a retry
-	rdp        *win32.RDP   // an embedded Remote Desktop session, if one runs
-	rdpAddr    string
-	rdpResize  *time.Timer
-	rdpW, rdpH int32
-	winScale   float32 // the window's pixels per DIP, for the RDP control
+	pill     pillDrag
+	sysLines int              // the system's lines per notch, as notches report
+	wheelNow func() time.Time // injectable, for the tests
+	svc      ui.Services
+	focused  bool
+	pxScale  float32
+	version  string       // the app's version for the home view
+	upds     *updateHooks // the updater plugin, nil without one
+	winScale float32      // the window's pixels per DIP, for the RDP control
 
 	// Credentials: the system's store, one record per server, and the
 	// records the credentials page shows.
@@ -131,28 +107,6 @@ type app struct {
 	credUser string
 	credPass string // empty keeps the stored password
 	credHas  bool   // a password is stored for credFor
-
-	// Prompts of the connection goroutine.
-	authOpen           bool
-	authUser, authPass string
-	authMsg            string // why the account name is wanted, if it is
-	authReply          chan creds
-	keyOpen            bool
-	keyMsg             string
-	keyReply           chan int
-	warnOpen           bool
-	warnMsg            string
-	warnReply          chan int
-	certOpen           bool
-	certMsg            string
-	certReply          chan int
-
-	// ARD file transfer (#43).
-	dlOpen      bool
-	dlPath      string
-	xfers       *viewer.Transfers
-	conflictAll bool // the name-clash dialog's "apply to all"
-	conflictOn  bool // the dialog shows; Escape clears it
 
 	// Platform hooks; nil in tests but post.
 	post          func(func())
@@ -201,14 +155,12 @@ func setThemeSource(s string) {
 func newApp(dir string) *app {
 	a := &app{
 		dir: dir, known: &viewer.KnownHosts{Path: filepath.Join(dir, "known_hosts.json")},
-		log: slog.New(slog.DiscardHandler), focused: true, srvLED: keymap.LEDUnknown,
+		log: slog.New(slog.DiscardHandler), focused: true,
 		mods: keymap.DefaultShortcutModifiers, thumbs: map[string]*ui.Bitmap{},
-		step: locales.StepConnecting, wheelNow: time.Now, proto: viewer.SchemeVNC,
+		wheelNow: time.Now, proto: viewer.SchemeVNC,
 		secrets: mygo.Secrets,
 	}
 	a.initTouch()
-	// a.post is the window's, set once it exists.
-	a.xfers = viewer.NewTransfers(func(f func()) { a.post(f) })
 	cfg, err := viewer.LoadConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		log.Print(err)
@@ -257,18 +209,19 @@ func (a *app) saveConfig() {
 }
 
 // security is the session panel's word on the connection's protection.
-func (a *app) security() (level, kind string) {
-	return viewer.SecurityLevel(a.secType, a.sess.Encrypted()), viewer.SecTypeName(a.secType)
+func (t *tab) security() (level, kind string) {
+	return viewer.SecurityLevel(t.secType, t.sess.Encrypted()), viewer.SecTypeName(t.secType)
 }
 
 func (a *app) openMenu() {
-	if a.sess == nil {
+	t := a.active
+	if t == nil || t.sess == nil {
 		return
 	}
 	if a.sc != nil {
 		a.sendKeys(a.sc.Reset())
 	}
-	a.menuOpen = true
+	t.menuOpen = true
 }
 
 // ctrlAltDel presses and releases Ctrl+Alt+Del, as TigerVNC's menu.
@@ -289,7 +242,9 @@ func (a *app) ctrlAltDel() {
 func (a *app) toggleFullScreen() {
 	a.cfg.FullScreen = !a.cfg.FullScreen
 	a.saveConfig()
-	a.dynUrgent = true
+	if t := a.active; t != nil {
+		t.dynUrgent = true
+	}
 	a.fullScreen(a.cfg.FullScreen)
 }
 
@@ -308,13 +263,13 @@ func (a *app) scaling() string {
 // pixels once the window has kept it for viewer.ResizeDebounce, as macOS
 // Screen Sharing's dynamic resolution; a Mac gets a virtual display at the
 // monitor's density.
-func (a *app) followWindow(p *ui.Painter, r ui.Rect) {
-	if !a.cfg.DynamicResolution || a.dynRefused || a.cfg.ViewOnly || a.cfg.Orientation != 0 {
+func (a *app) followWindow(t *tab, p *ui.Painter, r ui.Rect) {
+	if !a.cfg.DynamicResolution || t.dynRefused || a.cfg.ViewOnly || a.cfg.Orientation != 0 {
 		return
 	}
-	a.dyn.Want(viewer.DesktopSize(r.W, r.H, p.Scale()), p.Now(), a.dynUrgent)
-	a.dynUrgent = false
-	size, ok, wait := a.dyn.Due(p.Now())
+	t.dyn.Want(viewer.DesktopSize(r.W, r.H, p.Scale()), p.Now(), t.dynUrgent)
+	t.dynUrgent = false
+	size, ok, wait := t.dyn.Due(p.Now())
 	if wait > 0 {
 		p.After(wait)
 	}
@@ -322,15 +277,15 @@ func (a *app) followWindow(p *ui.Painter, r ui.Rect) {
 		return
 	}
 	a.log.Debug("dynamic resolution", "width", size.X, "height", size.Y, "scale", p.Scale())
-	a.sess.SetDesktopSize(size.X, size.Y, viewer.Density(p.Scale()))
+	t.sess.SetDesktopSize(size.X, size.Y, viewer.Density(p.Scale()))
 }
 
 // mediaFallback tells the user why High Performance gave way to Standard
 // mode, and offers a retry.
-func (a *app) mediaFallback(err error) {
+func (a *app) mediaFallback(t *tab, err error) {
 	a.log.Warn("High Performance fell back to Standard mode", "err", err,
 		"hint", "High Performance needs a direct UDP path; over an SSH tunnel or a restricted network it cannot arrive")
-	a.hpNote, a.hpFailed = mediaText(err), true
+	t.hpNote, t.hpFailed = mediaText(err), true
 }
 
 // mediaText is a High Performance fallback for the user. The protocol
@@ -352,9 +307,9 @@ func mediaText(err error) string {
 }
 
 // mediaMode is the session's mode, for the panel and the HUD.
-func (a *app) mediaMode() string {
-	if a.sess.Media != "" {
-		return locales.ModeHighPerformance(a.sess.Media + " · " + decoderName(a.sess.MediaDecoder))
+func (t *tab) mediaMode() string {
+	if t.sess.Media != "" {
+		return locales.ModeHighPerformance(t.sess.Media + " · " + decoderName(t.sess.MediaDecoder))
 	}
 	return locales.ModeStandard()
 }
@@ -371,31 +326,31 @@ func decoderName(i mf.Info) string {
 }
 
 // retryMedia asks for High Performance again.
-func (a *app) retryMedia() {
-	a.hpNote, a.hpFailed = "", false
-	a.sess.RetryHighPerformance()
+func (t *tab) retryMedia() {
+	t.hpNote, t.hpFailed = "", false
+	t.sess.RetryHighPerformance()
 }
 
 // resizeRefused falls back to Fit scaling for the session.
-func (a *app) resizeRefused() {
-	if !a.dynRefused {
+func (a *app) resizeRefused(t *tab) {
+	if !t.dynRefused {
 		a.log.Info("the server does not change its size; scaling to fit")
-		a.dynRefused, a.dynHint = true, true
+		t.dynRefused, t.dynHint = true, true
 	}
 }
 
 // pointerMask maps ui buttons (primary, secondary, middle) to RFB bits.
 var pointerMask = [3]uint16{1, 4, 2}
 
-func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
-	s := a.sess
+func (a *app) pointer(t *tab, c *ui.Context, ev ui.InputEvent) bool {
+	s := t.sess
 	if s == nil || s.Screen == nil {
 		return false
 	}
 	switch ev.Kind {
 	case ui.InputPointerDown, ui.InputPointerUp, ui.InputPointerMove, ui.InputScroll:
 		// Keys reach here too, without a position.
-		a.ptrX, a.ptrY = ev.X, ev.Y
+		t.ptrX, t.ptrY = ev.X, ev.Y
 	}
 	if a.cfg.ViewOnly {
 		return false
@@ -406,14 +361,14 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 			return false
 		}
 		if ev.Kind == ui.InputPointerDown {
-			a.buttons |= pointerMask[ev.Button]
+			t.buttons |= pointerMask[ev.Button]
 		} else {
-			a.buttons &^= pointerMask[ev.Button]
+			t.buttons &^= pointerMask[ev.Button]
 		}
 	case ui.InputPointerMove:
 		// At most one move a frame (RDP's cadence, TigerVNC's rate
 		// limit): flushPointer sends it when the frame is drawn.
-		a.ptrMove = true
+		t.ptrMove = true
 		return true
 	case ui.InputScroll:
 		// Apple's 0x17 wheel and gesture events parse cleanly on macOS
@@ -424,18 +379,18 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 		// #1741: 'the macOS server is not using the correct units').
 		// So a notch of the system's lines becomes lines*10 clicks, the
 		// Mac's points-per-line; WheelLines multiplies on top.
-		if a.sess.AppleWheelAvailable() {
+		if s.AppleWheelAvailable() {
 			lines, _ := a.scrollLines(ev) // signed lines, one Mac line = 10 pixels
-			n := int(math.Round(math.Abs(lines) * appleClicksPerLine * a.wheelAccelFor(ev)))
+			n := int(math.Round(math.Abs(lines) * appleClicksPerLine * a.wheelAccelFor(t, ev)))
 			n = min(n, 64)
 			if n > 0 {
 				bit := uint16(8) // up
 				if lines > 0 {
 					bit = 16 // down
 				}
-				if len(a.wheelPend)+n <= 64 {
+				if len(t.wheelPend)+n <= 64 {
 					for range n {
-						a.wheelPend = append(a.wheelPend, bit)
+						t.wheelPend = append(t.wheelPend, bit)
 					}
 				}
 			}
@@ -446,8 +401,8 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 		// pointer is a state, so a press and release the server sees in
 		// one breath can merge into no click at all. Native wheels
 		// spread their notches over time; so do we.
-		if len(a.wheelPend) < 32 {
-			a.wheelPend = append(a.wheelPend, a.wheel(ev)...)
+		if len(t.wheelPend) < 32 {
+			t.wheelPend = append(t.wheelPend, a.wheel(t, ev)...)
 		}
 		return true
 	default:
@@ -455,10 +410,10 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 	}
 	// A click carries its position, so the move waiting is its twin:
 	// one event is enough.
-	a.ptrMove = false
-	x, y := a.toFramebuffer(a.screen.Bounds(c), ev.X, ev.Y)
+	t.ptrMove = false
+	x, y := a.toFramebuffer(t, t.screen.Bounds(c), ev.X, ev.Y)
 	a.flushAltGr()
-	a.sendPointer(x, y, a.buttons)
+	a.sendPointer(t, x, y, t.buttons)
 	return true
 }
 
@@ -466,40 +421,40 @@ func (a *app) pointer(c *ui.Context, ev ui.InputEvent) bool {
 // the image placed at f in the screen box. The frame is the pointer's
 // clock: one pair a frame keeps every press and its release a separate
 // event, whatever the server merges.
-func (a *app) flushPointer(f ui.Rect, w, h int) {
-	if !a.ptrMove && len(a.wheelPend) == 0 {
+func (a *app) flushPointer(t *tab, f ui.Rect, w, h int) {
+	if !t.ptrMove && len(t.wheelPend) == 0 {
 		return
 	}
-	move := a.ptrMove
-	a.ptrMove = false
-	if a.sess == nil || a.emb == nil || a.cfg.ViewOnly {
-		a.wheelPend = nil // nothing to scroll: drop what waits
+	move := t.ptrMove
+	t.ptrMove = false
+	if t.sess == nil || t.emb == nil || a.cfg.ViewOnly {
+		t.wheelPend = nil // nothing to scroll: drop what waits
 		return
 	}
-	x, y := viewer.ToFramebuffer(a.ptrX, a.ptrY, f, w, h)
+	x, y := viewer.ToFramebuffer(t.ptrX, t.ptrY, f, w, h)
 	a.flushAltGr()
 	if move {
-		a.sendPointer(x, y, a.buttons)
+		a.sendPointer(t, x, y, t.buttons)
 	}
-	if len(a.wheelPend) > 0 {
-		a.log.Debug("wheel: click", "bit", a.wheelPend[0])
-		a.sendPointer(x, y, a.buttons|a.wheelPend[0])
-		a.sendPointer(x, y, a.buttons)
-		a.wheelPend = a.wheelPend[1:]
+	if len(t.wheelPend) > 0 {
+		a.log.Debug("wheel: click", "bit", t.wheelPend[0])
+		a.sendPointer(t, x, y, t.buttons|t.wheelPend[0])
+		a.sendPointer(t, x, y, t.buttons)
+		t.wheelPend = t.wheelPend[1:]
 	}
 }
 
 // sendPointer passes a pointer event through the middle button emulation
 // to the session; the emulation's timer comes back to the main thread.
-func (a *app) sendPointer(x, y int, mask uint16) {
-	emb := a.emb
+func (a *app) sendPointer(t *tab, x, y int, mask uint16) {
+	emb := t.emb
 	if err := emb.Filter(x, y, mask); err != nil {
 		a.log.Warn("middle button emulation", "err", err)
 	}
 	if d, ok := emb.NextTimeout(); ok {
 		time.AfterFunc(d+time.Millisecond, func() {
 			a.post(func() {
-				if a.emb == emb {
+				if t.emb == emb {
 					emb.CheckTimeouts()
 				}
 			})
@@ -514,15 +469,15 @@ const appleClicksPerLine = 10
 
 // wheelAccelFor reads the wheel's repeat acceleration without touching
 // the click conversion.
-func (a *app) wheelAccelFor(ev ui.InputEvent) float64 {
+func (a *app) wheelAccelFor(t *tab, ev ui.InputEvent) float64 {
 	now := a.wheelNow()
-	if a.wheelLast.IsZero() || now.Sub(a.wheelLast) > 200*time.Millisecond {
-		a.wheelAccel = 1
+	if t.wheelLast.IsZero() || now.Sub(t.wheelLast) > 200*time.Millisecond {
+		t.wheelAccel = 1
 	} else {
-		a.wheelAccel = min(a.wheelAccel+0.4, 3)
+		t.wheelAccel = min(t.wheelAccel+0.4, 3)
 	}
-	a.wheelLast = now
-	return float64(a.wheelAccel)
+	t.wheelLast = now
+	return float64(t.wheelAccel)
 }
 
 // scrollLines reads a scroll as the native lines the Mac's wheel event
@@ -548,14 +503,14 @@ func (a *app) scrollLines(ev ui.InputEvent) (lines float64, ok bool) {
 // times, and an idle wheel resets.
 const scrollLineDIP = 33
 
-func (a *app) wheel(ev ui.InputEvent) []uint16 {
+func (a *app) wheel(t *tab, ev ui.InputEvent) []uint16 {
 	now := a.wheelNow()
-	if a.wheelLast.IsZero() || now.Sub(a.wheelLast) > 200*time.Millisecond {
-		a.wheelAccel = 1
+	if t.wheelLast.IsZero() || now.Sub(t.wheelLast) > 200*time.Millisecond {
+		t.wheelAccel = 1
 	} else {
-		a.wheelAccel = min(a.wheelAccel+0.4, 3)
+		t.wheelAccel = min(t.wheelAccel+0.4, 3)
 	}
-	a.wheelLast = now
+	t.wheelLast = now
 	// A notch reports the system's lines-per-notch setting: |d| = lines*33.
 	if !ev.Precise {
 		if n := int(math.Round(math.Abs(float64(ev.DY)) / scrollLineDIP)); n > 0 {
@@ -571,7 +526,7 @@ func (a *app) wheel(ev ui.InputEvent) []uint16 {
 		}
 		line = scrollLineDIP * float32(sys) / float32(L)
 	}
-	clicks := int(math.Round(float64(a.wheelAccel)))
+	clicks := int(math.Round(float64(t.wheelAccel)))
 	var out []uint16
 	add := func(bit uint16, n int) {
 		for range min(max(n, 1), 32-len(out)) {
@@ -588,14 +543,14 @@ func (a *app) wheel(ev ui.InputEvent) []uint16 {
 			if d > 0 {
 				bit = pos
 			}
-			add(bit, int(math.Round(math.Abs(float64(d))/float64(line)*float64(a.wheelAccel))))
+			add(bit, int(math.Round(math.Abs(float64(d))/float64(line)*float64(t.wheelAccel))))
 			continue
 		}
-		a.scrollAcc[i] += d
-		for ; a.scrollAcc[i] <= -line; a.scrollAcc[i] += line {
+		t.scrollAcc[i] += d
+		for ; t.scrollAcc[i] <= -line; t.scrollAcc[i] += line {
 			add(neg, clicks)
 		}
-		for ; a.scrollAcc[i] >= line; a.scrollAcc[i] -= line {
+		for ; t.scrollAcc[i] >= line; t.scrollAcc[i] -= line {
 			add(pos, clicks)
 		}
 	}
@@ -613,26 +568,35 @@ func (a *app) keys(evs []keymap.Event) {
 	}
 	send, act := a.sc.Filter(evs)
 	a.sendKeys(send)
+	t := a.active
 	switch act {
 	case keymap.ActionGrab:
-		a.ungrabbed = false
+		if t != nil {
+			t.ungrabbed = false
+		}
 		a.updateGrab()
 	case keymap.ActionUngrab:
-		a.ungrabbed = true // until the user grabs again, as TigerVNC
+		if t != nil {
+			t.ungrabbed = true // until the user grabs again, as TigerVNC
+		}
 		a.updateGrab()
 	case keymap.ActionFullScreen:
 		a.toggleFullScreen()
 	case keymap.ActionMenu:
 		a.openMenu()
+	default:
+		a.tabAction(act)
 	}
 }
 
+// sendKeys sends keys to the active tab's session.
 func (a *app) sendKeys(evs []keymap.Event) {
-	if a.sess == nil || a.cfg.ViewOnly {
+	t := a.active
+	if t == nil || t.sess == nil || a.cfg.ViewOnly {
 		return
 	}
 	for _, e := range evs {
-		a.sess.Key(e.Code, e.KeySym, e.Down)
+		t.sess.Key(e.Code, e.KeySym, e.Down)
 	}
 }
 
@@ -642,47 +606,52 @@ func (a *app) flushAltGr() {
 	}
 }
 
-// modal reports whether a dialog takes the keyboard from the session.
+// modal reports whether a dialog takes the keyboard from the session:
+// the active tab's, or the window's. A background tab's prompts wait.
 func (a *app) modal() bool {
-	return a.menuOpen || a.authOpen || a.keyOpen || a.warnOpen || a.certOpen || a.dlOpen || a.xfers.Asking() != nil
+	t := a.active
+	return a.closeAsk || t != nil && (t.menuOpen || t.authOpen || t.keyOpen || t.warnOpen || t.certOpen || t.dlOpen || t.xfers.Asking() != nil)
 }
 
 // updateGrab grabs the system keys while a session has the keyboard.
 func (a *app) updateGrab() {
 	if a.grab != nil {
-		a.grab(a.rdp == nil && a.sess != nil && !a.cfg.ViewOnly && a.focused && !a.ungrabbed && !a.modal())
+		t := a.active
+		a.grab(t != nil && t.rdp == nil && t.sess != nil && !a.cfg.ViewOnly && a.focused && !t.ungrabbed && !a.modal())
 	}
 }
 
 func (a *app) focus() {
 	a.focused = true
 	a.updateGrab()
-	if a.sess == nil || a.cfg.ViewOnly {
+	t := a.active
+	if t == nil || t.sess == nil || a.cfg.ViewOnly {
 		return
 	}
-	a.sendClipboard()
+	a.sendClipboard(t)
 	if a.localLED != nil {
-		a.sendKeys(keymap.LEDSync(a.localLED(), a.srvLED)) // past the shortcuts
+		a.sendKeys(keymap.LEDSync(a.localLED(), t.srvLED)) // past the shortcuts
 	}
 }
 
-func (a *app) sendClipboard() {
-	if a.sess == nil || a.cfg.ViewOnly || !a.cfg.SendClipboard {
+// sendClipboard sends the local clipboard to t's session; t may be nil.
+func (a *app) sendClipboard(t *tab) {
+	if t == nil || t.sess == nil || a.cfg.ViewOnly || !a.cfg.SendClipboard {
 		return
 	}
-	a.sess.SendClipboard(a.svc.ReadClipboard())
+	t.sess.SendClipboard(a.svc.ReadClipboard())
 }
 
 // sendFiles queues dropped files and folders for the Mac's Downloads
 // folder; the session panel shows the transfer. Only an explicit drop
 // transfers files; copying on Windows leaves the clipboard to text.
-func (a *app) sendFiles(files []string) {
-	if a.user == "" || len(files) == 0 || !a.sess.FileCopyAvailable() {
+func (a *app) sendFiles(t *tab, files []string) {
+	if a.user == "" || len(files) == 0 || !t.sess.FileCopyAvailable() {
 		return
 	}
 	dir := "/Users/" + a.user + "/Downloads"
-	a.xfers.Attach(a.sess, a.sessServer)
-	a.xfers.Upload(files, dir)
+	t.xfers.Attach(t.sess, t.server)
+	t.xfers.Upload(files, dir)
 	a.log.Info("file transfer: queued", "items", len(files), "dir", dir)
 }
 
@@ -690,20 +659,21 @@ func (a *app) sendFiles(files []string) {
 // uploads them to the Mac's Downloads folder (#43).
 func (a *app) dropFiles(paths []string) {
 	a.log.Info("files dropped", "n", len(paths))
-	if a.sess == nil || a.cfg.ViewOnly || !a.sess.FileCopyAvailable() {
+	t := a.active
+	if t == nil || t.sess == nil || a.cfg.ViewOnly || !t.sess.FileCopyAvailable() {
 		return
 	}
-	a.sendFiles(paths)
+	a.sendFiles(t, paths)
 }
 
 // startDownload queues the remote path in the download form for the
 // local Downloads folder; the session panel shows the transfer. It is the
 // viewer-initiated half of the ARD file transfer; the Mac streams the
 // records over the session (#43).
-func (a *app) startDownload() {
-	p := strings.TrimSpace(a.dlPath)
-	a.dlOpen = false
-	if p == "" || a.sess == nil || !a.sess.FileCopyAvailable() {
+func (a *app) startDownload(t *tab) {
+	p := strings.TrimSpace(t.dlPath)
+	t.dlOpen = false
+	if p == "" || t.sess == nil || !t.sess.FileCopyAvailable() {
 		return
 	}
 	home, err := os.UserHomeDir()
@@ -713,14 +683,14 @@ func (a *app) startDownload() {
 	}
 	dir := filepath.Join(home, "Downloads")
 	a.log.Info("download", "path", p, "dir", dir)
-	a.xfers.Attach(a.sess, a.sessServer)
-	a.xfers.Download(p, dir)
+	t.xfers.Attach(t.sess, t.server)
+	t.xfers.Download(p, dir)
 }
 
 // answerConflict answers the name clash the asking transfer shows.
-func (a *app) answerConflict(j *viewer.Transfer, act viewer.ConflictAction, all bool) {
-	a.xfers.Answer(j, viewer.Resolution{Action: act, All: all})
-	a.conflictAll, a.conflictOn = false, false
+func (t *tab) answerConflict(j *viewer.Transfer, act viewer.ConflictAction, all bool) {
+	t.xfers.Answer(j, viewer.Resolution{Action: act, All: all})
+	t.conflictAll, t.conflictOn = false, false
 }
 
 func (a *app) blur() {
@@ -736,18 +706,18 @@ func (a *app) blur() {
 // requestClipboard pulls the server's announced clipboard text, which
 // rfb leaves on the server until then (#11).
 func (a *app) requestClipboard() {
-	if a.sess != nil && !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
-		a.sess.RequestClipboard()
+	if t := a.active; t != nil && t.sess != nil && !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
+		t.sess.RequestClipboard()
 	}
 }
 
 // serverLED follows the server's lock key LEDs, as TigerVNC's
 // Viewport::setLEDState: the first state brings the server in line with
 // the local keys, later ones the local keys with the server.
-func (a *app) serverLED(state uint32) {
-	first := a.srvLED == keymap.LEDUnknown
-	a.srvLED = state
-	if a.cfg.ViewOnly || !a.focused || a.localLED == nil {
+func (a *app) serverLED(t *tab, state uint32) {
+	first := t.srvLED == keymap.LEDUnknown
+	t.srvLED = state
+	if t != a.active || a.cfg.ViewOnly || !a.focused || a.localLED == nil {
 		return
 	}
 	if first {
@@ -765,32 +735,33 @@ func (a *app) fullScreen(on bool) {
 	}
 }
 
-func (a *app) setName(name string) {
-	a.name = name
-	if a.sess != nil {
-		c := a.cfg.Computers[a.sessServer]
+func (a *app) setName(t *tab, name string) {
+	t.name = name
+	if t.sess != nil && t.server != "" { // "": the computer was removed
+		c := a.cfg.Computers[t.server]
 		c.Name = name
-		a.cfg.Computers[a.sessServer] = c
+		a.cfg.Computers[t.server] = c
 		a.saveConfig()
 	}
-	a.setTitle(a.sess != nil && a.sess.Encrypted())
+	a.setTitle(t, t.sess != nil && t.sess.Encrypted())
 }
 
 // setTitle shows the desktop and how it is protected in the title bar,
-// as "desktop - MyVNC (ARD DH, encrypted)".
-func (a *app) setTitle(encrypted bool) {
-	t := appName
-	if a.sess != nil {
+// as "desktop - MyVNC (ARD DH, encrypted)"; the window shows the active
+// tab's.
+func (a *app) setTitle(t *tab, encrypted bool) {
+	title := appName
+	if t.sess != nil {
 		enc := "no"
 		if encrypted {
 			enc = "yes"
 		}
-		t = locales.TitleSession(a.name, appName, viewer.SecTypeName(a.secType), enc)
+		title = locales.TitleSession(t.name, appName, viewer.SecTypeName(t.secType), enc)
 	}
-	if t != a.title {
-		a.title = t
-		if a.win != nil {
-			a.win.SetTitle(t)
+	if title != t.title {
+		t.title = title
+		if a.win != nil && t == a.active {
+			a.win.SetTitle(title)
 		}
 	}
 }
@@ -826,25 +797,48 @@ func errorText(err error) string {
 
 func secretKey(addr string) string { return "password " + addr }
 
-func (a *app) connect() { a.connectTo(strings.TrimSpace(a.server), false) }
+func (a *app) connect() { a.open(strings.TrimSpace(a.server)) }
 
-// connectTo connects to server; again tells a reconnect, which asks
+// open connects to server in a new tab, or shows the tab open for it.
+func (a *app) open(server string) { a.openWith(server, "") }
+
+// openWith is open with the password typed for server in the Add
+// computer dialog. Only that computer's new tab gets it; a tab already
+// open keeps its own.
+func (a *app) openWith(server, pass string) {
+	if _, err := viewer.ParseURL(server); err != nil {
+		a.errText = err.Error()
+		return
+	}
+	a.errText = ""
+	for _, t := range a.tabs {
+		if t.target == server {
+			a.activate(t)
+			return
+		}
+	}
+	t := a.newTab()
+	t.target, t.server, t.pass = server, server, pass
+	a.connectTo(t, server, false)
+}
+
+// connectTo connects t to server; again tells a reconnect, which asks
 // nothing the user already answered for this session.
-func (a *app) connectTo(server string, again bool) {
-	if a.connecting {
+func (a *app) connectTo(t *tab, server string, again bool) {
+	if t.connecting {
 		return
 	}
 	target, err := viewer.ParseURL(server)
 	if err != nil {
-		a.errText = err.Error()
+		t.errText = err.Error()
 		return
 	}
 	a.proto = target.Scheme // the Add computer dialog starts there next time
 	if target.Scheme == viewer.SchemeRDP {
-		a.connectRDP(target, server)
+		a.connectRDP(t, target, server)
 		return
 	}
-	a.disconnectRDP()
+	a.disconnectRDP(t)
 	addr := target.Addr()
 	if !again {
 		a.cfg.AddServer(server)
@@ -852,10 +846,10 @@ func (a *app) connectTo(server string, again bool) {
 		a.saveConfig()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.connecting, a.cancel = true, cancel
-	a.step, a.target = locales.StepConnecting, server
+	t.connecting, t.cancel = true, cancel
+	t.step, t.target = locales.StepConnecting, server
 	if !again {
-		a.errText = ""
+		t.errText = ""
 	}
 	// An explicit vnc://, ard:// or rdp:// scheme pins the protocol; a bare
 	// address stays VNC and Apple's dialect is still detected on the wire.
@@ -863,20 +857,20 @@ func (a *app) connectTo(server string, again bool) {
 	secTypes := a.secTypes
 	switch {
 	case a.cfg.SecureOnly:
-		secTypes = slices.DeleteFunc(slices.Clone(viewer.SecTypesSecure), func(t uint32) bool {
-			return (a.secTypes != nil && !slices.Contains(a.secTypes, t)) ||
-				(pinned != nil && !slices.Contains(pinned, t))
+		secTypes = slices.DeleteFunc(slices.Clone(viewer.SecTypesSecure), func(st uint32) bool {
+			return (a.secTypes != nil && !slices.Contains(a.secTypes, st)) ||
+				(pinned != nil && !slices.Contains(pinned, st))
 		})
 	case pinned != nil:
 		secTypes = pinned
 	}
-	cfg, user, pass := a.cfg, a.user, a.pass
+	cfg, user, pass := a.cfg, a.user, t.pass
 	if c := cfg.Computers[server]; c.Username != "" {
 		user = c.Username // the account this server last took
 	}
 	limit30 := false
 	if again {
-		pass, limit30 = a.sessPass, a.rc.limit30
+		limit30 = t.rc.limit30
 	}
 	lg := a.log.With("addr", addr)
 	lg.Info("connecting", "server", server, "reconnect", again)
@@ -896,19 +890,19 @@ func (a *app) connectTo(server string, again bool) {
 			Logger:        lg,
 			MaxClipboard:  cfg.ClipboardKiB << 10,
 			SecurityTypes: secTypes,
-			OnSecurityType: func(t uint32) {
-				secType.Store(t)
+			OnSecurityType: func(st uint32) {
+				secType.Store(st)
 				a.post(func() {
-					if a.connecting {
-						a.step = locales.StepAuthenticating
+					if t.connecting {
+						t.step = locales.StepAuthenticating
 					}
 				})
 			},
 			Password: func() (string, string, error) {
-				t := secType.Load()
-				if viewer.PasswordUnprotected(t) && !again && !warned && !slices.Contains(cfg.Unencrypted, addr) {
+				st := secType.Load()
+				if viewer.PasswordUnprotected(st) && !again && !warned && !slices.Contains(cfg.Unencrypted, addr) {
 					warned = true
-					if err := a.warnUnencrypted(ctx, addr, t); err != nil {
+					if err := a.warnUnencrypted(ctx, t, addr, st); err != nil {
 						return "", "", err
 					}
 				}
@@ -923,13 +917,13 @@ func (a *app) connectTo(server string, again bool) {
 				// ARD, Mac authentication, MS Logon II and Plain need the
 				// account name too; a password alone authenticates nothing.
 				msg, prefill := "", ""
-				if viewer.NeedsUsername(t) && user == "" {
+				if viewer.NeedsUsername(st) && user == "" {
 					msg, prefill = locales.AuthNeedsAccount(), pass
 				}
 				if pass == "" || msg != "" {
 					r, err := ask(a, ctx, func() {
-						a.authOpen, a.authUser, a.authPass, a.authMsg = true, user, prefill, msg
-					}, &a.authReply)
+						t.authOpen, t.authUser, t.authPass, t.authMsg = true, user, prefill, msg
+					}, &t.authReply)
 					if err != nil {
 						return "", "", err
 					}
@@ -941,9 +935,9 @@ func (a *app) connectTo(server string, again bool) {
 				used, usedUser = pass, user
 				return user, pass, nil
 			},
-			VerifyHostKey: func(key []byte, fp string) error { return a.verifyHostKey(ctx, addr, key, fp) },
+			VerifyHostKey: func(key []byte, fp string) error { return a.verifyHostKey(ctx, t, addr, key, fp) },
 			VerifyCertificate: func(certs []*x509.Certificate, verr error) error {
-				return a.verifyCert(ctx, addr, certs[0], verr)
+				return a.verifyCert(ctx, t, addr, certs[0], verr)
 			},
 		}
 		if cfg.HighPerformance {
@@ -952,8 +946,8 @@ func (a *app) connectTo(server string, again bool) {
 			}
 			if cfg.TwoDisplays {
 				w, h := 0, 0
-				if a.sess != nil {
-					w, h = a.sess.Size()
+				if t.sess != nil {
+					w, h = t.sess.Size()
 				}
 				hp.Displays = rfb.TwoVirtual(image.Pt(w, h))
 			}
@@ -984,14 +978,14 @@ func (a *app) connectTo(server string, again bool) {
 		if usedUser == "" {
 			usedUser = user // no password was asked for, as with security type None
 		}
-		a.post(func() { a.connected(s, server, addr, usedUser, used, err) })
+		a.post(func() { a.connected(t, s, server, addr, usedUser, used, err) })
 		if s == nil {
 			return
 		}
 		lg.Info("connected", "security", viewer.SecTypeName(s.SecurityType()), "encrypted", s.Encrypted())
 		err = s.Run()
 		lg.Info("session ended", "err", err)
-		a.post(func() { a.disconnected(s, err) })
+		a.post(func() { a.disconnected(t, s, err) })
 	}()
 }
 
@@ -1014,11 +1008,11 @@ func ask[T any](a *app, ctx context.Context, open func(), reply *chan T) (T, err
 
 // warnUnencrypted asks before a password goes over a connection that
 // does not protect it.
-func (a *app) warnUnencrypted(ctx context.Context, addr string, secType uint32) error {
+func (a *app) warnUnencrypted(ctx context.Context, t *tab, addr string, secType uint32) error {
 	i, err := ask(a, ctx, func() {
-		a.warnOpen = true
-		a.warnMsg = locales.UnencryptedMessage(addr, viewer.SecTypeName(secType))
-	}, &a.warnReply)
+		t.warnOpen = true
+		t.warnMsg = locales.UnencryptedMessage(addr, viewer.SecTypeName(secType))
+	}, &t.warnReply)
 	if err != nil {
 		return err
 	}
@@ -1037,15 +1031,15 @@ func (a *app) warnUnencrypted(ctx context.Context, addr string, secType uint32) 
 	return nil
 }
 
-func (a *app) verifyHostKey(ctx context.Context, addr string, key []byte, fp string) error {
+func (a *app) verifyHostKey(ctx context.Context, t *tab, addr string, key []byte, fp string) error {
 	err := a.known.Check(addr, key, fp)
 	if !errors.Is(err, viewer.ErrUnknownHost) {
 		return err
 	}
 	i, err := ask(a, ctx, func() {
-		a.keyOpen = true
-		a.keyMsg = locales.HostKeyMessage(addr, fp)
-	}, &a.keyReply)
+		t.keyOpen = true
+		t.keyMsg = locales.HostKeyMessage(addr, fp)
+	}, &t.keyReply)
 	if err != nil {
 		return err
 	}
@@ -1057,16 +1051,16 @@ func (a *app) verifyHostKey(ctx context.Context, addr string, key []byte, fp str
 
 // verifyCert asks about a certificate that failed verification, unless
 // the user trusted it before; a changed one is refused.
-func (a *app) verifyCert(ctx context.Context, addr string, cert *x509.Certificate, verr error) error {
+func (a *app) verifyCert(ctx context.Context, t *tab, addr string, cert *x509.Certificate, verr error) error {
 	err := a.known.CheckCert(addr, cert.Raw)
 	if !errors.Is(err, viewer.ErrUnknownHost) {
 		return err
 	}
 	i, err := ask(a, ctx, func() {
-		a.certOpen = true
-		a.certMsg = locales.CertMessage(addr, fmt.Sprint(verr), cert.Subject.String(), cert.Issuer.String(),
+		t.certOpen = true
+		t.certMsg = locales.CertMessage(addr, fmt.Sprint(verr), cert.Subject.String(), cert.Issuer.String(),
 			viewer.CertFingerprint(cert.Raw))
-	}, &a.certReply)
+	}, &t.certReply)
 	if err != nil {
 		return err
 	}
@@ -1090,44 +1084,32 @@ func answer(c *ui.Context, open *bool, reply *chan int, title, msg string, butto
 	*reply = nil
 }
 
-// prompts shows the questions of the connection goroutine.
-func (a *app) prompts(c *ui.Context) {
-	answerAuth := func(r creds) {
-		if a.authReply != nil {
-			a.authReply <- r
-			a.authReply = nil
-		}
-		a.authOpen, a.authMsg = false, ""
+// askClose says whether the window stays open to ask first: closing it
+// ends more than one session.
+func (a *app) askClose() bool {
+	if a.closeOK || a.liveTabs() < 2 {
+		return false
 	}
-	if ui.Modal(c, &a.authOpen, func() {
-		ui.Text(c, locales.AuthTitle()).Bold()
-		if a.authMsg != "" {
-			ui.Text(c, a.authMsg).FontSize(12).Wrap()
+	a.closeAsk = true
+	a.updateGrab()
+	return true
+}
+
+// prompts shows the questions of t's connection goroutine, t nil for
+// none, and the window's dialogs. A background tab's questions wait for
+// it to be shown.
+func (a *app) prompts(c *ui.Context, t *tab) {
+	if t != nil {
+		authPrompt(c, t)
+	}
+	if a.closeAsk {
+		if ui.AlertDialog(c, &a.closeAsk, locales.CloseSessionsTitle(a.liveTabs()), locales.CloseSessionsMessage(),
+			locales.Cancel(), locales.CloseSessions()) == 1 {
+			a.closeOK = true
+			if a.win != nil {
+				a.win.Close()
+			}
 		}
-		submit := false
-		ui.Field(c, locales.Username(), func() {
-			in := ui.TextInput(c, &a.authUser)
-			if a.authMsg != "" {
-				in.AutoFocus() // the account is what is missing
-			}
-		})
-		ui.Field(c, locales.Password(), func() {
-			in := ui.TextInput(c, &a.authPass).Password()
-			if a.authMsg == "" {
-				in.AutoFocus()
-			}
-			submit = in.Submitted()
-		})
-		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if ui.Button(c, locales.Cancel()).Clicked() {
-				answerAuth(creds{})
-			}
-			if ui.PrimaryButton(c, locales.Ok()).Clicked() || submit {
-				answerAuth(creds{a.authUser, a.authPass, true})
-			}
-		})
-	}).Dismissed() {
-		answerAuth(creds{})
 	}
 	if ui.Modal(c, &a.credOpen, func() {
 		ui.Text(c, locales.CredentialTitle(a.credFor)).Bold()
@@ -1152,156 +1134,220 @@ func (a *app) prompts(c *ui.Context) {
 	}).Dismissed() {
 		a.credOpen = false
 	}
-	if ui.Modal(c, &a.dlOpen, func() {
-		ui.Text(c, locales.DownloadTitle()).Bold()
+	if t != nil {
+		a.tabPrompts(c, t)
+	}
+}
+
+// authPrompt asks for the account and password of t's connection.
+func authPrompt(c *ui.Context, t *tab) {
+	answerAuth := func(r creds) {
+		if t.authReply != nil {
+			t.authReply <- r
+			t.authReply = nil
+		}
+		t.authOpen, t.authMsg = false, ""
+	}
+	if ui.Modal(c, &t.authOpen, func() {
+		ui.Text(c, locales.AuthTitle()).Bold()
+		if t.authMsg != "" {
+			ui.Text(c, t.authMsg).FontSize(12).Wrap()
+		}
 		submit := false
-		ui.Field(c, locales.RemotePath(), func() {
-			submit = ui.TextInput(c, &a.dlPath).AutoFocus().Submitted()
+		ui.Field(c, locales.Username(), func() {
+			in := ui.TextInput(c, &t.authUser)
+			if t.authMsg != "" {
+				in.AutoFocus() // the account is what is missing
+			}
+		})
+		ui.Field(c, locales.Password(), func() {
+			in := ui.TextInput(c, &t.authPass).Password()
+			if t.authMsg == "" {
+				in.AutoFocus()
+			}
+			submit = in.Submitted()
 		})
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 			if ui.Button(c, locales.Cancel()).Clicked() {
-				a.dlOpen = false
+				answerAuth(creds{})
 			}
-			if ui.PrimaryButton(c, locales.Download()).Clicked() || submit {
-				a.startDownload()
+			if ui.PrimaryButton(c, locales.Ok()).Clicked() || submit {
+				answerAuth(creds{t.authUser, t.authPass, true})
 			}
 		})
 	}).Dismissed() {
-		a.dlOpen = false
+		answerAuth(creds{})
 	}
-	if j := a.xfers.Asking(); j != nil && j.Conflict != nil {
-		a.conflictOn = true
-		if ui.Modal(c, &a.conflictOn, func() {
+}
+
+// tabPrompts shows t's other questions: the download form, a name
+// clash, and the alerts of its connection goroutine.
+func (a *app) tabPrompts(c *ui.Context, t *tab) {
+	if ui.Modal(c, &t.dlOpen, func() {
+		ui.Text(c, locales.DownloadTitle()).Bold()
+		submit := false
+		ui.Field(c, locales.RemotePath(), func() {
+			submit = ui.TextInput(c, &t.dlPath).AutoFocus().Submitted()
+		})
+		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			if ui.Button(c, locales.Cancel()).Clicked() {
+				t.dlOpen = false
+			}
+			if ui.PrimaryButton(c, locales.Download()).Clicked() || submit {
+				a.startDownload(t)
+			}
+		})
+	}).Dismissed() {
+		t.dlOpen = false
+	}
+	if j := t.xfers.Asking(); j != nil && j.Conflict != nil {
+		t.conflictOn = true
+		if ui.Modal(c, &t.conflictOn, func() {
 			ui.Text(c, locales.ConflictTitle()).Bold()
 			p := j.Conflict.Path
 			ui.Text(c, locales.ConflictMessage(filepath.Base(p), filepath.Dir(p))).Wrap()
-			ui.Checkbox(c, &a.conflictAll, locales.ConflictApplyAll())
+			ui.Checkbox(c, &t.conflictAll, locales.ConflictApplyAll())
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, locales.ConflictSkip()).Clicked() {
-					a.answerConflict(j, viewer.Skip, a.conflictAll)
+					t.answerConflict(j, viewer.Skip, t.conflictAll)
 				}
 				if ui.Button(c, locales.ConflictKeepBoth()).Clicked() {
-					a.answerConflict(j, viewer.KeepBoth, a.conflictAll)
+					t.answerConflict(j, viewer.KeepBoth, t.conflictAll)
 				}
 				if ui.PrimaryButton(c, locales.ConflictOverwrite()).Clicked() {
-					a.answerConflict(j, viewer.Overwrite, a.conflictAll)
+					t.answerConflict(j, viewer.Overwrite, t.conflictAll)
 				}
 			})
 		}).Dismissed() {
 			// Escape or a click outside: skip this and the rest.
-			a.answerConflict(j, viewer.Skip, true)
+			t.answerConflict(j, viewer.Skip, true)
 		}
 	}
-	answer(c, &a.keyOpen, &a.keyReply, locales.HostKeyTitle(), a.keyMsg, locales.Reject(), locales.Accept())
-	answer(c, &a.warnOpen, &a.warnReply, locales.UnencryptedTitle(), a.warnMsg,
+	answer(c, &t.keyOpen, &t.keyReply, locales.HostKeyTitle(), t.keyMsg, locales.Reject(), locales.Accept())
+	answer(c, &t.warnOpen, &t.warnReply, locales.UnencryptedTitle(), t.warnMsg,
 		locales.DontConnect(), locales.AlwaysForServer(), locales.Continue())
-	answer(c, &a.certOpen, &a.certReply, locales.CertTitle(), a.certMsg,
+	answer(c, &t.certOpen, &t.certReply, locales.CertTitle(), t.certMsg,
 		locales.Reject(), locales.AlwaysAccept(), locales.AcceptOnce())
 }
 
-func (a *app) connected(s *viewer.Session, server, addr, user, pass string, err error) {
-	a.connecting, a.cancel = false, nil
-	a.authOpen, a.keyOpen, a.warnOpen, a.certOpen = false, false, false, false
+func (a *app) connected(t *tab, s *viewer.Session, server, addr, user, pass string, err error) {
+	if !a.has(t) {
+		if s != nil {
+			s.Close() // the tab was closed while it connected
+		}
+		return
+	}
+	t.connecting, t.cancel = false, nil
+	t.authOpen, t.keyOpen, t.warnOpen, t.certOpen = false, false, false, false
+	// A computer removed while its tab was open stays removed: a
+	// reconnect writes nothing of it.
+	saved := slices.Contains(a.cfg.Servers, server)
 	if err != nil {
-		if c := a.cfg.Computers[server]; c.Last.IsZero() && c.Name == "" && !c.Never {
+		if c := a.cfg.Computers[server]; saved && c.Last.IsZero() && c.Name == "" && !c.Never {
 			c.Never = true // it did not connect once
 			a.cfg.Computers[server] = c
 			a.saveConfig()
 		}
-		a.errText = errorText(err)
+		t.errText = errorText(err)
 		var ae *rfb.AuthError
-		if a.rc.active && !errors.As(err, &ae) {
-			a.scheduleReconnect()
+		if errors.As(err, &ae) {
+			t.pass = "" // Retry asks again
+		}
+		if t.rc.active && ae == nil {
+			a.scheduleReconnect(t)
 		} else {
-			a.cancelReconnect()
-			a.xfers.GiveUp()
+			t.cancelReconnect() // the tab shows the error; its transfers wait for Retry
 		}
 		return
 	}
 	if s == nil {
-		a.cancelReconnect()
-		a.xfers.GiveUp()
+		t.cancelReconnect()
 		return // canceled
 	}
-	a.cancelReconnect()
-	a.sess, a.addr, a.sessServer, a.sessPass, a.secType = s, addr, server, pass, s.SecurityType()
+	t.cancelReconnect()
+	t.sess, t.addr, t.pass, t.secType = s, addr, pass, s.SecurityType()
 	s.SetRotation(a.cfg.Orientation)
-	a.step = locales.StepFirstFrame
-	a.cfg.Computers[server] = viewer.Computer{
-		Name: a.cfg.Computers[server].Name, Username: user, Last: time.Now(),
+	t.step = locales.StepFirstFrame
+	if saved {
+		t.server = server
+		c := a.cfg.Computers[server]
+		c.Username, c.Last = user, time.Now()
+		a.cfg.Computers[server] = c
+		a.credRows = nil // the credentials page reads them again
+		// The desktop name is kept by setName when the server tells it.
+		a.saveConfig()
 	}
-	a.credRows = nil // the credentials page reads them again
-	// The desktop name is kept by setName when the server tells it.
-	a.saveConfig()
-	a.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
-	a.stats = statsSample{}
-	a.name, a.buttons, a.ptrMove, a.pass, a.errText = "", 0, false, "", ""
-	a.wheelPend = nil
-	a.ungrabbed, a.menuOpen, a.srvLED = false, false, keymap.LEDUnknown
-	a.dyn, a.dynUrgent, a.dynRefused, a.dynHint = viewer.Resizer{}, true, false, false
-	a.hpNote, a.hpFailed = "", false
-	a.setTitle(s.Encrypted())
-	s.OnName = a.setName
+	t.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
+	t.stats = statsSample{}
+	t.name, t.buttons, t.ptrMove, t.errText = "", 0, false, ""
+	t.wheelPend = nil
+	t.ungrabbed, t.menuOpen, t.srvLED = false, false, keymap.LEDUnknown
+	t.dyn, t.dynUrgent, t.dynRefused, t.dynHint = viewer.Resizer{}, true, false, false
+	t.hpNote, t.hpFailed = "", false
+	a.setTitle(t, s.Encrypted())
+	s.OnName = func(name string) { a.setName(t, name) }
 	s.OnEncrypted = func(encrypted bool) {
-		if a.sess == s {
-			a.setTitle(encrypted)
-			if encrypted {
-				a.sendClipboard() // files copied before the session came up
+		if t.sess == s && a.has(t) {
+			a.setTitle(t, encrypted)
+			if encrypted && t == a.active {
+				a.sendClipboard(t) // files copied before the session came up
 			}
 			if s.FileCopyAvailable() {
-				a.xfers.Attach(s, server) // resumes interrupted transfers
+				t.xfers.Attach(s, server) // resumes interrupted transfers
 			}
 		}
 	}
 	s.OnClipboard = func(text string) {
-		if !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
+		// A tab in the background does not replace what the user copied.
+		if t == a.active && t.sess == s && !a.cfg.ViewOnly && a.cfg.AcceptClipboard {
 			a.svc.WriteClipboard(text)
 		}
 	}
 	s.OnBell = a.beep
-	s.OnLED = a.serverLED
-	s.OnResizeRefused = a.resizeRefused
-	s.OnMediaFallback = a.mediaFallback
+	s.OnLED = func(state uint32) { a.serverLED(t, state) }
+	s.OnResizeRefused = func() { a.resizeRefused(t) }
+	s.OnMediaFallback = func(err error) { a.mediaFallback(t, err) }
 	if s.FileCopyAvailable() {
-		a.xfers.Attach(s, server)
+		t.xfers.Attach(s, server)
 	}
-	a.sendClipboard()
+	if t != a.active {
+		s.SetBackground(true)
+		s.SetMuted(true)
+		return
+	}
+	a.sendClipboard(t)
 	a.fullScreen(a.cfg.FullScreen)
 	a.updateGrab()
 }
 
+// disconnect closes the active tab.
 func (a *app) disconnect() {
-	a.cancelReconnect()
-	a.disconnectRDP()
-	if a.sess != nil {
-		a.sess.Close()
-		a.endSession()
+	if t := a.active; t != nil {
+		a.closeTab(t)
 	}
-	a.xfers.GiveUp()
 }
 
 // connectRDP starts an embedded Microsoft Remote Desktop session. The
 // system ActiveX control brings NLA, codecs, audio and clipboard.
-func (a *app) connectRDP(target viewer.Target, server string) {
+func (a *app) connectRDP(t *tab, target viewer.Target, server string) {
 	host, port := target.Host, target.Port
 	if a.win == nil {
 		return
 	}
-	a.disconnect()
-	a.connecting = false
-	a.errText = ""
+	t.connecting = false
+	t.errText = ""
 	r, err := win32.NewRDP(a.win.NativeHandle())
 	if err != nil {
-		a.errText = err.Error()
+		t.errText = err.Error()
 		a.log.Warn("RDP control", "err", err)
 		return
 	}
-	a.rdp, a.rdpAddr = r, server
+	t.rdp, t.rdpAddr = r, server
 	a.cfg.AddServer(server)
 	a.cfg.Username = a.user
 	a.saveConfig()
 	addr := target.Addr()
-	user, pass := a.user, a.pass
+	user, pass := a.user, t.pass // what was typed for this computer only
 	if c := a.cfg.Computers[server]; user == "" && c.Username != "" {
 		user = c.Username
 	}
@@ -1313,9 +1359,11 @@ func (a *app) connectRDP(target viewer.Target, server string) {
 			pass = c.Pass
 		}
 	}
-	a.name = "RDP " + host
-	a.title = a.name + " - " + appName
-	a.win.SetTitle(a.title)
+	t.name = "RDP " + host
+	t.title = t.name + " - " + appName
+	if t == a.active {
+		a.win.SetTitle(t.title)
+	}
 	// Below the title bar; rdpView fits it again each frame.
 	w, h := win32.ClientRect(a.win.NativeHandle())
 	top := a.rdpTop(a.win.IsFullScreen())
@@ -1326,26 +1374,37 @@ func (a *app) connectRDP(target viewer.Target, server string) {
 	if i := strings.LastIndex(user, `\`); i >= 0 {
 		domain, user = user[:i], user[i+1:]
 	}
+	// A fixed size and scale of the computer, kept for the whole session.
+	c := a.cfg.Computers[server]
+	t.rdpFixW, t.rdpFixH, t.rdpScale = int32(c.Width), int32(c.Height), int32(c.Scale)
+	t.rdpLocal, t.rdpZoomed = c.LocalScale, false
+	if t.rdpLocal && (t.rdpFixW <= 0 || t.rdpFixH <= 0) {
+		// The control is created with the size of the window at 100%.
+		fw, fh := localDesktop(w, h-top, t.localScale(r))
+		r.SetDesktop(fw, fh)
+	} else {
+		r.SetDesktop(t.rdpFixW, t.rdpFixH)
+	}
 	if err := r.Connect(host, port, user, pass, domain); err != nil {
 		a.log.Warn("RDP connect", "err", err)
-		a.errText = err.Error()
-		a.disconnectRDP()
+		t.errText = err.Error()
+		a.disconnectRDP(t)
 		return
 	}
 	a.updateGrab()
 	time.AfterFunc(5*time.Second, func() {
 		mygo.RunOnMain(func() {
-			if a.rdp == r {
+			if t.rdp == r {
 				w, h := r.RemoteSize()
 				connected := r.Connected()
 				a.log.Info("RDP state", "connected", connected, "width", w, "height", h)
 				// The control authenticates by itself; once it says it is
 				// in, the account it was given is the one that worked.
-				if connected && a.cfg.Remember && pass != "" {
+				if connected && a.cfg.Remember && pass != "" && slices.Contains(a.cfg.Servers, server) {
 					a.saveCredential(addr, credential{User: account, Pass: pass})
-					a.cfg.Computers[server] = viewer.Computer{
-						Name: a.cfg.Computers[server].Name, Username: account, Last: time.Now(),
-					}
+					c := a.cfg.Computers[server]
+					c.Username, c.Last = account, time.Now()
+					a.cfg.Computers[server] = c
 					a.saveConfig()
 					a.credRows = nil
 				}
@@ -1356,102 +1415,140 @@ func (a *app) connectRDP(target viewer.Target, server string) {
 
 // scheduleRDPResize changes the remote desktop once the window size has
 // been stable for 250 ms, matching the Mac viewer's dynamic resolution.
-func (a *app) scheduleRDPResize(w, h int32) {
-	if a.rdp == nil || (w == a.rdpW && h == a.rdpH && a.rdpResize != nil) {
+func (a *app) scheduleRDPResize(t *tab, w, h int32) {
+	if t.rdp == nil || (w == t.rdpW && h == t.rdpH && t.rdpResize != nil) {
 		return
 	}
-	a.rdpW, a.rdpH = w, h
-	if a.rdpResize != nil {
-		a.rdpResize.Stop()
+	t.rdpW, t.rdpH = w, h
+	a.armRDPResize(t, 250*time.Millisecond, 0)
+}
+
+// armRDPResize runs the resize after d. A fixed size, or a fixed scale, is
+// sent once the session is up, so it tries again each second until then.
+func (a *app) armRDPResize(t *tab, d time.Duration, tries int) {
+	if t.rdpResize != nil {
+		t.rdpResize.Stop()
 	}
-	a.rdpResize = time.AfterFunc(250*time.Millisecond, func() {
+	t.rdpResize = time.AfterFunc(d, func() {
 		mygo.RunOnMain(func() {
-			if a.rdp == nil {
+			r := t.rdp
+			if r == nil {
 				return
 			}
-			r := a.rdp
-			applied, err := r.ResizeRemoteNow(a.rdpW, a.rdpH)
+			w, h := t.rdpW, t.rdpH
+			fixed := t.rdpFixW > 0 && t.rdpFixH > 0
+			if fixed {
+				w, h = t.rdpFixW, t.rdpFixH
+			}
+			scale := t.rdpScale
+			if t.rdpLocal {
+				if !fixed {
+					w, h = localDesktop(w, h, t.localScale(r))
+				}
+				scale = 100
+			}
+			applied, err := r.ResizeRemoteNow(w, h, scale)
 			if applied {
-				a.log.Info("RDP resize", "width", a.rdpW, "height", a.rdpH, "err", err)
+				rw, rh := r.RemoteSize()
+				a.log.Info("RDP resize", "width", w, "height", h, "scale", r.Scale(), "fixed", fixed,
+					"localScale", t.rdpLocal, "remoteWidth", rw, "remoteHeight", rh, "err", err)
+				if fixed && !t.rdpLocal {
+					// A fixed desktop larger than the window is scaled
+					// down to it; smart sizing never scales up.
+					if err := r.SetSmartSizing(true); err != nil {
+						a.log.Warn("RDP smart sizing", "err", err)
+					}
+				}
+			}
+			if t.rdpLocal && !t.rdpZoomed && r.Connected() {
+				// The control zooms the smaller desktop up to the window,
+				// as mstsc's Zoom menu: smart sizing only scales down.
+				z := t.localScale(r)
+				_ = r.SetSmartSizing(false)
+				zerr := r.SetZoom(z)
+				t.rdpZoomed = zerr == nil
+				a.log.Info("RDP zoom", "percent", z, "err", zerr)
+			}
+			if (fixed || t.rdpLocal || t.rdpScale > 0) && (err != nil || !applied && !r.Connected() || t.rdpLocal && !t.rdpZoomed) && tries < 120 {
+				a.armRDPResize(t, time.Second, tries+1)
 			}
 		})
 	})
 }
 
-func (a *app) disconnectRDP() {
-	if a.rdpResize != nil {
-		a.rdpResize.Stop()
-		a.rdpResize = nil
+func (a *app) disconnectRDP(t *tab) {
+	if t.rdpResize != nil {
+		t.rdpResize.Stop()
+		t.rdpResize = nil
 	}
-	if a.rdp != nil {
-		a.rdp.Close()
-		a.rdp = nil
+	if t.rdp != nil {
+		t.rdp.Close()
+		t.rdp = nil
 	}
-	a.rdpAddr = ""
-	a.setTitle(false)
+	t.rdpAddr = ""
+	a.setTitle(t, false)
 	a.updateGrab()
 }
 
-func (a *app) endSession() {
-	a.saveThumbnail(a.sessServer, a.sess.Shown)
-	a.sess, a.emb = nil, nil
-	a.xfers.Detach()
-	if a.sc != nil {
+func (a *app) endSession(t *tab) {
+	a.saveThumbnail(t.server, t.sess.Shown)
+	t.sess, t.emb = nil, nil
+	t.xfers.Detach()
+	if a.sc != nil && t == a.active {
 		a.sc.Reset() // the server is gone: nothing to release
 	}
-	a.menuOpen = false
-	a.setTitle(false)
+	t.menuOpen = false
+	a.setTitle(t, false)
 	a.updateGrab()
-	a.fullScreen(false)
 }
 
-func (a *app) disconnected(s *viewer.Session, err error) {
-	if a.sess != s {
+func (a *app) disconnected(t *tab, s *viewer.Session, err error) {
+	if t.sess != s || !a.has(t) {
 		return // closed by the user
 	}
-	server := a.sessServer
-	a.endSession()
+	server := t.target
+	a.endSession(t)
 	if err == nil {
-		a.xfers.GiveUp()
+		a.closeTab(t) // the server ended it
 		return
 	}
-	a.errText = locales.Disconnected(errorText(err))
+	if t == a.active {
+		a.fullScreen(false)
+	}
+	t.errText = locales.Disconnected(errorText(err))
 	if a.cfg.Reconnect {
-		a.rc = reconnect{server: server, gen: a.rc.gen, limit30: s.Stats().MediaFrameRate30}
-		a.scheduleReconnect()
-	} else {
-		a.xfers.GiveUp()
+		t.rc = reconnect{server: server, gen: t.rc.gen, limit30: s.Stats().MediaFrameRate30}
+		a.scheduleReconnect(t)
 	}
 }
 
 // scheduleReconnect waits before the next try, or gives up.
-func (a *app) scheduleReconnect() {
-	d, ok := viewer.ReconnectDelay(a.rc.attempt)
+func (a *app) scheduleReconnect(t *tab) {
+	d, ok := viewer.ReconnectDelay(t.rc.attempt)
 	if !ok {
-		a.log.Info("giving up reconnecting", "server", a.rc.server)
-		a.cancelReconnect()
-		a.xfers.GiveUp()
+		a.log.Info("giving up reconnecting", "server", t.rc.server)
+		t.cancelReconnect() // the tab shows the error; its transfers wait for Retry
 		return
 	}
-	a.rc.active = true
-	a.rc.gen++
-	gen := a.rc.gen
-	a.log.Info("reconnecting", "server", a.rc.server, "attempt", a.rc.attempt+1, "in", d)
-	a.rc.timer = time.AfterFunc(d, func() {
+	t.rc.active = true
+	t.rc.gen++
+	gen := t.rc.gen
+	a.log.Info("reconnecting", "server", t.rc.server, "attempt", t.rc.attempt+1, "in", d)
+	t.rc.timer = time.AfterFunc(d, func() {
 		a.post(func() {
-			if a.rc.active && a.rc.gen == gen && a.sess == nil {
-				a.rc.attempt++
-				a.connectTo(a.rc.server, true)
+			if a.has(t) && t.rc.active && t.rc.gen == gen && t.sess == nil {
+				t.rc.attempt++
+				a.connectTo(t, t.rc.server, true)
 			}
 		})
 	})
 }
 
-func (a *app) cancelReconnect() {
-	if a.rc.timer != nil {
-		a.rc.timer.Stop()
+func (t *tab) cancelReconnect() {
+	if t.rc.timer != nil {
+		t.rc.timer.Stop()
 	}
-	a.rc = reconnect{gen: a.rc.gen + 1}
+	t.rc = reconnect{gen: t.rc.gen + 1}
 }
 
 // tigerParams is TigerVNC's parameter set holding cfg's values.
@@ -1582,7 +1679,7 @@ func takeShot(a *app, win *mygo.Window, path string, waitForSession bool) {
 	if waitForSession {
 		for time.Now().Before(deadline) {
 			up := make(chan bool)
-			a.post(func() { up <- a.sess != nil })
+			a.post(func() { up <- a.active != nil && a.active.sess != nil })
 			if <-up {
 				break
 			}
@@ -1690,21 +1787,29 @@ func main() {
 			Content:           ui.View(a.view),
 		})
 		a.win, a.post = win, win.Update
-		a.xfers.Log = a.log
 		if shotPath != "" {
 			go takeShot(a, win, shotPath, start != "")
 		}
 		if err := win32.RegisterFileDrop(win.NativeHandle(), a.dropFiles); err != nil {
 			a.log.Warn("file drop", "err", err)
 		}
+		win.OnClose(func(e *mygo.CloseEvent) {
+			if a.askClose() {
+				e.PreventDefault()
+			}
+		})
 		win.OnClosed(func() {
 			win32.UnregisterFileDrop()
-			a.xfers.Close() // staged downloads go; nothing is kept across runs
+			for _, t := range a.tabs {
+				t.xfers.Close() // staged downloads go; nothing is kept across runs
+			}
 		})
 		a.setLocale = mygo.App.SetLocale
 		mygo.App.OnLocaleChanged(func(string) {
-			a.title = "" // said again in the new language
-			a.setTitle(a.sess != nil && a.sess.Encrypted())
+			for _, t := range a.tabs {
+				t.title = "" // said again in the new language
+				a.setTitle(t, t.sess != nil && t.sess.Encrypted())
+			}
 		})
 		a.beep = mygo.Shell.Beep
 		a.displays = func() []string {
@@ -1769,13 +1874,15 @@ func main() {
 		}
 		wireKeyboard(a, win)
 		wireTouch(a, win)
-		if _, err := win32.WatchClipboard(func() { a.post(a.sendClipboard) }); err != nil {
+		if _, err := win32.WatchClipboard(func() { a.post(func() { a.sendClipboard(a.active) }) }); err != nil {
 			a.log.Warn("clipboard listener", "err", err)
 		}
 		win.OnClosed(func() {
-			a.disconnectRDP()
-			if a.sess != nil {
-				a.sess.Close()
+			for _, t := range a.tabs {
+				a.disconnectRDP(t)
+				if t.sess != nil {
+					t.sess.Close()
+				}
 			}
 		})
 		if start != "" {
@@ -1785,7 +1892,7 @@ func main() {
 				// Let the window show and the message loop run first: the
 				// RDP ActiveX is an in-place OLE control and needs both.
 				time.AfterFunc(500*time.Millisecond, func() {
-					mygo.RunOnMain(a.connect)
+					a.post(a.connect) // Update draws the frame after
 				})
 			} else {
 				a.connect()
@@ -1800,6 +1907,43 @@ func main() {
 	}
 }
 
+// hookKey takes a key message of the window for the active tab before
+// mygo sees it; true drops the message.
+func (a *app) hookKey(k keymap.WinKey) bool {
+	t := a.active
+	if t != nil && t.rdp != nil {
+		// The control gets every key but two: Ctrl+Alt+Shift+Q closes
+		// its tab, and the tab shortcuts switch tabs.
+		if k.VK == 0x51 && !k.Up && k.State[0x11]&0x80 != 0 &&
+			k.State[0x12]&0x80 != 0 && k.State[0x10]&0x80 != 0 {
+			a.post(func() { a.closeTab(t) })
+			return true
+		}
+		if act := hookTabAction(k, a.mods); act != keymap.ActionNone {
+			a.post(func() { a.tabAction(act) })
+			return true
+		}
+		return false
+	}
+	if t == nil || t.sess == nil || a.cfg.ViewOnly || a.modal() {
+		return false
+	}
+	// A tab change forgets the keys held for the shortcut handler, and a
+	// Remote Desktop tab never gave them to it: with the modifiers still
+	// down, the next tab shortcut is read from the key state.
+	if act := hookTabAction(k, a.mods); act != keymap.ActionNone && (a.sc == nil || !a.sc.Bypass()) {
+		a.tabAction(act)
+		return true
+	}
+	a.keys(a.kb.Handle(k))
+	if id, ok := a.kb.AltGrTimer(); ok {
+		time.AfterFunc(100*time.Millisecond, func() {
+			mygo.RunOnMain(func() { a.keys(a.kb.ExpireAltGr(id)) })
+		})
+	}
+	return true
+}
+
 // wireKeyboard sends the window's keys to the session while one runs,
 // before mygo sees them.
 func wireKeyboard(a *app, win *mygo.Window) {
@@ -1807,27 +1951,7 @@ func wireKeyboard(a *app, win *mygo.Window) {
 	a.sc = keymap.NewShortcuts(a.kb, a.mods)
 	a.localLED, a.setLED = win32.LEDState, win32.SetLEDState
 	hwnd := win.NativeHandle()
-	_, err := win32.Install(hwnd, func(k keymap.WinKey) bool {
-		if a.rdp != nil {
-			// The control gets every key; Ctrl+Alt+Shift+Q leaves.
-			if k.VK == 0x51 && !k.Up && k.State[0x11]&0x80 != 0 &&
-				k.State[0x12]&0x80 != 0 && k.State[0x10]&0x80 != 0 {
-				mygo.RunOnMain(func() { a.disconnectRDP() })
-				return true
-			}
-			return false
-		}
-		if a.sess == nil || a.cfg.ViewOnly || a.modal() {
-			return false
-		}
-		a.keys(a.kb.Handle(k))
-		if id, ok := a.kb.AltGrTimer(); ok {
-			time.AfterFunc(100*time.Millisecond, func() {
-				mygo.RunOnMain(func() { a.keys(a.kb.ExpireAltGr(id)) })
-			})
-		}
-		return true
-	})
+	_, err := win32.Install(hwnd, a.hookKey)
 	if err != nil {
 		a.log.Warn("keyboard hook", "err", err)
 		return

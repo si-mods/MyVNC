@@ -43,7 +43,8 @@ func (a *app) initTouch() {
 // touchable reports whether a finger at x, y (window DIPs) is the
 // session's.
 func (a *app) touchable(x, y float32) bool {
-	if a.sess == nil || a.sess.Screen == nil || a.cfg.ViewOnly || a.modal() {
+	t := a.active
+	if t == nil || t.sess == nil || t.sess.Screen == nil || a.cfg.ViewOnly || a.modal() {
 		return false
 	}
 	in := func(r ui.Rect) bool { return x >= r.X && y >= r.Y && x < r.X+r.W && y < r.Y+r.H }
@@ -97,19 +98,19 @@ func (a *app) armTouchTimer() {
 
 // touchPointer is the Mapper's pointer: x, y are DIPs of the screen box.
 func (a *app) touchPointer(x, y float64, mask uint16) {
-	s := a.sess
-	if s == nil || s.Screen == nil || a.emb == nil || a.cfg.ViewOnly {
+	t := a.active
+	if t == nil || t.sess == nil || t.sess.Screen == nil || t.emb == nil || a.cfg.ViewOnly {
 		return
 	}
-	a.ptrX, a.ptrY = float32(x), float32(y)
+	t.ptrX, t.ptrY = float32(x), float32(y)
 	a.flushAltGr()
-	fx, fy := a.toFramebuffer(a.screenRect, float32(x), float32(y))
-	a.sendPointer(fx, fy, mask)
+	fx, fy := a.toFramebuffer(t, a.screenRect, float32(x), float32(y))
+	a.sendPointer(t, fx, fy, mask)
 }
 
 // toFramebuffer maps a point of the screen box b to the framebuffer
 // pixel it shows, with the scaling in use.
-func (a *app) toFramebuffer(b ui.Rect, x, y float32) (int, int) {
-	w, h := a.sess.Size()
+func (a *app) toFramebuffer(t *tab, b ui.Rect, x, y float32) (int, int) {
+	w, h := t.sess.Size()
 	return viewer.ToFramebuffer(x, y, viewer.Place(a.scaling(), a.cfg.Zoom, a.pxScale, b.W, b.H, w, h), w, h)
 }

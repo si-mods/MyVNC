@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/egoist/mygo/audio"
 	"github.com/si-mods/MyVNC/rfb"
@@ -28,11 +29,12 @@ type audioOut struct {
 	cond   sync.Cond
 	buf    []float32
 	closed bool
+	muted  *atomic.Bool // the session's: silence, still reading; nil for never
 	p      *audio.Player
 }
 
-func newAudioOut() *audioOut {
-	a := &audioOut{}
+func newAudioOut(muted *atomic.Bool) *audioOut {
+	a := &audioOut{muted: muted}
 	a.cond.L = &a.mu
 	a.p = audio.NewPlayer(a)
 	a.p.Play()
@@ -68,7 +70,16 @@ func (a *audioOut) Read(buf []float32) (int, error) {
 	n := copy(buf, a.buf)
 	n -= n % audioChannels
 	a.buf = a.buf[n:]
+	silence(buf[:n], a.muted)
 	return n, nil
+}
+
+// silence zeroes buf while muted is set: the samples are taken all the
+// same, so the stream keeps its pace and unmuting has no backlog.
+func silence(buf []float32, muted *atomic.Bool) {
+	if muted != nil && muted.Load() {
+		clear(buf)
+	}
 }
 
 func (a *audioOut) close() {
@@ -87,7 +98,7 @@ func (s *Session) AudioFormat() (format, channels uint8, frequency uint32) {
 
 func (s *Session) AudioBegin() {
 	if s.audio == nil {
-		s.audio = newAudioOut()
+		s.audio = newAudioOut(&s.muted)
 	}
 }
 

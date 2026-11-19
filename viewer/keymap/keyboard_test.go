@@ -65,6 +65,7 @@ var fakeScans = map[uint16]uint16{
 	0x1e: 'A', 0x30: 'B', 0x2e: 'C', 0x22: 'G', 0x32: 'M',
 	0x39: VK_SPACE, 0x1c: VK_RETURN, 0xe01c: VK_RETURN,
 	0x1d: VK_CONTROL, 0x38: VK_MENU, 0x2a: VK_SHIFT,
+	0x02: '1', 0x0a: '9', 0x14: 'T', 0xe049: VK_PRIOR, 0xe051: VK_NEXT,
 }
 
 func (l *fakeLayout) ScanToVK(scan uint16) uint16 { return fakeScans[scan] }

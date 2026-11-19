@@ -117,6 +117,13 @@ func Serve(l net.Listener, w, h int, msgs [][]byte) error {
 
 // ServeConn speaks to one client until it hangs up, and closes conn.
 func ServeConn(conn net.Conn, w, h int, msgs [][]byte) error {
+	return ServeConnWatch(conn, w, h, msgs, nil)
+}
+
+// ServeConnWatch is ServeConn that hands watch, when not nil, each key,
+// pointer and clipboard message of the client: its type and its body
+// after the type, on the connection's goroutine.
+func ServeConnWatch(conn net.Conn, w, h int, msgs [][]byte, watch func(typ byte, body []byte)) error {
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 	read := func(n int) ([]byte, error) {
@@ -191,16 +198,24 @@ func ServeConn(conn net.Conn, w, h int, msgs [][]byte) error {
 				return err
 			}
 			n := int32(binary.BigEndian.Uint32(hdr[3:]))
-			if _, err := read(int(max(n, -n))); err != nil {
+			text, err := read(int(max(n, -n)))
+			if err != nil {
 				return err
+			}
+			if watch != nil {
+				watch(t, append(hdr, text...))
 			}
 		default:
 			n, ok := skip[t]
 			if !ok {
 				return errors.New("fakerfb: unexpected client message " + fmt.Sprint(t))
 			}
-			if _, err := read(n); err != nil {
+			body, err := read(n)
+			if err != nil {
 				return err
+			}
+			if watch != nil && t != 0 {
+				watch(t, body)
 			}
 		}
 	}

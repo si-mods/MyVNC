@@ -27,23 +27,27 @@ import (
 	"github.com/si-mods/MyVNC/locales"
 	"github.com/si-mods/MyVNC/rfb"
 	"github.com/si-mods/MyVNC/viewer"
+	"github.com/si-mods/MyVNC/viewer/keymap"
 )
 
 func (a *app) view(c *ui.Context) {
 	c.SetTheme(appTheme(c))
 	a.svc = c.Services()
 	c.Root().Background(colorsOf(c).bgBottom)
-	switch {
-	case a.rdp != nil:
-		a.rdpView(c)
-	case a.sess != nil && a.sess.Screen != nil:
-		a.sessionView(c)
-	case a.connecting || a.sess != nil:
-		a.connectingView(c)
-	default:
+	a.tabKeys(c)
+	switch t := a.active; {
+	case t == nil:
 		a.homeView(c)
+	case t.rdp != nil:
+		a.rdpView(c, t)
+	case t.sess != nil && t.sess.Screen != nil:
+		a.sessionView(c, t)
+	case t.connecting || t.sess != nil || t.rc.active:
+		a.connectingView(c, t)
+	default:
+		a.failedView(c, t)
 	}
-	a.prompts(c)
+	a.prompts(c, a.active)
 	a.updateGrab()
 }
 
@@ -85,34 +89,155 @@ func (a *app) appTitle(c *ui.Context, k *colors) {
 	})
 }
 
+// tabsBar is the title bar's left while tabs are open: the app's icon,
+// the tabs and the home tab. The tabs share the width down to tabMinW,
+// then the strip scrolls.
+func (a *app) tabsBar(c *ui.Context, k *colors) {
+	if b := appIcon(); b != nil {
+		ui.Image(c, b).Size(22, 22).Shrink(0)
+	}
+	w, _ := c.Size()
+	// The rest of the title bar: the icon, the session panel's button and
+	// the window's controls.
+	room := w - 300 - 34
+	tw := min(max(room/float32(len(a.tabs)), tabMinW), tabMaxW)
+	ui.ScrollHorizontal(c).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Role(ui.RoleTabList).Children(func() {
+		for _, t := range slices.Clone(a.tabs) { // a click can close one
+			a.tabChip(c.Key(t.id), k, t, tw)
+		}
+		home := barTip(c, k, iconButton(c, k, "plus", locales.HomeTab(), 30, 16), locales.HomeTab(), a.rdpShown(), true).Role(ui.RoleTab).Selected(a.active == nil)
+		if a.active == nil {
+			home.Background(k.tabActive)
+		}
+		if home.Clicked() {
+			a.activate(nil)
+		}
+	})
+}
+
+// The widths of a tab in the title bar.
+const tabMinW, tabMaxW = 110, 220
+
+// tabChip is a tab of the title bar: its state, its computer's name and
+// its close button.
+func (a *app) tabChip(c *ui.Context, k *colors, t *tab, w float32) {
+	active := t == a.active
+	name := t.sessionName()
+	e := ui.Row(c).Width(w).Height(30).Shrink(0).Padding(0, 4, 0, 10).Gap(7).AlignItems(ui.Center).Radius(9).
+		Cursor(ui.CursorPointer).Role(ui.RoleTab).Selected(active).Label(name)
+	barTip(c, k, e, name, a.rdpShown(), true)
+	if active {
+		e.Background(k.tabActive).Shadow(0, 1, 2, 0, k.shadow)
+	} else if e.Hovered() {
+		e.Background(k.hover)
+	}
+	e.Transition(ui.ElementTransition{Colors: true, Duration: 160 * time.Millisecond})
+	closed := false
+	e.Children(func() {
+		tabMark(c, k, t)
+		ui.Text(c, name).FontSize(13).FontWeight(600).TextColor(k.text.Alpha(0.85)).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+		closed = iconButton(c, k, "x", locales.CloseTab(name), 22, 13).Clicked()
+	})
+	switch {
+	case closed:
+		a.closeTab(t)
+	case e.Clicked():
+		a.activate(t)
+	}
+}
+
+// tabMark is a tab's state: the protection color while connected, a
+// warning dot while it waits for an answer or failed, a spinner while it
+// connects.
+func tabMark(c *ui.Context, k *colors, t *tab) {
+	switch {
+	case t.waiting() || t.failed():
+		ui.Box(c).Size(8, 8).Radius(4).Background(k.warn).Shrink(0)
+	case t.sess != nil && t.sess.Screen != nil:
+		color, _, _ := t.levelOf(k)
+		ui.Box(c).Size(8, 8).Radius(4).Background(color).Shrink(0)
+	case t.rdp != nil:
+		ui.Box(c).Size(8, 8).Radius(4).Background(k.textMuted).Shrink(0)
+	default:
+		ui.Spinner(c).Size(12, 12).Shrink(0)
+	}
+}
+
+// tabKeys takes the tab shortcuts that reach the window: those the
+// keyboard hook leaves to it on the home tab and on a tab without a
+// session, and Ctrl+Tab and Ctrl+Shift+Tab, which step through the tabs.
+func (a *app) tabKeys(c *ui.Context) {
+	if len(a.tabs) == 0 {
+		return
+	}
+	var m ui.Modifiers
+	for _, x := range [...]struct {
+		k keymap.Modifier
+		u ui.Modifiers
+	}{{keymap.ModControl, ui.Ctrl}, {keymap.ModShift, ui.Shift}, {keymap.ModAlt, ui.Alt}, {keymap.ModSuper, ui.Super}} {
+		if a.mods&x.k != 0 {
+			m |= x.u
+		}
+	}
+	type shortcut struct {
+		mods ui.Modifiers
+		key  ui.Key
+		act  keymap.Action
+	}
+	list := []shortcut{{ui.Ctrl, ui.KeyTab, keymap.ActionNextTab}, {ui.Ctrl | ui.Shift, ui.KeyTab, keymap.ActionPrevTab}}
+	if m != 0 {
+		list = append(list, shortcut{m, ui.KeyPageDown, keymap.ActionNextTab},
+			shortcut{m, ui.KeyPageUp, keymap.ActionPrevTab}, shortcut{m, ui.KeyT, keymap.ActionHomeTab})
+		for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
+			list = append(list, shortcut{m, key, keymap.ActionTab1 + keymap.Action(i)})
+		}
+	}
+	for _, s := range list {
+		if c.Shortcut(s.mods, s.key) {
+			a.tabAction(s.act)
+			return
+		}
+	}
+}
+
 // rdpView is the title bar over the embedded Remote Desktop control; the
 // native window covers the rest.
-func (a *app) rdpView(c *ui.Context) {
+func (a *app) rdpView(c *ui.Context, t *tab) {
 	k := colorsOf(c)
 	full := a.win != nil && a.win.IsFullScreen()
 	ui.Column(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) { paintBackground(p, r, k) }).Children(func() {
 		if !full {
 			a.titleBar(c, k, func() {
-				ui.Icon(c, icon("monitor")).Size(18, 18).TextColor(k.textMuted).Shrink(0)
-				ui.Text(c, a.name).FontSize(13.5).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine().Ellipsis("…").MinWidth(0)
-				ui.Spacer(c)
-				if iconButton(c, k, "unplug", locales.Disconnect(), 30, 16).Tooltip(locales.Disconnect() + "  Ctrl+Alt+Shift+Q").Clicked() {
-					a.disconnect()
+				a.tabsBar(c, k)
+				if barTip(c, k, iconButton(c, k, "unplug", locales.Disconnect(), 30, 16), locales.Disconnect()+"  Ctrl+Alt+Shift+Q", true, false).Clicked() {
+					a.closeTab(t)
 				}
 			})
 		}
 		ui.Box(c).Grow(1).MinHeight(0).Background(ui.RGBA(0, 0, 0, 1))
 	})
-	if a.rdp != nil && a.win != nil {
+	if t.rdp != nil && t == a.active && a.win != nil {
+		// A dialog of the window, as the close question, would be under
+		// the control: it steps aside while one shows.
+		if a.modal() {
+			t.rdp.Show(false)
+			t.rdpAside = true
+			return
+		}
 		w, h := win32.ClientRect(a.win.NativeHandle())
 		if ww, _ := c.Size(); ww > 0 && w > 0 {
 			a.winScale = float32(w) / ww
 		}
 		top := a.rdpTop(full)
-		a.rdp.Fit(0, top, w, h-top)
-		a.rdp.Show(true)
-		a.rdp.Raise()
-		a.scheduleRDPResize(w, h-top)
+		t.rdp.Fit(0, top, w, h-top)
+		t.rdp.Show(true)
+		t.rdp.Raise()
+		if t.rdpAside {
+			// Back from the dialog: the keyboard returns to the remote.
+			t.rdp.Focus()
+			t.rdpAside = false
+		}
+		a.scheduleRDPResize(t, w, h-top)
 	}
 }
 
@@ -138,8 +263,12 @@ func (a *app) homeView(c *ui.Context) {
 	}
 	k := colorsOf(c)
 	a.page(c, k, func() {
-		a.appTitle(c, k)
-		ui.Spacer(c)
+		if len(a.tabs) > 0 {
+			a.tabsBar(c, k)
+		} else {
+			a.appTitle(c, k)
+			ui.Spacer(c)
+		}
 		if iconButton(c, k, "settings", locales.Settings(), 30, 17).Tooltip(locales.Settings()).Clicked() {
 			a.openSettings()
 		}
@@ -153,10 +282,6 @@ func (a *app) homeView(c *ui.Context) {
 		}
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).MaxWidth(1120).WidthPercent(100).AlignSelf(ui.Center).Padding(8, 24, 24, 24).Gap(16).Children(func() {
-				if a.rc.active {
-					banner(c, k, k.warn, locales.Reconnecting(a.rc.server, a.rc.attempt+1, viewer.ReconnectAttempts),
-						locales.Cancel(), a.cancelReconnect)
-				}
 				if a.errText != "" {
 					banner(c, k, k.danger, a.errText, locales.Dismiss(), func() { a.errText = "" })
 				}
@@ -170,6 +295,7 @@ func (a *app) homeView(c *ui.Context) {
 		})
 	})
 	a.addView(c, k)
+	a.editView(c, k)
 }
 
 // cardButton is a clickable card of the home grid, which rises under the
@@ -228,6 +354,9 @@ func (a *app) computerCard(c *ui.Context, k *colors, server string) {
 		a.connect()
 	}
 	el.ContextMenu(func(m *ui.Menu) {
+		if t, err := viewer.ParseURL(server); err == nil && t.Scheme == viewer.SchemeRDP && m.Item(locales.EditComputer()).Chosen() {
+			a.editRDP(server)
+		}
 		if m.Item(locales.RemoveComputer()).Chosen() {
 			a.removeServer(server)
 		}
@@ -259,8 +388,10 @@ func (a *app) removeServer(server string) {
 		a.log.Warn("removing the thumbnail", "err", err)
 	}
 	a.saveConfig()
-	if a.sessServer == server {
-		a.sessServer = ""
+	for _, t := range a.tabs {
+		if t.server == server {
+			t.server = ""
+		}
 	}
 }
 
@@ -297,7 +428,7 @@ func (a *app) thumbnail(server string) *ui.Bitmap {
 
 // saveThumbnail keeps a small copy of the session's last frame.
 func (a *app) saveThumbnail(server string, img *image.RGBA) {
-	if img == nil {
+	if img == nil || server == "" { // "": the computer was removed
 		return
 	}
 	th := viewer.Thumbnail(img)
@@ -364,8 +495,11 @@ func (a *app) addView(c *ui.Context, k *colors) {
 					a.errText = err.Error()
 					return
 				}
-				a.addOpen = false
-				a.connectTo(server, false)
+				// The password goes to this computer only: the form
+				// forgets it, so no tab opened later sends it elsewhere.
+				pass := a.pass
+				a.addOpen, a.pass = false, ""
+				a.openWith(server, pass)
 			}
 		})
 	})
@@ -427,8 +561,8 @@ func (a *app) syncSettings() {
 	a.cfg.MaxFPS, a.cfg.MaxKbps = int(a.maxFPS), int(a.maxKbps/100)*100
 	a.cfg.GOP = int(a.gop)
 	a.cfg.Orientation = a.orient * 90
-	if a.sess != nil && a.cfg.Orientation != a.orient0*90 {
-		a.sess.SetRotation(a.cfg.Orientation)
+	if t := a.active; t != nil && t.sess != nil && a.cfg.Orientation != a.orient0*90 {
+		t.sess.SetRotation(a.cfg.Orientation)
 		a.orient0 = a.orient
 	}
 	a.cfg.Zoom, a.cfg.ClipboardKiB = int(a.zoom), int(a.clipKiB)
@@ -803,24 +937,61 @@ func (a *app) credentialRow(c *ui.Context, k *colors, r credRow) {
 	})
 }
 
-func (a *app) connectingView(c *ui.Context) {
+// connectingView is a tab getting its session: connecting, waiting for
+// the first frame, or reconnecting after a drop.
+func (a *app) connectingView(c *ui.Context, t *tab) {
 	k := colorsOf(c)
-	a.page(c, k, func() {
-		a.appTitle(c, k)
-		ui.Spacer(c)
-	}, func() {
+	a.page(c, k, func() { a.tabsBar(c, k) }, func() {
 		ui.Column(c).Grow(1).Center().Padding(0, 16, titleH, 16).Children(func() {
 			card(ui.Column(c).Width(360).Padding(28, 24).Gap(10).AlignItems(ui.Center), k).Children(func() {
 				ui.Spinner(c).Margin(0, 0, 6, 0)
-				ui.Text(c, a.step()).FontSize(17).FontWeight(700).TextColor(k.text)
-				ui.Text(c, a.target).FontSize(13).TextColor(k.textMuted).Wrap()
+				if t.rc.active && !t.connecting {
+					ui.Text(c, locales.Reconnecting(t.rc.server, t.rc.attempt+1, viewer.ReconnectAttempts)).
+						FontSize(15).FontWeight(700).TextColor(k.text).Wrap()
+				} else {
+					ui.Text(c, t.step()).FontSize(17).FontWeight(700).TextColor(k.text)
+					ui.Text(c, t.target).FontSize(13).TextColor(k.textMuted).Wrap()
+				}
+				if t.rc.active && t.errText != "" {
+					ui.Text(c, t.errText).FontSize(13).TextColor(k.textMuted).Wrap()
+				}
 				if !a.modal() && ui.Button(c, locales.Cancel()).Margin(8, 0, 0, 0).Clicked() {
-					if a.sess != nil {
-						a.disconnect()
-					} else if a.cancel != nil {
-						a.cancel()
+					switch {
+					case t.rc.active:
+						// The tab stays, with the error and Retry.
+						t.cancelReconnect()
+						if t.cancel != nil {
+							t.cancel()
+						}
+					default:
+						a.closeTab(t)
 					}
 				}
+			})
+		})
+	})
+}
+
+// failedView is a tab whose connection failed or ended: the error, and
+// Retry or Close.
+func (a *app) failedView(c *ui.Context, t *tab) {
+	k := colorsOf(c)
+	a.page(c, k, func() { a.tabsBar(c, k) }, func() {
+		ui.Column(c).Grow(1).Center().Padding(0, 16, titleH, 16).Children(func() {
+			card(ui.Column(c).Width(360).Padding(28, 24).Gap(10).AlignItems(ui.Center), k).Children(func() {
+				ui.Icon(c, icon("unplug")).Size(28, 28).TextColor(k.danger).Margin(0, 0, 6, 0)
+				ui.Text(c, t.sessionName()).FontSize(17).FontWeight(700).TextColor(k.text).Wrap()
+				if t.errText != "" {
+					ui.Text(c, t.errText).FontSize(13).TextColor(k.textMuted).Wrap()
+				}
+				ui.Row(c).Gap(8).Margin(8, 0, 0, 0).Children(func() {
+					if ui.Button(c, locales.Close()).Clicked() {
+						a.closeTab(t)
+					}
+					if t.target != "" && ui.PrimaryButton(c, locales.Retry()).Clicked() {
+						a.retry(t)
+					}
+				})
 			})
 		})
 	})
@@ -830,29 +1001,29 @@ func (a *app) connectingView(c *ui.Context) {
 
 const pillW, pillH = 72, 16
 
-func (a *app) sessionView(c *ui.Context) {
+func (a *app) sessionView(c *ui.Context, t *tab) {
 	k := colorsOf(c)
 	full := a.cfg.FullScreen
 	screenArea := func() {
 		ww, _ := c.Size()
 		ui.Box(c).Grow(1).MinHeight(0).Background(ui.RGBA(0, 0, 0, 1)).Children(func() {
-			if a.sess == nil {
+			if t.sess == nil {
 				return // the title bar's panel disconnected
 			}
-			a.screenView(c)
+			a.screenView(c, t)
 			if a.cfg.Stats {
-				a.statsView(c)
+				a.statsView(c, t)
 			}
-			if a.hpNote != "" {
+			if t.hpNote != "" {
 				top := float32(8)
 				if full {
 					top += pillH
 				}
 				ui.Box(c).Absolute().Top(top).Left(16).Width(max(ww-32, 0)).Children(func() {
-					banner(c, k, k.warn, a.hpNote, locales.Dismiss(), func() { a.hpNote = "" })
+					banner(c, k, k.warn, t.hpNote, locales.Dismiss(), func() { t.hpNote = "" })
 				})
 			}
-			if j := a.activeTransfer(); j != nil && !a.menuOpen {
+			if j := t.activeTransfer(); j != nil && !t.menuOpen {
 				a.transferChip(c, j)
 			}
 			if full {
@@ -860,16 +1031,16 @@ func (a *app) sessionView(c *ui.Context) {
 				pill := ui.Box(c).Label(locales.SessionMenu()).Absolute().Top(0).Left(left).Size(pillW, pillH).
 					Radius(0, 0, 8, 8).Background(ui.RGBA(40, 40, 40, 0.7)).Tooltip("Ctrl+Alt+M").Bind(&a.pillBox)
 				pill.HandleInput(func(ev ui.InputEvent) bool { return a.dragPill(ev, left, ww) })
-				a.panelPopover(c, k, pill)
+				a.panelPopover(c, k, pill, t)
 			}
 		})
 	}
 	if full {
 		ui.Column(c).Fill().Background(ui.RGBA(0, 0, 0, 1)).Children(screenArea)
 	} else {
-		a.page(c, k, func() { a.sessionTitle(c, k) }, screenArea)
+		a.page(c, k, func() { a.sessionTitle(c, k, t) }, screenArea)
 	}
-	a.screenRect = a.screen.Bounds(c)
+	a.screenRect = t.screen.Bounds(c)
 	if full {
 		a.pillRect = a.pillBox.Bounds(c)
 	} else {
@@ -878,8 +1049,8 @@ func (a *app) sessionView(c *ui.Context) {
 }
 
 // levelOf is the color, icon and words of the session's protection.
-func (a *app) levelOf(k *colors) (color ui.Color, glyph, text string) {
-	level, kind := a.security()
+func (t *tab) levelOf(k *colors) (color ui.Color, glyph, text string) {
+	level, kind := t.security()
 	color, glyph, text = k.danger, "lock-open", locales.LevelUnencrypted()
 	switch level {
 	case viewer.LevelSecure:
@@ -891,41 +1062,32 @@ func (a *app) levelOf(k *colors) (color ui.Color, glyph, text string) {
 }
 
 // sessionName is the computer's name, or its address until it says one.
-func (a *app) sessionName() string {
-	if a.name != "" {
-		return a.name
+func (t *tab) sessionName() string {
+	if t.name != "" {
+		return t.name
 	}
-	return a.sessServer
+	return t.server
 }
 
-// sessionTitle is the title bar of a windowed session: the computer, its
-// protection, and the button of the session panel.
-func (a *app) sessionTitle(c *ui.Context, k *colors) {
-	color, glyph, level := a.levelOf(k)
-	ui.Icon(c, icon("monitor")).Size(18, 18).TextColor(k.textMuted).Shrink(0)
-	ui.Column(c).MinWidth(0).Shrink(1).Children(func() {
-		ui.Text(c, a.sessionName()).FontSize(13.5).FontWeight(700).TextColor(k.text.Alpha(0.85)).SingleLine().Ellipsis("…")
-		ui.Row(c).Gap(4).AlignItems(ui.Center).MinWidth(0).Children(func() {
-			ui.Icon(c, icon(glyph)).Size(11, 11).TextColor(color).Shrink(0)
-			ui.Text(c, level).FontSize(11.5).TextColor(color).SingleLine().Ellipsis("…")
-		})
-	})
-	ui.Spacer(c)
+// sessionTitle is the title bar of a windowed session: the tabs, and the
+// button of the active tab's session panel.
+func (a *app) sessionTitle(c *ui.Context, k *colors, t *tab) {
+	a.tabsBar(c, k)
 	b := iconButton(c, k, "ellipsis", locales.SessionMenu(), 30, 18).Tooltip(locales.SessionMenu() + "  Ctrl+Alt+M")
-	if a.menuOpen {
+	if t.menuOpen {
 		b.Background(k.pressed)
 	}
 	if b.Clicked() {
 		a.openMenu()
 	}
-	a.panelPopover(c, k, b)
+	a.panelPopover(c, k, b, t)
 }
 
 // panelPopover shows the session panel below anchor while it is open.
-func (a *app) panelPopover(c *ui.Context, k *colors, anchor ui.Element) {
-	ui.PopoverBase(c, anchor, &a.menuOpen, func(panel ui.Element) {
+func (a *app) panelPopover(c *ui.Context, k *colors, anchor ui.Element, t *tab) {
+	ui.PopoverBase(c, anchor, &t.menuOpen, func(panel ui.Element) {
 		panelLook(panel.Margin(8, 0, 0, 0).Width(320).Padding(10), k)
-		a.panel(c, k)
+		a.panel(c, k, t)
 	})
 }
 
@@ -977,29 +1139,32 @@ func panelDivider(c *ui.Context, k *colors) {
 
 // panel is the session's menu, TigerVNC's F8 menu: opened from the title
 // bar, the handle in full screen, or with the shortcut keys (Ctrl+Alt+M).
-func (a *app) panel(c *ui.Context, k *colors) {
+func (a *app) panel(c *ui.Context, k *colors, t *tab) {
 	ui.Column(c).Gap(2).Children(func() {
 		if a.cfg.FullScreen {
-			// No title bar says it.
-			color, glyph, level := a.levelOf(k)
-			ui.Column(c).Gap(3).Padding(4, 8).Children(func() {
-				ui.Text(c, a.sessionName()).FontSize(14).FontWeight(700).TextColor(k.text)
-				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-					ui.Icon(c, icon(glyph)).Size(12, 12).TextColor(color)
-					ui.Text(c, level).FontSize(12.5).TextColor(color)
-				})
-			})
-		}
-		if a.sess.HighPerformance() {
-			ui.Text(c, locales.StatsMode(a.mediaMode())).FontSize(12.5).TextColor(k.textMuted).Padding(2, 8).Wrap()
-			if a.hpFailed && menuItem(c, k, "refresh-cw", locales.RetryHighPerformance(), k.accent).Clicked() {
-				a.retryMedia()
-				a.menuOpen = false
+			a.panelTabs(c, k)
+			if a.active != t {
+				return // another tab shows, or t closed
 			}
-		}
-		if a.cfg.FullScreen || a.sess.HighPerformance() {
 			panelDivider(c, k)
 		}
+		// The title bar's tab shows only the color of it.
+		color, glyph, level := t.levelOf(k)
+		ui.Column(c).Gap(3).Padding(4, 8).Children(func() {
+			ui.Text(c, t.sessionName()).FontSize(14).FontWeight(700).TextColor(k.text)
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, icon(glyph)).Size(12, 12).TextColor(color)
+				ui.Text(c, level).FontSize(12.5).TextColor(color)
+			})
+		})
+		if t.sess.HighPerformance() {
+			ui.Text(c, locales.StatsMode(t.mediaMode())).FontSize(12.5).TextColor(k.textMuted).Padding(2, 8).Wrap()
+			if t.hpFailed && menuItem(c, k, "refresh-cw", locales.RetryHighPerformance(), k.accent).Clicked() {
+				t.retryMedia()
+				t.menuOpen = false
+			}
+		}
+		panelDivider(c, k)
 		ui.Row(c).Gap(12).Padding(4, 8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, locales.Scaling()).FontSize(13.5).TextColor(k.text).Grow(1)
 			sel := selectOf(c, &a.cfg.Scaling, viewer.Scalings, scalingName).Width(140).Label(locales.Scaling())
@@ -1010,15 +1175,15 @@ func (a *app) panel(c *ui.Context, k *colors) {
 		})
 		ui.Column(c).Padding(0, 6).Children(func() {
 			if switchRow(c, k, locales.DynamicResolution(), &a.cfg.DynamicResolution) {
-				a.dyn.Forget()
-				a.dynUrgent = true
+				t.dyn.Forget()
+				t.dynUrgent = true
 				a.saveConfig()
 			}
-			if a.dynHint {
+			if t.dynHint {
 				ui.Row(c).Gap(8).Padding(2, 2).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, locales.DynamicResolutionRefused()).FontSize(12.5).TextColor(k.warn).Wrap().Grow(1).MinWidth(0)
 					if textButton(c, k, locales.Dismiss()).Clicked() {
-						a.dynHint = false
+						t.dynHint = false
 					}
 				})
 			}
@@ -1032,7 +1197,7 @@ func (a *app) panel(c *ui.Context, k *colors) {
 				// The switch flipped a.cfg.FullScreen itself; apply the new
 				// value, as toggleFullScreen would from the keyboard.
 				a.saveConfig()
-				a.dynUrgent = true
+				t.dynUrgent = true
 				a.fullScreen(a.cfg.FullScreen)
 			}
 			if switchRow(c, k, locales.ShowStats(), &a.cfg.Stats) {
@@ -1046,68 +1211,102 @@ func (a *app) panel(c *ui.Context, k *colors) {
 			}
 		})
 		fetch := a.cfg.AcceptClipboard && !a.cfg.ViewOnly
-		files := a.sess.FileCopyAvailable()
+		files := t.sess.FileCopyAvailable()
 		if fetch || files {
 			panelDivider(c, k)
 		}
 		if fetch && menuItem(c, k, "clipboard-paste", locales.FetchClipboard(), ui.Color{}).Clicked() {
 			a.requestClipboard()
-			a.menuOpen = false
+			t.menuOpen = false
 		}
 		if files && menuItem(c, k, "download", locales.DownloadFile(), ui.Color{}).Clicked() {
-			if a.dlPath == "" {
-				a.dlPath = "/Users/" + a.user + "/"
+			if t.dlPath == "" {
+				t.dlPath = "/Users/" + a.user + "/"
 			}
-			a.dlOpen = true
-			a.menuOpen = false
+			t.dlOpen = true
+			t.menuOpen = false
 		}
-		if len(a.xfers.List) > 0 {
-			a.transfersView(c, k)
+		if len(t.xfers.List) > 0 {
+			a.transfersView(c, k, t)
 		}
 		panelDivider(c, k)
 		if menuItem(c, k, "keyboard", locales.SendCtrlAltDel(), ui.Color{}).Clicked() {
 			a.ctrlAltDel()
-			a.menuOpen = false
+			t.menuOpen = false
 		}
 		if menuItem(c, k, "unplug", locales.Disconnect(), k.danger).Clicked() {
-			a.menuOpen = false
+			t.menuOpen = false
 			a.disconnect()
+		}
+	})
+}
+
+// panelTabs lists the tabs at the top of the session panel in full
+// screen, where the title bar with the tab strip is hidden: a click shows
+// a tab, and its button closes it. The home tab leaves full screen.
+func (a *app) panelTabs(c *ui.Context, k *colors) {
+	ui.Column(c).Gap(2).Role(ui.RoleTabList).Children(func() {
+		for _, t := range slices.Clone(a.tabs) { // a click can close one
+			c := c.Key(t.id)
+			name := t.sessionName()
+			row := ui.Row(c).Padding(3, 4, 3, 10).Gap(9).AlignItems(ui.Center).Radius(9).Cursor(ui.CursorPointer).
+				Role(ui.RoleTab).Selected(t == a.active).Label(name)
+			if t == a.active {
+				row.Background(k.tabActive)
+			} else if row.Hovered() {
+				row.Background(k.hover)
+			}
+			closed := false
+			row.Children(func() {
+				tabMark(c, k, t)
+				ui.Text(c, name).FontSize(13.5).TextColor(k.text).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+				closed = iconButton(c, k, "x", locales.CloseTab(name), 24, 13).Clicked()
+			})
+			switch {
+			case closed:
+				a.closeTab(t)
+			case row.Clicked():
+				a.activate(t)
+			}
+		}
+		if menuItem(c, k, "plus", locales.HomeTab(), ui.Color{}).Role(ui.RoleTab).Clicked() {
+			a.activate(nil)
 		}
 	})
 }
 
 // transfersView lists the file transfers in the session panel, newest
 // first (#43).
-func (a *app) transfersView(c *ui.Context, k *colors) {
+func (a *app) transfersView(c *ui.Context, k *colors, t *tab) {
 	panelDivider(c, k)
 	ui.Text(c, locales.Transfers()).FontSize(12).FontWeight(700).TextColor(k.textMuted).Padding(2, 8)
-	for i := len(a.xfers.List) - 1; i >= 0; i-- {
-		a.transferRow(c, k, a.xfers.List[i])
+	for i := len(t.xfers.List) - 1; i >= 0; i-- {
+		a.transferRow(c, k, t, t.xfers.List[i])
 	}
 }
 
-func (a *app) transferRow(c *ui.Context, k *colors, j *viewer.Transfer) {
+func (a *app) transferRow(c *ui.Context, k *colors, t *tab, j *viewer.Transfer) {
 	ui.Column(c).Key(j.ID).Gap(4).Padding(4, 8).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icon(transferGlyph(j))).Size(14, 14).TextColor(k.textMuted).Shrink(0)
 			ui.Text(c, transferName(j)).FontSize(13).TextColor(k.text).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
-			if a.xfers.CanResume(j) {
+			if t.xfers.CanResume(j) {
 				label := locales.TransferResume()
 				if j.State == viewer.TransferFailed {
 					label = locales.TransferRetry()
 				}
 				if textButton(c, k, label).Clicked() {
-					a.xfers.Resume(j)
+					t.xfers.Resume(j)
 				}
 			}
 			switch j.State {
 			case viewer.TransferQueued, viewer.TransferRunning, viewer.TransferAsking, viewer.TransferInterrupted:
 				if textButton(c, k, locales.Cancel()).Clicked() {
-					a.xfers.Cancel(j)
+					t.xfers.Cancel(j)
 				}
 			default:
 				if textButton(c, k, locales.Dismiss()).Clicked() {
-					a.xfers.Dismiss(j)
+					t.xfers.Dismiss(j)
 				}
 			}
 		})
@@ -1182,9 +1381,9 @@ func (a *app) transferChip(c *ui.Context, j *viewer.Transfer) {
 
 // activeTransfer is the transfer the chip shows: the one under way, else
 // the next waiting.
-func (a *app) activeTransfer() *viewer.Transfer {
+func (t *tab) activeTransfer() *viewer.Transfer {
 	var queued *viewer.Transfer
-	for _, j := range a.xfers.List {
+	for _, j := range t.xfers.List {
 		switch j.State {
 		case viewer.TransferRunning, viewer.TransferAsking:
 			return j
@@ -1261,40 +1460,40 @@ func transferState(j *viewer.Transfer) string {
 
 // statsView is the top-left HUD, refreshed each second from the
 // session's counters.
-func (a *app) statsView(c *ui.Context) {
+func (a *app) statsView(c *ui.Context, t *tab) {
 	now := c.Now()
-	if d := now.Sub(a.stats.at); d >= time.Second {
-		s := a.sess.Stats()
-		a.stats.link = a.sess.Link()
-		if !a.stats.at.IsZero() {
-			p, sec := a.stats.last, d.Seconds()
+	if d := now.Sub(t.stats.at); d >= time.Second {
+		s := t.sess.Stats()
+		t.stats.link = t.sess.Link()
+		if !t.stats.at.IsZero() {
+			p, sec := t.stats.last, d.Seconds()
 			n, ns, bytes := s.Updates-p.Updates, s.DecodeNs-p.DecodeNs, s.Bytes-p.Bytes
-			if a.mediaLive() { // the media stream's pictures, not the framebuffer's
+			if t.mediaLive() { // the media stream's pictures, not the framebuffer's
 				shown := s.MediaShown - p.MediaShown
 				n, ns, bytes = s.MediaDecoded-p.MediaDecoded, s.MediaDecodeNs-p.MediaDecodeNs, s.MediaBytes-p.MediaBytes
-				a.stats.fps = float64(shown) / sec
-				a.stats.dropped = float64(max(n-shown, 0)) / sec
+				t.stats.fps = float64(shown) / sec
+				t.stats.dropped = float64(max(n-shown, 0)) / sec
 			} else {
-				a.stats.fps = float64(n) / sec
+				t.stats.fps = float64(n) / sec
 			}
-			a.stats.decodeMs = 0
+			t.stats.decodeMs = 0
 			if n > 0 {
-				a.stats.decodeMs = float64(ns) / float64(n) / 1e6
+				t.stats.decodeMs = float64(ns) / float64(n) / 1e6
 			}
-			a.stats.mbps = float64(bytes) * 8 / sec / 1e6
-			a.stats.keys = float64(s.MediaKeys - p.MediaKeys)
-			a.stats.keyMB = float64(s.MediaKeyBytes-p.MediaKeyBytes) / 1e6
-			a.stats.recovery = s.MediaRecoveryMs
+			t.stats.mbps = float64(bytes) * 8 / sec / 1e6
+			t.stats.keys = float64(s.MediaKeys - p.MediaKeys)
+			t.stats.keyMB = float64(s.MediaKeyBytes-p.MediaKeyBytes) / 1e6
+			t.stats.recovery = s.MediaRecoveryMs
 		}
-		a.stats.at, a.stats.last = now, s
+		t.stats.at, t.stats.last = now, s
 	}
 	c.After(time.Second)
 	enc := "no"
-	if a.sess.Encrypted() {
+	if t.sess.Encrypted() {
 		enc = "yes"
 	}
 	n := func(f float64, prec int) string { return strconv.FormatFloat(f, 'f', prec, 64) }
-	l := a.stats.link
+	l := t.stats.link
 	rtt, q, auto, colour := "—", "—", "no", "low"
 	if l.RTT > 0 {
 		rtt = n(float64(l.RTT.Microseconds())/1000, 1)
@@ -1311,17 +1510,17 @@ func (a *app) statsView(c *ui.Context) {
 	ui.Column(c).Absolute().Top(8).Left(8).Padding(8, 10).Radius(10).Gap(1).Background(ui.RGBA(0, 0, 0, 0.6)).Children(func() {
 		// The RFB encoding lines say nothing while the media stream draws;
 		// the mode line names its codec.
-		encoding, requested, dropped := locales.StatsEncoding(viewer.EncodingName(a.stats.last.Encoding)),
+		encoding, requested, dropped := locales.StatsEncoding(viewer.EncodingName(t.stats.last.Encoding)),
 			locales.StatsRequested(auto, colour, viewer.EncodingName(l.Encoding), q), ""
-		if a.mediaLive() {
-			encoding, requested, dropped = "", "", locales.StatsDropped(n(a.stats.dropped, 0))
+		if t.mediaLive() {
+			encoding, requested, dropped = "", "", locales.StatsDropped(n(t.stats.dropped, 0))
 		}
 		keys, cache, mixed := "", "", ""
-		if a.mediaLive() && a.stats.keys > 0 {
-			keys = locales.StatsKeys(strconv.FormatInt(int64(a.stats.keys), 10), n(a.stats.keyMB, 1))
+		if t.mediaLive() && t.stats.keys > 0 {
+			keys = locales.StatsKeys(strconv.FormatInt(int64(t.stats.keys), 10), n(t.stats.keyMB, 1))
 		}
-		if a.mediaLive() && a.stats.recovery > 0 {
-			keys += " · " + locales.StatsRecovery(strconv.FormatInt(a.stats.recovery, 10))
+		if t.mediaLive() && t.stats.recovery > 0 {
+			keys += " · " + locales.StatsRecovery(strconv.FormatInt(t.stats.recovery, 10))
 		}
 		if hits, misses := l.CacheHits, l.CacheMisses; hits+misses > 0 {
 			cache = locales.StatsCache(strconv.FormatInt(hits, 10), strconv.FormatInt(misses, 10),
@@ -1331,15 +1530,15 @@ func (a *app) statsView(c *ui.Context) {
 			mixed = locales.StatsEncodings(encodingSummary(l.Encodings))
 		}
 		limited := ""
-		if s := a.stats.last; a.mediaLive() && s.MediaFrameRate30 {
+		if s := t.stats.last; t.mediaLive() && s.MediaFrameRate30 {
 			limited = locales.StatsFrameRate30()
-		} else if a.mediaLive() && s.MediaDecodeCapKbps > 0 {
+		} else if t.mediaLive() && s.MediaDecodeCapKbps > 0 {
 			limited = locales.StatsDecodeCap(strconv.Itoa(s.MediaDecodeCapKbps))
 		}
 		for _, l := range []string{
-			locales.StatsFps(n(a.stats.fps, 0)),
-			locales.StatsDecode(n(a.stats.decodeMs, 1)),
-			locales.StatsBitrate(n(a.stats.mbps, 1)),
+			locales.StatsFps(n(t.stats.fps, 0)),
+			locales.StatsDecode(n(t.stats.decodeMs, 1)),
+			locales.StatsBitrate(n(t.stats.mbps, 1)),
 			dropped,
 			limited,
 			keys,
@@ -1349,9 +1548,9 @@ func (a *app) statsView(c *ui.Context) {
 			locales.StatsLink(strconv.FormatInt(l.Kbps, 10), rtt),
 			locales.StatsLinkState(l.State.String()),
 			cache,
-			locales.StatsResolution(resolution(a.sess.Size())),
-			a.statsMode(),
-			a.statsDecoder(),
+			locales.StatsResolution(resolution(t.sess.Size())),
+			t.statsMode(),
+			t.statsDecoder(),
 			locales.StatsEncrypted(enc),
 		} {
 			if l != "" {
@@ -1362,23 +1561,23 @@ func (a *app) statsView(c *ui.Context) {
 }
 
 // mediaLive says High Performance's pictures are the ones on screen.
-func (a *app) mediaLive() bool { return a.sess.HighPerformance() && a.sess.Media != "" }
+func (t *tab) mediaLive() bool { return t.sess.HighPerformance() && t.sess.Media != "" }
 
 // statsMode is the HUD's mode line, empty without High Performance.
-func (a *app) statsMode() string {
-	if !a.sess.HighPerformance() {
+func (t *tab) statsMode() string {
+	if !t.sess.HighPerformance() {
 		return ""
 	}
-	return locales.StatsMode(a.mediaMode())
+	return locales.StatsMode(t.mediaMode())
 }
 
 // statsDecoder is the HUD's line on the H.264 decoder, empty unless the
 // last rectangle was H.264 (High Performance's is on the mode line).
-func (a *app) statsDecoder() string {
-	if a.stats.last.Encoding != rfb.EncodingH264 {
+func (t *tab) statsDecoder() string {
+	if t.stats.last.Encoding != rfb.EncodingH264 {
 		return ""
 	}
-	return locales.StatsDecoder(decoderName(a.sess.H264Decoder()))
+	return locales.StatsDecoder(decoderName(t.sess.H264Decoder()))
 }
 
 // resolution is a size as the HUD says it.
@@ -1420,15 +1619,15 @@ func bytesText(n int64) string {
 	}
 }
 
-func (a *app) screenView(c *ui.Context) {
-	s := a.sess
+func (a *app) screenView(c *ui.Context, t *tab) {
+	s := t.sess
 	var box ui.Element
 	scaling := a.scaling()
 	if scaling == "Fit" {
-		box = ui.Box(c).Fill().Bind(&a.screen)
+		box = ui.Box(c).Fill().Bind(&t.screen)
 	} else {
 		ui.ScrollBoth(c).Fill().Children(func() {
-			box = ui.Box(c).Bind(&a.screen)
+			box = ui.Box(c).Bind(&t.screen)
 			w, h := s.Size()
 			f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, 0, 0, w, h)
 			box.Width(f.W).Height(f.H)
@@ -1441,37 +1640,37 @@ func (a *app) screenView(c *ui.Context) {
 	showCursor := s.CursorImage != nil && !a.cfg.ViewOnly
 	w, h := s.Size()
 	hovered := box.Hovered()
-	if showCursor && hovered && a.overImage(viewer.Place(scaling, a.cfg.Zoom, a.pxScale, a.screenRect.W, a.screenRect.H, w, h)) {
+	if showCursor && hovered && t.overImage(viewer.Place(scaling, a.cfg.Zoom, a.pxScale, a.screenRect.W, a.screenRect.H, w, h)) {
 		box.Cursor(ui.CursorNone)
 	}
-	box.HandleInput(func(ev ui.InputEvent) bool { return a.pointer(c, ev) })
+	box.HandleInput(func(ev ui.InputEvent) bool { return a.pointer(t, c, ev) })
 	box.Draw(func(p *ui.Painter, r ui.Rect) {
 		if p.Scale() != a.pxScale {
 			// Another monitor, or its scale changed: the desktop follows at once.
-			a.pxScale, a.dynUrgent = p.Scale(), true
+			a.pxScale, t.dynUrgent = p.Scale(), true
 			a.svc.Invalidate() // 1:1 and zoom sizes depend on it
 		}
-		a.followWindow(p, r)
+		a.followWindow(t, p, r)
 		w, h := s.Size()
 		f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
 		p.Image(s.Screen, ui.Rect{X: r.X + f.X, Y: r.Y + f.Y, W: f.W, H: f.H}, ui.FillBox)
 		// The frame is the pointer's clock: the moves since the last one
 		// go out as one, and one wheel pair goes with them.
-		a.flushPointer(f, w, h)
+		a.flushPointer(t, f, w, h)
 		if a.perf != nil {
-			a.painted(s.Shown)
+			a.painted(t, s.Shown)
 		}
 	})
 	box.DrawOver(func(p *ui.Painter, r ui.Rect) {
 		w, h := s.Size()
 		f := viewer.Place(scaling, a.cfg.Zoom, a.pxScale, r.W, r.H, w, h)
-		if !showCursor || !hovered || !a.overImage(f) {
+		if !showCursor || !hovered || !t.overImage(f) {
 			return
 		}
 		k := f.W / float32(w)
 		cw, ch := s.CursorImage.Size()
 		p.Image(s.CursorImage, ui.Rect{
-			X: r.X + a.ptrX - float32(s.Hotspot.X)*k, Y: r.Y + a.ptrY - float32(s.Hotspot.Y)*k,
+			X: r.X + t.ptrX - float32(s.Hotspot.X)*k, Y: r.Y + t.ptrY - float32(s.Hotspot.Y)*k,
 			W: float32(cw) * k, H: float32(ch) * k,
 		}, ui.FillBox)
 	})
@@ -1479,8 +1678,8 @@ func (a *app) screenView(c *ui.Context) {
 
 // overImage reports whether the pointer is over the remote image shown at
 // f in the screen box, not the bars around it.
-func (a *app) overImage(f ui.Rect) bool {
-	return a.ptrX >= f.X && a.ptrY >= f.Y && a.ptrX < f.X+f.W && a.ptrY < f.Y+f.H
+func (t *tab) overImage(f ui.Rect) bool {
+	return t.ptrX >= f.X && t.ptrY >= f.Y && t.ptrX < f.X+f.W && t.ptrY < f.Y+f.H
 }
 
 func profileName(s string) string {

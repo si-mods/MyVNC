@@ -238,6 +238,15 @@ type Computer struct {
 	// computer with no Last and no Never connected before v0.0.2 kept the
 	// time, so the home view says nothing of it.
 	Never bool `json:",omitempty"`
+	// Width and Height fix the size of a Remote Desktop session; zero
+	// follows the window. Scale is its desktop scale in percent; zero
+	// follows this PC.
+	Width  int `json:",omitempty"`
+	Height int `json:",omitempty"`
+	Scale  int `json:",omitempty"`
+	// LocalScale makes the desktop smaller by the scale and has this PC
+	// scale the picture up, for servers that ignore the desktop scale.
+	LocalScale bool `json:",omitempty"`
 }
 
 // VideoDecodings are the choices of where video is decoded: the GPU when

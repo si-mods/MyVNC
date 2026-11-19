@@ -37,6 +37,9 @@ var (
 	rdpGetWindowLong   = user32.NewProc("GetWindowLongPtrW")
 	rdpSetWindowLong   = user32.NewProc("SetWindowLongPtrW")
 	rdpGetClientRect   = user32.NewProc("GetClientRect")
+	rdpGetFocus        = user32.NewProc("GetFocus")
+	rdpIsChild         = user32.NewProc("IsChild")
+	rdpSendMessage     = user32.NewProc("SendMessageW")
 )
 
 type rdpGUID struct {
@@ -54,6 +57,8 @@ var (
 	iidRDPOleObject   = rdpGUID{0x00000112, 0, 0, [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
 	iidRDPOleWindow   = rdpGUID{0x00000113, 0, 0, [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
 	iidRDPInPlaceObj  = rdpGUID{0x00000117, 0, 0, [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
+	// IMsRdpExtendedSettings, which holds ZoomLevel.
+	iidRDPExtSettings = rdpGUID{0x302D8188, 0x0052, 0x4807, [8]byte{0x80, 0x6A, 0x36, 0x2B, 0x62, 0x8F, 0x9A, 0xC5}}
 )
 
 // CLSIDs of the Microsoft RDP Client Control, newest first. The v12 one
@@ -358,6 +363,9 @@ type RDP struct {
 	site, ip           *rdpComObj
 	visible            bool
 	appliedW, appliedH int32
+	appliedScale       int32 // the scale asked for last; 0 follows the window's DPI
+	scale              int32 // desktop scale factor last sent, percent
+	fixedW, fixedH     int32 // desktop size for Connect; 0 takes the window's
 }
 
 // NewRDP creates the control in a child window of parent, at the given
@@ -456,6 +464,10 @@ func NewRDP(parent uintptr) (*RDP, error) {
 	return r, nil
 }
 
+// SetDesktop fixes the desktop size Connect asks for. Without it, or with
+// a size of 0, Connect takes the size of the window.
+func (r *RDP) SetDesktop(w, h int32) { r.fixedW, r.fixedH = w, h }
+
 // Connect configures the endpoint and starts the session. password may be
 // empty, in which case the control prompts.
 func (r *RDP) Connect(host string, port int, user, password, domain string) error {
@@ -481,12 +493,21 @@ func (r *RDP) Connect(host string, port int, user, password, domain string) erro
 		if password != "" {
 			_ = rdpPutStr(adv, "ClearTextPassword", password)
 		}
-		var cr [4]int32
-		rdpGetClientRect.Call(r.parent, uintptr(unsafe.Pointer(&cr)))
-		if cr[2] > 0 && cr[3] > 0 {
-			_ = rdpPutInt(adv, "DesktopWidth", cr[2])
-			_ = rdpPutInt(adv, "DesktopHeight", cr[3])
-		}
+	}
+	// DesktopWidth and DesktopHeight are the control's own properties, not
+	// AdvancedSettings': set there, they were ignored and the control took
+	// its window's size.
+	var cr [4]int32
+	rdpGetClientRect.Call(r.parent, uintptr(unsafe.Pointer(&cr)))
+	if r.fixedW > 0 && r.fixedH > 0 {
+		cr[2], cr[3] = r.fixedW, r.fixedH
+	}
+	if cr[2] > 0 && cr[3] > 0 {
+		_ = rdpPutInt(r.disp, "DesktopWidth", cr[2])
+		_ = rdpPutInt(r.disp, "DesktopHeight", cr[3])
+		// The session starts at this size and 100%: a resize to the same
+		// sends nothing.
+		r.appliedW, r.appliedH, r.appliedScale = cr[2], cr[3], 100
 	}
 	rdpShowWindow.Call(r.host, 5) // SW_SHOW
 	r.visible = true
@@ -537,10 +558,11 @@ func (r *RDP) Fit(x, y, w, h int32) {
 }
 
 // ResizeRemoteNow asks the session to change its desktop size to the
-// window. SmartSizing stays on as a fallback for servers that do not
-// support dynamic resize. It returns true when a call was made.
-func (r *RDP) ResizeRemoteNow(w, h int32) (bool, error) {
-	if r.disp == 0 || w <= 0 || h <= 0 || (w == r.appliedW && h == r.appliedH) {
+// size given. SmartSizing stays on as a fallback for servers that do not
+// support dynamic resize. scale is the desktop scale in percent; 0 follows
+// the DPI of the window. It returns true when a call was made.
+func (r *RDP) ResizeRemoteNow(w, h, scale int32) (bool, error) {
+	if r.disp == 0 || w <= 0 || h <= 0 || (w == r.appliedW && h == r.appliedH && scale == r.appliedScale) {
 		return false, nil
 	}
 	if !r.Connected() {
@@ -550,22 +572,92 @@ func (r *RDP) ResizeRemoteNow(w, h int32) (bool, error) {
 	if v, _, _ := rdpGetDpiForWindow.Call(r.ctrl); v != 0 {
 		dpi = int32(v)
 	}
-	scale := dpi * 100 / 96
+	want := scale
+	if scale > 0 {
+		dpi = scaleDPI(scale)
+	}
+	scale, device, mmW, mmH := rdpDisplayScale(dpi, w, h)
 	_, err := rdpInvoke(r.disp, "UpdateSessionDisplaySettings", rdpDispMethod,
 		rdpVariant{vt: rdpVTUI4, val: uintptr(w)},
 		rdpVariant{vt: rdpVTUI4, val: uintptr(h)},
-		rdpVariant{vt: rdpVTUI4, val: uintptr(w)},
-		rdpVariant{vt: rdpVTUI4, val: uintptr(h)},
+		rdpVariant{vt: rdpVTUI4, val: uintptr(mmW)},
+		rdpVariant{vt: rdpVTUI4, val: uintptr(mmH)},
 		rdpVariant{vt: rdpVTUI4, val: 0}, // orientation
 		rdpVariant{vt: rdpVTUI4, val: uintptr(scale)},
-		rdpVariant{vt: rdpVTUI4, val: uintptr(scale)})
+		rdpVariant{vt: rdpVTUI4, val: uintptr(device)})
+	r.scale = scale
 	// The control applies the size but reports E_UNEXPECTED (0x8000ffff)
 	// on this mstscax build; the remote desktop does change, verified live.
 	if err != nil && !strings.Contains(err.Error(), "scode 0x8000ffff") {
 		return true, err
 	}
-	r.appliedW, r.appliedH = w, h
+	r.appliedW, r.appliedH, r.appliedScale = w, h, want
 	return true, nil
+}
+
+// DPIPercent is the DPI of the control's window as a percent of 96.
+func (r *RDP) DPIPercent() int32 {
+	dpi := int32(96)
+	if v, _, _ := rdpGetDpiForWindow.Call(r.ctrl); v != 0 {
+		dpi = int32(v)
+	}
+	return dpi * 100 / 96
+}
+
+// Scale is the desktop scale factor last sent, in percent; 0 before.
+func (r *RDP) Scale() int32 { return r.scale }
+
+// SetZoom zooms the remote desktop by percent on this side, as the Zoom
+// entries of mstsc's window menu do: for servers that ignore the desktop
+// scale factor. 100 turns it off.
+func (r *RDP) SetZoom(percent int32) error {
+	if r.disp == 0 {
+		return errors.New("win32: RDP control not created")
+	}
+	vt := (*[3]uintptr)(rdpPtr(*(*uintptr)(rdpPtr(r.disp))))
+	var ext uintptr
+	hr, _, _ := syscall.SyscallN(vt[0], r.disp, uintptr(unsafe.Pointer(&iidRDPExtSettings)), uintptr(unsafe.Pointer(&ext)))
+	if err := rdpHR(hr); err != nil || ext == 0 {
+		return fmt.Errorf("win32: RDP IMsRdpExtendedSettings: %v", err)
+	}
+	evt := (*[5]uintptr)(rdpPtr(*(*uintptr)(rdpPtr(ext))))
+	defer syscall.SyscallN(evt[2], ext) // Release
+	name := rdpBSTR("ZoomLevel")
+	defer procSysFreeStr.Call(name)
+	v := rdpVariant{vt: rdpVTUI4, val: uintptr(percent)}
+	hr, _, _ = syscall.SyscallN(evt[3], ext, name, uintptr(unsafe.Pointer(&v))) // put_Property
+	if err := rdpHR(hr); err != nil {
+		return fmt.Errorf("win32: RDP ZoomLevel: %w", err)
+	}
+	return nil
+}
+
+// SetSmartSizing turns scaling of the remote desktop to the control's size
+// on or off. The control applies it at its next resize, so the control is
+// resized by a pixel and back.
+func (r *RDP) SetSmartSizing(on bool) error {
+	if r.disp == 0 {
+		return errors.New("win32: RDP control not created")
+	}
+	adv, err := rdpGet(r.disp, "AdvancedSettings2")
+	if err != nil {
+		return err
+	}
+	if adv == 0 {
+		return errors.New("win32: RDP AdvancedSettings2 missing")
+	}
+	if err := rdpPutBool(adv, "SmartSizing", on); err != nil {
+		return err
+	}
+	if r.ctrl != 0 {
+		var cr [4]int32
+		rdpGetClientRect.Call(r.ctrl, uintptr(unsafe.Pointer(&cr)))
+		if cr[2] > 1 && cr[3] > 0 {
+			procMoveWindow.Call(r.ctrl, 0, 0, uintptr(cr[2]-1), uintptr(cr[3]), 1)
+			procMoveWindow.Call(r.ctrl, 0, 0, uintptr(cr[2]), uintptr(cr[3]), 1)
+		}
+	}
+	return nil
 }
 
 // Raise puts the host above the app's drawing surface. mygo re-raises its
@@ -577,7 +669,9 @@ func (r *RDP) Raise() {
 	}
 }
 
-// Show shows or hides the embedded client.
+// Show shows or hides the embedded client. Hiding it gives the keyboard
+// back to the parent window when the client had it: a hidden window keeps
+// the focus otherwise.
 func (r *RDP) Show(show bool) {
 	if r.host == 0 {
 		return
@@ -586,8 +680,46 @@ func (r *RDP) Show(show bool) {
 	if show {
 		n = 5
 	}
+	if !show {
+		if f, _, _ := rdpGetFocus.Call(); f != 0 {
+			if in, _, _ := rdpIsChild.Call(r.host, f); f == r.host || in != 0 {
+				rdpSetFocus.Call(r.parent)
+			}
+		}
+	}
 	rdpShowWindow.Call(r.host, n)
 	r.visible = show
+}
+
+// ReleaseKeys sends the client a release of each modifier key held down,
+// while it has the keyboard. Call it before Show(false) when the user
+// switches away with a shortcut: the client took the modifiers' presses,
+// and their releases would go to another window and leave the keys down
+// on the server. A message sent to the client's own window is the one way
+// in that needs no injected input.
+func (r *RDP) ReleaseKeys() {
+	if r.host == 0 {
+		return
+	}
+	f, _, _ := rdpGetFocus.Call()
+	if f == 0 {
+		return
+	}
+	if in, _, _ := rdpIsChild.Call(r.host, f); f != r.host && in == 0 {
+		return // the client has not got the keyboard: it took no presses
+	}
+	var st [256]byte
+	procGetKeyboardState.Call(uintptr(unsafe.Pointer(&st)))
+	for _, u := range modifierUps(&st) {
+		rdpSendMessage.Call(f, uintptr(u.msg), uintptr(u.vk), u.lParam)
+	}
+}
+
+// Focus gives the keyboard to the client.
+func (r *RDP) Focus() {
+	if r.ctrl != 0 {
+		rdpSetFocus.Call(r.ctrl)
+	}
 }
 
 // Close disconnects, releases the control and destroys the host window.

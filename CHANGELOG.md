@@ -3,6 +3,32 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
+## Unreleased
+
+- Tabs: one window holds several sessions, VNC, ARD and Remote Desktop mixed, one tab each in
+  the title bar. Opening another computer no longer ends the session that runs; opening a
+  computer that has a tab shows that tab, and the `+` tab shows the computer cards. A tab in
+  the background stays connected, reconnects on its own, keeps its prompts and file transfers
+  until it is shown, is muted, and drops a High Performance stream to 2 pictures a second and
+  2000 kbit/s. A failed connection keeps its tab with the error, Retry and Close. Closing the
+  window with more than one session asks first.
+- Each Remote Desktop session has its own control; the controls of the tabs not shown are
+  hidden and stay connected. Ctrl+Alt+Shift+Q closes the Remote Desktop tab shown, not every
+  session.
+- Tab shortcuts, with the shortcut modifiers (Ctrl+Alt by default): Page Down and Page Up for
+  the next and previous tab, 1 to 8 for a tab, 9 for the last tab, T for the computer cards.
+  Ctrl+Tab and Ctrl+Shift+Tab step through the tabs where no session takes the keys. No
+  shortcut closes a tab. In full screen the session panel lists the tabs to switch or close
+  them; the computer cards leave full screen.
+- Remote Desktop: right-click a computer card and choose Edit... to fix the resolution (a
+  common size or a custom one) and the scale of its desktop, per computer, or to zoom the
+  picture on this PC for servers that ignore the scale, such as xrdp. The defaults still
+  follow the window size and the scale of this PC. Changes apply at the next connection.
+- Remote Desktop fixes: the desktop size asked for at connect is used (it went to the wrong
+  object and the control took its window's); a resize sends the physical size in millimeters
+  and a valid device scale factor; tooltips of the title bar show beside their buttons, where
+  the session does not cover them; a session opened from the command line shows its tab.
+
 ## 0.1.5
 
 - Credentials are managed in one place: Settings → Credentials lists each saved computer with

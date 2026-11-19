@@ -26,6 +26,9 @@ MyVNC 是面向 Windows 与 macOS 的 VNC (RFB) 与微软远程桌面 (RDP) 原�
 - **一个应用,两种协议。** 标准 VNC 会话之外,通过嵌入系统远程桌面
   ActiveX 控件支持 RDP — 地址填 `rdp://host[:port]` 即可。NLA、
   RemoteFX/H.264、音频与剪贴板均由 Windows 自身处理。
+- **标签页。** 一个窗口里同时开多个会话,VNC、ARD 与 RDP 可以混开,
+  每个会话一个标签页。后台标签页保持连接并自动重连;切回前台之前,
+  它静音,高性能视频流降到每秒 2 帧。
 - **苹果远程桌面高性能通路。** HEVC 4:4:4 或 H.264 经 SRTP 传输,以 Mac
   源帧率解码,经 Media Foundation (D3D11/DXVA) 走 GPU;含 NAT 打洞、
   乱序重排,安装 MFT 后支持 AV1。已对 macOS 27.2 实测约 50 fps。
@@ -70,6 +73,20 @@ RDP 仅限 Windows。
   ([docs/MCP.md](docs/MCP.md)),需先在设置中开启。
 - 会话内:悬浮面板查看统计与视频设置;Ctrl+Alt+Del 发送三键;在主页
   卡片上右键可移除。
+- 标签页:每台计算机在标题栏里占一个标签页;`+` 显示计算机卡片,可再
+  打开一台。打开已有标签页的计算机时,直接切到那个标签页。全屏时,会话
+  面板顶部列出所有标签页。快捷键(快捷修饰键,默认 Ctrl+Alt):
+
+  | 按键 | 作用 |
+  |---|---|
+  | Ctrl+Alt+Page Down / Page Up | 下一个 / 上一个标签页 |
+  | Ctrl+Alt+1 … 8 | 第 1 … 8 个标签页 |
+  | Ctrl+Alt+9 | 最后一个标签页 |
+  | Ctrl+Alt+T | 计算机列表(`+` 标签页) |
+  | Ctrl+Tab / Ctrl+Shift+Tab | 下一个 / 上一个标签页(没有会话接管按键时) |
+  | Ctrl+Alt+Shift+Q | 关闭远程桌面标签页 |
+
+  没有关闭 VNC 标签页的快捷键;请用标签页的关闭按钮或"断开连接"。
 
 ## 构建
 
@@ -88,6 +105,7 @@ go tool mygo build   # 构建 exe 与安装包到 build/(macOS 为 MyVNC.app)
 |---|---|
 | [docs/MCP.md](docs/MCP.md) | `MyVNC.exe --mcp`:面向 AI 代理的 MCP 服务 |
 | [docs/rdp.md](docs/rdp.md) | RDP 会话:用法、凭据、限制 |
+| [docs/tabs.md](docs/tabs.md) | 标签页:一个窗口里的多个会话 |
 | [docs/bandwidth.md](docs/bandwidth.md) | 链路测量、画质策略、服务端配合项 |
 | [docs/ard-drag.md](docs/ard-drag.md) | ARD 拖放与文件传输的实现细节 |
 | [docs/RELEASING.md](docs/RELEASING.md) | 发布流程 |

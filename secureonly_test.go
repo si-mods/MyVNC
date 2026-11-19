@@ -51,9 +51,9 @@ func TestSecureOnlyRefusesWeakTypes(t *testing.T) {
 		a := newTestApp(t)
 		a.cfg.SecureOnly = true
 		a.add(server)
-		a.until("the refusal", func() bool { return !a.connecting && a.errText != "" })
-		if !strings.Contains(a.errText, "no matching security types") || a.sess != nil || a.warnOpen || a.authOpen {
-			t.Errorf("offered %v: error %q, session %v", types, a.errText, a.sess)
+		a.until("the refusal", func() bool { return !a.tab().connecting && a.tab().errText != "" })
+		if !strings.Contains(a.tab().errText, "no matching security types") || a.tab().sess != nil || a.tab().warnOpen || a.tab().authOpen {
+			t.Errorf("offered %v: error %q, session %v", types, a.tab().errText, a.tab().sess)
 		}
 		if p := <-picked; p != 0 {
 			t.Errorf("offered %v: the client picked %d", types, p)
@@ -72,7 +72,7 @@ func TestSecureOnlyKeepsARDDH(t *testing.T) {
 	}
 	a.until("the authentication", func() bool { return a.tt.HasText("Authenticating…") })
 	a.tt.Click("Cancel")
-	a.until("the end", func() bool { return !a.connecting })
+	a.until("the end", func() bool { return !a.tab().connecting })
 }
 
 func TestSecureOffAllowsWeakTypes(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSecureOffAllowsWeakTypes(t *testing.T) {
 	}
 	a.until("the authentication", func() bool { return a.tt.HasText("Authenticating…") })
 	a.tt.Click("Cancel")
-	a.until("the end", func() bool { return !a.connecting })
+	a.until("the end", func() bool { return !a.tab().connecting })
 }
 
 // veNCryptPlainServer offers VeNCrypt with the Plain subtype only and
@@ -137,9 +137,9 @@ func TestSecureOnlyRefusesPlain(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.SecureOnly = true
 	a.add(server)
-	a.until("the refusal", func() bool { return !a.connecting && a.errText != "" })
-	if !strings.Contains(a.errText, "no valid VeNCrypt sub-type") || a.sess != nil {
-		t.Errorf("error %q", a.errText)
+	a.until("the refusal", func() bool { return !a.tab().connecting && a.tab().errText != "" })
+	if !strings.Contains(a.tab().errText, "no valid VeNCrypt sub-type") || a.tab().sess != nil {
+		t.Errorf("error %q", a.tab().errText)
 	}
 	if p := <-picked; p != 0 {
 		t.Errorf("the client picked subtype %d", p)
@@ -153,7 +153,7 @@ func TestSecureOffAllowsPlain(t *testing.T) {
 	if p := <-picked; p != rfb.SecTypePlain {
 		t.Errorf("the client picked subtype %d, want Plain", p)
 	}
-	a.until("the warning", func() bool { return a.warnOpen })
+	a.until("the warning", func() bool { return a.tab().warnOpen })
 	a.tt.Click("Don't connect")
-	a.until("the end", func() bool { return !a.connecting })
+	a.until("the end", func() bool { return !a.tab().connecting })
 }

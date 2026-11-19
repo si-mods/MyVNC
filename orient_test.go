@@ -9,15 +9,15 @@ func TestOrientationRotatesDisplay(t *testing.T) {
 	a := newTestApp(t)
 	server, _ := fakeServer(t, 1, 640, 400)
 	a.add(server)
-	a.until("frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-	a.sess.SetRotation(90)
+	a.until("frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
+	a.tab().sess.SetRotation(90)
 	a.until("rotated", func() bool {
-		w, h := a.sess.Size()
+		w, h := a.tab().sess.Size()
 		return w == 400 && h == 640
 	})
-	a.sess.SetRotation(0)
+	a.tab().sess.SetRotation(0)
 	a.until("unrotated", func() bool {
-		w, h := a.sess.Size()
+		w, h := a.tab().sess.Size()
 		return w == 640 && h == 400
 	})
 }

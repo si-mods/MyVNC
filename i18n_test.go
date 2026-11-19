@@ -54,9 +54,9 @@ func TestLocales(t *testing.T) {
 			a.settingsOpen = false
 			a.server = server
 			a.connect()
-			a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
-			if a.title != c.title {
-				t.Errorf("title %q, want %q", a.title, c.title)
+			a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
+			if a.tab().title != c.title {
+				t.Errorf("title %q, want %q", a.tab().title, c.title)
 			}
 			a.openMenu()
 			a.tt.Frame()
@@ -94,10 +94,10 @@ func TestTouchTap(t *testing.T) {
 	a := newTestApp(t)
 	a.server = server
 	a.connect()
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	a.tt.Frame()
 	var got [][3]int
-	a.emb = emulatemb.New(false, func(x, y int, m uint16) { got = append(got, [3]int{x, y, int(m)}) })
+	a.active.emb = emulatemb.New(false, func(x, y int, m uint16) { got = append(got, [3]int{x, y, int(m)}) })
 
 	const y = titleH + (600-titleH)/2
 	if !a.touchEvent(win32.Touch{ID: 1, Phase: win32.TouchDown, X: 400, Y: y}) ||

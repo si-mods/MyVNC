@@ -141,9 +141,9 @@ func TestDynamicResolution(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Stats = true
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	nextSize(t, sizes, image.Pt(800, 600-titleH))
-	a.until("the new size", func() bool { w, _ := a.sess.Screen.Size(); return w == 800 })
+	a.until("the new size", func() bool { w, _ := a.tab().sess.Screen.Size(); return w == 800 })
 	if !a.tt.HasText("Resolution 800×556") {
 		t.Errorf("HUD: %q", a.tt.Texts())
 	}
@@ -159,7 +159,7 @@ func TestDynamicResolution(t *testing.T) {
 	a.tt.SetScale(1.5)
 	a.tt.Frame()
 	nextSize(t, sizes, image.Pt(1502, 986)) // 1001×657 DIPs at 1.5x, even
-	a.until("the 1.5x size", func() bool { w, _ := a.sess.Screen.Size(); return w == 1502 })
+	a.until("the 1.5x size", func() bool { w, _ := a.tab().sess.Screen.Size(); return w == 1502 })
 	if a.tt.HasText("This computer cannot change its resolution, so the picture is scaled to fit the window.") {
 		t.Error("refusal hint after an accepted resize")
 	}
@@ -175,9 +175,9 @@ func TestDynamicResolutionRefused(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Scaling = "1:1"
 	a.add(server)
-	a.until("the first frame", func() bool { return a.sess != nil && a.sess.Screen != nil })
+	a.until("the first frame", func() bool { return a.tab().sess != nil && a.tab().sess.Screen != nil })
 	nextSize(t, sizes, image.Pt(800, 600-titleH))
-	a.until("the refusal", func() bool { return a.dynRefused })
+	a.until("the refusal", func() bool { return a.tab().dynRefused })
 	if a.scaling() != "Fit" {
 		t.Errorf("scaling %q after a refusal", a.scaling())
 	}
@@ -211,6 +211,6 @@ func TestDynamicResolutionUnsupported(t *testing.T) {
 	server, _ := fakeServer(t, 1, 64, 32)
 	a := newTestApp(t)
 	a.add(server)
-	a.until("the refusal", func() bool { return a.dynRefused && a.dynHint })
+	a.until("the refusal", func() bool { return a.tab().dynRefused && a.tab().dynHint })
 	a.disconnect()
 }
