@@ -16,10 +16,28 @@ MyVNC.exe rdp://192.0.2.20:3399
 ```
 
 The account name and password come from the connection dialog, or from
-Settings → Credentials when the server has a record there. A password the
-control accepts is kept in the system credential store, like a VNC one. If
-no password is given, the control shows its own credential prompt.
+Settings → Credentials when the server has a record there. If neither gives a
+password, MyVNC asks for the account and password in the tab's own prompt
+before it creates the control, with the computer's account filled in; the
+answer is used by that tab only. Cancel ends the attempt, and the tab shows
+Retry. The control sends the account and password to the server, which signs
+in with them (xrdp logs in without its own login form when it gets them).
 Certificate prompts are suppressed (authentication level 0).
+
+The password is kept in the system credential store, like a VNC one, only
+after the control reports that the login completed (`OnLoginComplete`). A
+logon error (`OnLogonError` with a failure code) or a session that ends before
+the login completed keeps nothing. When the password came from the store, that
+tab does not send it again: Retry asks instead. The stored record stays until
+the user changes it in Settings → Credentials or clears it: right-click the
+computer's card, choose **Edit...** and then **Clear saved password**, which
+shows when a password is stored. A session that ends shows the control's
+reason in the tab, with Retry.
+
+The log has one `RDP credentials` line per connection: the account, the
+domain, whether a password is present and where each came from (`tab`,
+`dialog`, `config`, `store` or `prompt`). It never has the password. Each
+event of the control is logged as `RDP event` with its name and argument.
 
 The scheme is what selects RDP: a bare `host:3389` stays a VNC address, as
 TigerVNC reads it, and VNC against an RDP port waits for a banner that never
@@ -64,13 +82,21 @@ at the next connection.
 3. `IDispatch` automation for `Server`, `UserName`, `AdvancedSettings2`
    (`RDPPort`, `AuthenticationLevel`, `EnableCredSspSupport`, `SmartSizing`,
    `ClearTextPassword`, desktop size) and `Connect`.
-4. In-place activation through a minimal `IOleClientSite` / `IOleInPlaceSite`
+4. Events: a minimal `IDispatch` sink for the `IMsTscAxEvents`
+   dispinterface, connected with `IConnectionPointContainer::FindConnectionPoint`
+   and `Advise`, and disconnected (`Unadvise`) before the control closes. The
+   dispids of the events are read from the control's type information
+   (`IProvideClassInfo::GetClassInfo`, the coclass's `[source]` interface,
+   `ITypeInfo::GetIDsOfNames`); an event without a name found is logged by
+   its dispid. On Windows 11 the control gave `OnConnecting` 1, `OnConnected`
+   2, `OnLoginComplete` 3, `OnDisconnected` 4 and `OnLogonError` 22.
+5. In-place activation through a minimal `IOleClientSite` / `IOleInPlaceSite`
    implemented with `syscall.NewCallback`, then `DoVerb(OLEIVERB_INPLACEACTIVATE)`.
-5. The control's window is parented to a `STATIC` child of the main window and
+6. The control's window is parented to a `STATIC` child of the main window and
    resized with `IOleInPlaceObject::SetObjectRects`. The host is raised above
    mygo's drawing surface every frame; without that the black surface covers
    the control (the "connected but black" symptom).
-6. Every RDP tab owns its own control and host window. Only the shown tab's
+7. Every RDP tab owns its own control and host window. Only the shown tab's
    host is visible, fitted and raised; the others are hidden with
    `ShowWindow(SW_HIDE)` and stay connected. Hiding a host whose control
    has the keyboard focus gives the focus back to the main window, and
@@ -78,7 +104,7 @@ at the next connection.
    UI thread; the site vtables are shared, and each control has its own
    site objects. A window dialog, such as the close question, hides the
    shown control while it is open, as it would be under it.
-7. A window resize changes the remote desktop size through
+8. A window resize changes the remote desktop size through
    `IMsRdpClient9::UpdateSessionDisplaySettings` (desktop and physical size,
    orientation 0, DPI scale factors), debounced 250 ms after the size settles.
    Each tab has its own timer, and only the shown tab follows the window; a

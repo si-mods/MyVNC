@@ -66,6 +66,7 @@ type app struct {
 	editFor            string
 	editForm           rdpForm
 	editErr            string
+	editHasPass        bool // a password of editFor is in the credential store
 	settingsOpen       bool
 	settingsPage       string // the settings page shown
 	quality, compress  float64
@@ -124,6 +125,11 @@ type app struct {
 	setLocale     func(tag string) // "" follows the system
 
 	perf *perfTest // -perftest, else nil
+
+	// The Remote Desktop control's creation and connection; nil is
+	// win32's, tests replace them.
+	newRDP     func() (*win32.RDP, error)
+	rdpConnect func(r *win32.RDP, host string, port int, user, pass, domain string) error
 
 	touch                touchState
 	pillBox              ui.Handle
@@ -1147,6 +1153,10 @@ func authPrompt(c *ui.Context, t *tab) {
 			t.authReply = nil
 		}
 		t.authOpen, t.authMsg = false, ""
+		if done := t.authDone; done != nil {
+			t.authDone = nil
+			done(r)
+		}
 	}
 	if ui.Modal(c, &t.authOpen, func() {
 		ui.Text(c, locales.AuthTitle()).Bold()
@@ -1328,52 +1338,141 @@ func (a *app) disconnect() {
 }
 
 // connectRDP starts an embedded Microsoft Remote Desktop session. The
-// system ActiveX control brings NLA, codecs, audio and clipboard.
+// system ActiveX control brings NLA, codecs, audio and clipboard. Without
+// a password it asks for the account and password first: the control
+// would send the server none, and xrdp shows its own login form then.
 func (a *app) connectRDP(t *tab, target viewer.Target, server string) {
-	host, port := target.Host, target.Port
-	if a.win == nil {
-		return
-	}
 	t.connecting = false
 	t.errText = ""
-	r, err := win32.NewRDP(a.win.NativeHandle())
+	a.cfg.AddServer(server)
+	a.cfg.Username = a.user
+	a.saveConfig()
+	addr := target.Addr()
+	// The account and password of this tab, typed in the prompt or the
+	// Add computer dialog, come first; then the dialog's account, the
+	// computer's, and the record in the credential store.
+	user, userFrom := t.user, "tab"
+	if user == "" {
+		user, userFrom = a.user, "dialog"
+	}
+	if c := a.cfg.Computers[server]; user == "" && c.Username != "" {
+		user, userFrom = c.Username, "config"
+	}
+	pass, passFrom := t.pass, "tab"
+	if pass == "" && a.cfg.Remember {
+		if c, ok := a.loadCredential(addr); ok {
+			switch {
+			case c.Pass != "" && !t.storeFailed:
+				if c.User != "" {
+					user, userFrom = c.User, "store"
+				}
+				pass, passFrom = c.Pass, "store"
+			case user == "" && c.User != "":
+				user, userFrom = c.User, "store" // the account, for the prompt
+			}
+		}
+	}
+	if user == "" {
+		userFrom = ""
+	}
+	if pass == "" {
+		passFrom = ""
+	}
+	_, domain := splitDomain(user)
+	a.log.Info("RDP credentials", "server", server, "user", user, "domain", domain, "userFrom", userFrom,
+		"hasPassword", pass != "", "passwordFrom", passFrom, "remember", a.cfg.Remember, "storeFailed", t.storeFailed)
+	if pass == "" {
+		// The tab's prompt; the connection starts when it is answered.
+		t.connecting, t.step = true, locales.StepAuthenticating
+		t.cancel = func() { t.authOpen, t.authDone = false, nil }
+		t.authOpen, t.authUser, t.authPass, t.authMsg = true, user, "", ""
+		t.authDone = func(r creds) {
+			t.connecting, t.cancel = false, nil
+			if !r.ok {
+				t.errText = errorText(errAuthCanceled)
+				a.updateGrab()
+				return
+			}
+			t.user = strings.TrimSpace(r.user)
+			_, domain := splitDomain(t.user)
+			a.log.Info("RDP credentials", "server", server, "user", t.user, "domain", domain, "userFrom", "prompt",
+				"hasPassword", r.pass != "", "passwordFrom", "prompt")
+			a.startRDP(t, target, server, t.user, r.pass, "prompt")
+		}
+		a.updateGrab()
+		return
+	}
+	a.startRDP(t, target, server, user, pass, passFrom)
+}
+
+// splitDomain splits DOMAIN\user.
+func splitDomain(account string) (user, domain string) {
+	if i := strings.LastIndex(account, `\`); i >= 0 {
+		return account[i+1:], account[:i]
+	}
+	return account, ""
+}
+
+// rdpLogin is what an RDP connection signs in with, kept until the
+// control says whether it worked.
+type rdpLogin struct {
+	server, addr string
+	account      string // with the domain, as the user gave it
+	pass         string
+	from         string // where pass came from: tab, store or prompt
+	done, failed bool
+}
+
+// startRDP creates t's control and connects it with account and pass,
+// which came from from.
+func (a *app) startRDP(t *tab, target viewer.Target, server, account, pass, from string) {
+	host, port := target.Host, target.Port
+	newRDP := a.newRDP
+	if newRDP == nil {
+		if a.win == nil {
+			return
+		}
+		newRDP = func() (*win32.RDP, error) { return win32.NewRDP(a.win.NativeHandle()) }
+	}
+	r, err := newRDP()
 	if err != nil {
 		t.errText = err.Error()
 		a.log.Warn("RDP control", "err", err)
 		return
 	}
 	t.rdp, t.rdpAddr = r, server
-	a.cfg.AddServer(server)
-	a.cfg.Username = a.user
-	a.saveConfig()
-	addr := target.Addr()
-	user, pass := a.user, t.pass // what was typed for this computer only
-	if c := a.cfg.Computers[server]; user == "" && c.Username != "" {
-		user = c.Username
+	t.rdpLogin = &rdpLogin{server: server, addr: target.Addr(), account: account, pass: pass, from: from}
+	if r.AdviseErr != nil {
+		a.log.Warn("RDP events", "err", r.AdviseErr)
+	} else if ids := r.EventIDs(); ids != nil {
+		a.log.Info("RDP events", "dispids", ids)
 	}
-	if pass == "" && a.cfg.Remember {
-		if c, ok := a.loadCredential(addr); ok {
-			if c.User != "" {
-				user = c.User
-			}
-			pass = c.Pass
-		}
+	r.OnEvent = func(name string, arg int32) { a.log.Info("RDP event", "event", name, "arg", arg) }
+	r.OnLoginComplete = func() { a.rdpLoginComplete(t, r) }
+	r.OnLogonError = func(code int32) { a.rdpLogonError(t, r, code) }
+	r.OnDisconnected = func(reason int32) {
+		// Not inside the control's own call: closing it there is unsafe.
+		a.post(func() { a.rdpDisconnected(t, r, reason) })
 	}
 	t.name = "RDP " + host
 	t.title = t.name + " - " + appName
-	if t == a.active {
+	if t == a.active && a.win != nil {
 		a.win.SetTitle(t.title)
 	}
 	// Below the title bar; rdpView fits it again each frame.
-	w, h := win32.ClientRect(a.win.NativeHandle())
-	top := a.rdpTop(a.win.IsFullScreen())
+	var w, h, top int32
+	if a.winScale <= 0 {
+		// rdpView has not measured the window yet: the title bar's height
+		// comes from the monitor's scale.
+		a.winScale = float32(r.DPIPercent()) / 100
+	}
+	if a.win != nil {
+		w, h = win32.ClientRect(a.win.NativeHandle())
+		top = a.rdpTop(a.win.IsFullScreen())
+	}
 	r.Fit(0, top, w, h-top)
 	r.Show(true)
-	account := user // with the domain, as the user gave it
-	domain := ""
-	if i := strings.LastIndex(user, `\`); i >= 0 {
-		domain, user = user[:i], user[i+1:]
-	}
+	user, domain := splitDomain(account)
 	// A fixed size and scale of the computer, kept for the whole session.
 	c := a.cfg.Computers[server]
 	t.rdpFixW, t.rdpFixH, t.rdpScale = int32(c.Width), int32(c.Height), int32(c.Scale)
@@ -1385,7 +1484,11 @@ func (a *app) connectRDP(t *tab, target viewer.Target, server string) {
 	} else {
 		r.SetDesktop(t.rdpFixW, t.rdpFixH)
 	}
-	if err := r.Connect(host, port, user, pass, domain); err != nil {
+	connect := a.rdpConnect
+	if connect == nil {
+		connect = (*win32.RDP).Connect
+	}
+	if err := connect(r, host, port, user, pass, domain); err != nil {
 		a.log.Warn("RDP connect", "err", err)
 		t.errText = err.Error()
 		a.disconnectRDP(t)
@@ -1393,24 +1496,98 @@ func (a *app) connectRDP(t *tab, target viewer.Target, server string) {
 	}
 	a.updateGrab()
 	time.AfterFunc(5*time.Second, func() {
-		mygo.RunOnMain(func() {
+		a.post(func() {
 			if t.rdp == r {
 				w, h := r.RemoteSize()
-				connected := r.Connected()
-				a.log.Info("RDP state", "connected", connected, "width", w, "height", h)
-				// The control authenticates by itself; once it says it is
-				// in, the account it was given is the one that worked.
-				if connected && a.cfg.Remember && pass != "" && slices.Contains(a.cfg.Servers, server) {
-					a.saveCredential(addr, credential{User: account, Pass: pass})
-					c := a.cfg.Computers[server]
-					c.Username, c.Last = account, time.Now()
-					a.cfg.Computers[server] = c
-					a.saveConfig()
-					a.credRows = nil
-				}
+				a.log.Info("RDP state", "connected", r.Connected(), "width", w, "height", h,
+					"loginComplete", t.rdpLogin != nil && t.rdpLogin.done)
 			}
 		})
 	})
+}
+
+// rdpLoginComplete is the control saying the server signed t in: the
+// account and password it was given worked, and are kept.
+func (a *app) rdpLoginComplete(t *tab, r *win32.RDP) {
+	l := t.rdpLogin
+	if t.rdp != r || l == nil || l.done {
+		return
+	}
+	l.done = true
+	if l.failed {
+		// The server took an account typed on its own screen.
+		a.log.Info("RDP login complete after a logon error; nothing kept", "server", l.server)
+		return
+	}
+	if l.from == "store" {
+		t.storeFailed = false
+	}
+	saved := a.cfg.Remember && l.pass != ""
+	if slices.Contains(a.cfg.Servers, l.server) { // not removed while its tab was open
+		c := a.cfg.Computers[l.server]
+		if l.account != "" {
+			c.Username = l.account
+		}
+		c.Last = time.Now()
+		a.cfg.Computers[l.server] = c
+		a.saveConfig()
+		if saved {
+			a.saveCredential(l.addr, credential{User: l.account, Pass: l.pass})
+			a.credRows = nil
+		}
+	} else {
+		saved = false
+	}
+	a.log.Info("RDP login complete", "server", l.server, "user", l.account, "saved", saved)
+}
+
+// Logon error codes of the control that say the logon failed:
+// LOGON_FAILED_BAD_PASSWORD (0), LOGON_FAILED_UPDATE_PASSWORD (1) and
+// LOGON_FAILED_OTHER (2). The others are a warning and the codes of
+// session arbitration, which are negative.
+const rdpLogonFailedMax = 2
+
+// rdpLogonError is the control saying the server refused the logon.
+func (a *app) rdpLogonError(t *tab, r *win32.RDP, code int32) {
+	if t.rdp != r || code < 0 || code > rdpLogonFailedMax {
+		return
+	}
+	a.rdpLoginFailed(t)
+}
+
+// rdpLoginFailed marks the password of t's connection as one that did not
+// sign in: it is not kept, and Retry asks rather than send it again. A
+// stored one stays in the store until the user changes or clears it.
+func (a *app) rdpLoginFailed(t *tab) {
+	l := t.rdpLogin
+	if l == nil || l.done || l.failed {
+		return
+	}
+	l.failed = true
+	t.pass = ""
+	if l.from == "store" {
+		t.storeFailed = true
+	}
+	a.log.Info("RDP login failed", "server", l.server, "passwordFrom", l.from)
+}
+
+// rdpDisconnected is the control's session ending: the tab shows why,
+// with Retry. A session that ends before its login completed counts as a
+// failed login.
+func (a *app) rdpDisconnected(t *tab, r *win32.RDP, reason int32) {
+	if !a.has(t) || t.rdp != r {
+		return
+	}
+	if l := t.rdpLogin; l != nil && !l.done {
+		a.rdpLoginFailed(t)
+	}
+	msg := r.ErrorDescription(reason)
+	if msg == "" {
+		msg = locales.RdpDisconnected(int(reason))
+	}
+	a.log.Info("RDP disconnected", "reason", reason, "text", msg)
+	a.disconnectRDP(t)
+	t.errText = msg
 }
 
 // scheduleRDPResize changes the remote desktop once the window size has
@@ -1477,6 +1654,7 @@ func (a *app) armRDPResize(t *tab, d time.Duration, tries int) {
 }
 
 func (a *app) disconnectRDP(t *tab) {
+	t.rdpLogin = nil
 	if t.rdpResize != nil {
 		t.rdpResize.Stop()
 		t.rdpResize = nil

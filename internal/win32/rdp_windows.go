@@ -366,6 +366,20 @@ type RDP struct {
 	appliedScale       int32 // the scale asked for last; 0 follows the window's DPI
 	scale              int32 // desktop scale factor last sent, percent
 	fixedW, fixedH     int32 // desktop size for Connect; 0 takes the window's
+
+	// Events of the control, on the UI thread. OnEvent gets each one, with
+	// its name (or "dispid N") and its first argument, for the log.
+	OnEvent         func(name string, arg int32)
+	OnLoginComplete func()
+	OnLogonError    func(code int32)
+	OnDisconnected  func(reason int32)
+	// AdviseErr says why the events are not connected, nil when they are.
+	AdviseErr error
+
+	events map[int32]string // dispid to event name, from the type information
+	sink   *rdpSink
+	cp     uintptr // IConnectionPoint of the events
+	cookie uint32
 }
 
 // NewRDP creates the control in a child window of parent, at the given
@@ -461,6 +475,7 @@ func NewRDP(parent uintptr) (*RDP, error) {
 		r.inPlace = ip
 	}
 	r.Fit(0, 0, 640, 480)
+	r.AdviseErr = r.advise(created)
 	return r, nil
 }
 
@@ -724,6 +739,7 @@ func (r *RDP) Focus() {
 
 // Close disconnects, releases the control and destroys the host window.
 func (r *RDP) Close() {
+	r.unadvise() // no events while it closes
 	if r.disp != 0 {
 		_ = rdpMethod(r.disp, "Disconnect")
 	}

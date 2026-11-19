@@ -269,6 +269,22 @@ func (msgs Messages) AppliesNextConnection() string {
 	return Catalog.Format(msgs.locale, "appliesNextConnection", nil)
 }
 
+// ClearSavedPassword says "Clear saved password"
+// in the language the app shows.
+//
+// Button of the Edit dialog of a Remote Desktop computer that deletes its
+// password from the system credential store.
+func ClearSavedPassword() string { return In(i18n.Locale()).ClearSavedPassword() }
+
+// ClearSavedPassword says "Clear saved password"
+// in the language of msgs.
+//
+// Button of the Edit dialog of a Remote Desktop computer that deletes its
+// password from the system credential store.
+func (msgs Messages) ClearSavedPassword() string {
+	return Catalog.Format(msgs.locale, "clearSavedPassword", nil)
+}
+
 // BadSize says "Width and height must be from 200 to 8192, and the width must be even."
 // in the language the app shows.
 func BadSize() string { return In(i18n.Locale()).BadSize() }
@@ -2463,6 +2479,22 @@ func ErrCertRejected() string { return In(i18n.Locale()).ErrCertRejected() }
 // in the language of msgs.
 func (msgs Messages) ErrCertRejected() string {
 	return Catalog.Format(msgs.locale, "errCertRejected", nil)
+}
+
+// RdpDisconnected says "The Remote Desktop session ended (code {code})."
+// in the language the app shows.
+//
+// Error of a Remote Desktop tab whose session ended, when the control gives
+// no text for the reason.
+func RdpDisconnected(code int) string { return In(i18n.Locale()).RdpDisconnected(code) }
+
+// RdpDisconnected says "The Remote Desktop session ended (code {code})."
+// in the language of msgs.
+//
+// Error of a Remote Desktop tab whose session ended, when the control gives
+// no text for the reason.
+func (msgs Messages) RdpDisconnected(code int) string {
+	return Catalog.Format(msgs.locale, "rdpDisconnected", map[string]any{"code": code})
 }
 
 // WindowMinimize says "Minimize"
