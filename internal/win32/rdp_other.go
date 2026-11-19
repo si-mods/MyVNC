@@ -16,6 +16,7 @@ func (r *RDP) Show(show bool)                                  {}
 func (r *RDP) Close()                                          {}
 func (r *RDP) Raise()                                          {}
 func (r *RDP) Focus()                                          {}
+func (r *RDP) ReleaseKeys()                                    {}
 func (r *RDP) Connected() bool                                 { return false }
 func (r *RDP) RemoteSize() (w, h int32)                        { return 0, 0 }
 func (r *RDP) ResizeRemoteNow(w, h, scale int32) (bool, error) { return false, nil }

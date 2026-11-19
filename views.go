@@ -221,6 +221,7 @@ func (a *app) rdpView(c *ui.Context, t *tab) {
 		// the control: it steps aside while one shows.
 		if a.modal() {
 			t.rdp.Show(false)
+			t.rdpAside = true
 			return
 		}
 		w, h := win32.ClientRect(a.win.NativeHandle())
@@ -231,6 +232,11 @@ func (a *app) rdpView(c *ui.Context, t *tab) {
 		t.rdp.Fit(0, top, w, h-top)
 		t.rdp.Show(true)
 		t.rdp.Raise()
+		if t.rdpAside {
+			// Back from the dialog: the keyboard returns to the remote.
+			t.rdp.Focus()
+			t.rdpAside = false
+		}
 		a.scheduleRDPResize(t, w, h-top)
 	}
 }
@@ -422,7 +428,7 @@ func (a *app) thumbnail(server string) *ui.Bitmap {
 
 // saveThumbnail keeps a small copy of the session's last frame.
 func (a *app) saveThumbnail(server string, img *image.RGBA) {
-	if img == nil {
+	if img == nil || server == "" { // "": the computer was removed
 		return
 	}
 	th := viewer.Thumbnail(img)
@@ -489,8 +495,11 @@ func (a *app) addView(c *ui.Context, k *colors) {
 					a.errText = err.Error()
 					return
 				}
-				a.addOpen = false
-				a.open(server)
+				// The password goes to this computer only: the form
+				// forgets it, so no tab opened later sends it elsewhere.
+				pass := a.pass
+				a.addOpen, a.pass = false, ""
+				a.openWith(server, pass)
 			}
 		})
 	})

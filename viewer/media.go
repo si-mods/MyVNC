@@ -181,9 +181,13 @@ const (
 	backgroundKbps = 2000 // decode cap, kbit/s
 )
 
-// showCap is the display cap now, 0 for the stream's rate.
+// showCap is the display cap now, 0 for the stream's rate. The background
+// cap never raises a lower one the user set.
 func (p *videoPipe) showCap() int {
 	if p.background.Load() {
+		if p.maxFPS > 0 {
+			return min(backgroundFPS, p.maxFPS)
+		}
 		return backgroundFPS
 	}
 	return p.maxFPS

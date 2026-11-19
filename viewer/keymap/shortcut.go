@@ -261,6 +261,10 @@ func NewShortcuts(kb *Keyboard, mask Modifier) *Shortcuts {
 // SetModifiers changes the shortcut modifiers; 0 turns shortcuts off.
 func (s *Shortcuts) SetModifiers(mask Modifier) { s.h.SetModifiers(mask) }
 
+// Bypass reports that modifiers+Space sends the next key to the server,
+// even a shortcut.
+func (s *Shortcuts) Bypass() bool { return s.bypass }
+
 // Filter takes the events of Keyboard.Handle, FlushAltGr or ExpireAltGr
 // and gives the events to send to the server and the shortcut, if any.
 // Before a command the server gets a release of all the keys it has down.

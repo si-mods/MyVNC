@@ -39,6 +39,7 @@ var (
 	rdpGetClientRect   = user32.NewProc("GetClientRect")
 	rdpGetFocus        = user32.NewProc("GetFocus")
 	rdpIsChild         = user32.NewProc("IsChild")
+	rdpSendMessage     = user32.NewProc("SendMessageW")
 )
 
 type rdpGUID struct {
@@ -688,6 +689,30 @@ func (r *RDP) Show(show bool) {
 	}
 	rdpShowWindow.Call(r.host, n)
 	r.visible = show
+}
+
+// ReleaseKeys sends the client a release of each modifier key held down,
+// while it has the keyboard. Call it before Show(false) when the user
+// switches away with a shortcut: the client took the modifiers' presses,
+// and their releases would go to another window and leave the keys down
+// on the server. A message sent to the client's own window is the one way
+// in that needs no injected input.
+func (r *RDP) ReleaseKeys() {
+	if r.host == 0 {
+		return
+	}
+	f, _, _ := rdpGetFocus.Call()
+	if f == 0 {
+		return
+	}
+	if in, _, _ := rdpIsChild.Call(r.host, f); f != r.host && in == 0 {
+		return // the client has not got the keyboard: it took no presses
+	}
+	var st [256]byte
+	procGetKeyboardState.Call(uintptr(unsafe.Pointer(&st)))
+	for _, u := range modifierUps(&st) {
+		rdpSendMessage.Call(f, uintptr(u.msg), uintptr(u.vk), u.lParam)
+	}
 }
 
 // Focus gives the keyboard to the client.

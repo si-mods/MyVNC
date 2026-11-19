@@ -518,6 +518,7 @@ func TestHomeCards(t *testing.T) {
 	}
 	// A failed connection of a host with no past marks it, a canceled or
 	// successful one does not.
+	a.cfg.AddServer("new") // as connectTo does
 	a.connected(a.newTab(), nil, "new", "", "", "", errors.New("refused"))
 	if !a.cfg.Computers["new"].Never {
 		t.Error("a first failure not noted")

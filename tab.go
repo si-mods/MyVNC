@@ -67,6 +67,7 @@ type tab struct {
 	rdpFixW, rdpFixH, rdpScale int32
 	rdpLocal                   bool // this PC scales the picture; see localDesktop
 	rdpZoomed                  bool // the control zooms the picture for rdpLocal
+	rdpAside                   bool // hidden while a window dialog shows
 
 	// Prompts of the connection goroutine.
 	authOpen           bool
@@ -174,6 +175,9 @@ func (a *app) leave(t *tab) {
 	}
 	t.menuOpen = false
 	if t.rdp != nil {
+		// Its server took the modifiers held for the shortcut: they go up
+		// there while the control still has the keyboard.
+		t.rdp.ReleaseKeys()
 		t.rdp.Show(false) // it stays connected
 	}
 	s := t.sess

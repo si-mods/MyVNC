@@ -515,3 +515,171 @@ func TestTabsFullScreenPanel(t *testing.T) {
 		t.Fatalf("home: active %v, full screen %v", a.active, full)
 	}
 }
+
+// A password typed in "+ Add computer" goes to that computer only: a
+// computer opened from its card while the first still connects does not
+// get it.
+func TestTabsPasswordStaysWithItsComputer(t *testing.T) {
+	x, _ := fakeServer(t, 2, 8, 8) // VNC auth
+	y, _ := fakeServer(t, 2, 8, 8)
+	a := tabsApp(t)
+	if err := a.tt.Click("Add computer"); err != nil {
+		t.Fatal(err)
+	}
+	a.typeInto("Server", x)
+	a.typeInto("Password", "pX")
+	if err := a.tt.Click("Connect"); err != nil {
+		t.Fatal(err)
+	}
+	tx := a.active
+	a.until("X's warning", func() bool { return tx.warnOpen }) // X waits for the user
+	if tx.pass != "pX" {
+		t.Fatalf("X's tab has password %q", tx.pass)
+	}
+	a.activate(nil) // the + tab
+	a.server = y    // Y's card
+	a.connect()
+	ty := a.active
+	if ty == tx || ty.pass != "" || a.pass != "" {
+		t.Fatalf("Y's tab has password %q, the form %q", ty.pass, a.pass)
+	}
+	a.until("Y's warning", func() bool { return ty.warnOpen })
+	a.tt.Frame()
+	if err := a.tt.Click("Continue"); err != nil {
+		t.Fatal(err)
+	}
+	a.until("Y asks for its own password", func() bool { return ty.authOpen })
+}
+
+// winKeys gives the hook's key messages with the key state they come
+// with: Ctrl, the left Alt and Page Down.
+type winKeys struct{ state [256]byte }
+
+func (w *winKeys) key(vk uint16, scan uint16, ext, down bool) keymap.WinKey {
+	w.state[vk] &^= 0x80
+	if down {
+		w.state[vk] |= 0x80
+	}
+	if vk == keymap.VK_CONTROL {
+		w.state[keymap.VK_LCONTROL] = w.state[vk]
+	}
+	if vk == keymap.VK_MENU {
+		w.state[keymap.VK_LMENU] = w.state[vk]
+	}
+	return keymap.WinKey{Up: !down, VK: vk, Scan: scan, Extended: ext, State: w.state}
+}
+
+func (w *winKeys) ctrl(down bool) keymap.WinKey { return w.key(keymap.VK_CONTROL, 0x1d, false, down) }
+func (w *winKeys) alt(down bool) keymap.WinKey  { return w.key(keymap.VK_MENU, 0x38, false, down) }
+func (w *winKeys) pgDn(down bool) keymap.WinKey { return w.key(keymap.VK_NEXT, 0x51, true, down) }
+
+// Holding the shortcut modifiers, each Page Down shows the next tab, also
+// when it repeats; no Page Down reaches a server, and the computer left
+// behind gets the modifiers' releases.
+func TestTabsShortcutHeld(t *testing.T) {
+	s1, s2, s3 := watchServer(t), watchServer(t), watchServer(t)
+	a := tabsApp(t)
+	t1, t2 := a.openTwo(s1, s2)
+	a.open(s3.server)
+	t3 := a.active
+	a.until("the third first frame", func() bool { return t3.sess != nil && t3.sess.Screen != nil })
+	a.activate(t1)
+	var w winKeys
+	a.hookKey(w.ctrl(true))
+	a.hookKey(w.alt(true))
+	a.until("the modifiers on server 1", func() bool { return s1.key("+" + string(rune(keymap.XK_Alt_L))) })
+	a.hookKey(w.pgDn(true))
+	a.hookKey(w.pgDn(false))
+	if a.active != t2 {
+		t.Fatalf("first Page Down: tab %d", idOf(a.active))
+	}
+	a.hookKey(w.pgDn(true))
+	a.hookKey(w.pgDn(false))
+	if a.active != t3 {
+		t.Fatalf("second Page Down: tab %d", idOf(a.active))
+	}
+	a.activate(t1)
+	a.hookKey(w.pgDn(true))
+	a.hookKey(w.pgDn(true)) // the key repeats
+	a.hookKey(w.pgDn(false))
+	if a.active != t3 {
+		t.Fatalf("repeated Page Down: tab %d", idOf(a.active))
+	}
+	a.hookKey(w.alt(false))
+	a.hookKey(w.ctrl(false))
+	a.until("the modifiers released on server 1", func() bool {
+		return s1.key("-"+string(rune(keymap.XK_Alt_L))) && s1.key("-"+string(rune(keymap.XK_Control_L)))
+	})
+	a.flush()
+	pd := "+" + string(rune(keymap.XK_Next))
+	for i, s := range []*watched{s1, s2, s3} {
+		if s.key(pd) {
+			t.Errorf("Page Down reached server %d: %q", i+1, s.keys)
+		}
+	}
+}
+
+// After the hook switches from a Remote Desktop tab, the modifiers still
+// held switch on from the VNC tab it shows. A zero win32.RDP stands in for
+// the control.
+func TestTabsShortcutHeldFromRDP(t *testing.T) {
+	s1, s2 := watchServer(t), watchServer(t)
+	a := tabsApp(t)
+	r := a.newTab()
+	r.target, r.server, r.rdp = "rdp://192.0.2.20", "rdp://192.0.2.20", &win32.RDP{}
+	v1, v2 := a.openTwo(s1, s2)
+	a.activate(r)
+	var w winKeys
+	if a.hookKey(w.ctrl(true)) || a.hookKey(w.alt(true)) {
+		t.Fatal("the hook took the modifiers from the control")
+	}
+	if !a.hookKey(w.pgDn(true)) {
+		t.Fatal("the hook left Page Down to the control")
+	}
+	a.flush()
+	if a.active != v1 {
+		t.Fatalf("from the RDP tab: tab %d", idOf(a.active))
+	}
+	a.hookKey(w.pgDn(false))
+	a.hookKey(w.pgDn(true))
+	if a.active != v2 {
+		t.Fatalf("on from the VNC tab: tab %d", idOf(a.active))
+	}
+	a.hookKey(w.pgDn(false))
+	a.hookKey(w.alt(false))
+	a.hookKey(w.ctrl(false))
+	a.flush()
+	if pd := "+" + string(rune(keymap.XK_Next)); s1.key(pd) || s2.key(pd) {
+		t.Errorf("Page Down reached a server: 1 %q, 2 %q", s1.keys, s2.keys)
+	}
+}
+
+// idOf is t's id, 0 for the home tab.
+func idOf(t *tab) int {
+	if t == nil {
+		return 0
+	}
+	return t.id
+}
+
+// A computer removed while its tab is open stays removed when the tab
+// reconnects.
+func TestTabsRemovedStaysRemoved(t *testing.T) {
+	s1 := watchServer(t)
+	a := tabsApp(t)
+	a.cfg.Reconnect = true
+	a.open(s1.server)
+	t1 := a.active
+	a.until("the first frame", func() bool { return t1.sess != nil && t1.sess.Screen != nil })
+	a.removeServer(s1.server)
+	sess := t1.sess
+	s1.drop()
+	a.until("the reconnect", func() bool { return t1.sess != nil && t1.sess != sess && t1.sess.Screen != nil })
+	a.flush()
+	if _, ok := a.cfg.Computers[s1.server]; ok || slices.Contains(a.cfg.Servers, s1.server) {
+		t.Errorf("the computer came back: %v, %v", a.cfg.Servers, a.cfg.Computers)
+	}
+	if _, ok := a.cfg.Computers[""]; ok {
+		t.Errorf("a computer with no address: %v", a.cfg.Computers)
+	}
+}

@@ -737,7 +737,7 @@ func (a *app) fullScreen(on bool) {
 
 func (a *app) setName(t *tab, name string) {
 	t.name = name
-	if t.sess != nil {
+	if t.sess != nil && t.server != "" { // "": the computer was removed
 		c := a.cfg.Computers[t.server]
 		c.Name = name
 		a.cfg.Computers[t.server] = c
@@ -800,7 +800,12 @@ func secretKey(addr string) string { return "password " + addr }
 func (a *app) connect() { a.open(strings.TrimSpace(a.server)) }
 
 // open connects to server in a new tab, or shows the tab open for it.
-func (a *app) open(server string) {
+func (a *app) open(server string) { a.openWith(server, "") }
+
+// openWith is open with the password typed for server in the Add
+// computer dialog. Only that computer's new tab gets it; a tab already
+// open keeps its own.
+func (a *app) openWith(server, pass string) {
 	if _, err := viewer.ParseURL(server); err != nil {
 		a.errText = err.Error()
 		return
@@ -813,7 +818,7 @@ func (a *app) open(server string) {
 		}
 	}
 	t := a.newTab()
-	t.target, t.server, t.pass = server, server, a.pass
+	t.target, t.server, t.pass = server, server, pass
 	a.connectTo(t, server, false)
 }
 
@@ -1234,8 +1239,11 @@ func (a *app) connected(t *tab, s *viewer.Session, server, addr, user, pass stri
 	}
 	t.connecting, t.cancel = false, nil
 	t.authOpen, t.keyOpen, t.warnOpen, t.certOpen = false, false, false, false
+	// A computer removed while its tab was open stays removed: a
+	// reconnect writes nothing of it.
+	saved := slices.Contains(a.cfg.Servers, server)
 	if err != nil {
-		if c := a.cfg.Computers[server]; c.Last.IsZero() && c.Name == "" && !c.Never {
+		if c := a.cfg.Computers[server]; saved && c.Last.IsZero() && c.Name == "" && !c.Never {
 			c.Never = true // it did not connect once
 			a.cfg.Computers[server] = c
 			a.saveConfig()
@@ -1257,18 +1265,21 @@ func (a *app) connected(t *tab, s *viewer.Session, server, addr, user, pass stri
 		return // canceled
 	}
 	t.cancelReconnect()
-	t.sess, t.addr, t.server, t.pass, t.secType = s, addr, server, pass, s.SecurityType()
+	t.sess, t.addr, t.pass, t.secType = s, addr, pass, s.SecurityType()
 	s.SetRotation(a.cfg.Orientation)
 	t.step = locales.StepFirstFrame
-	c := a.cfg.Computers[server]
-	c.Username, c.Last = user, time.Now()
-	a.cfg.Computers[server] = c
-	a.credRows = nil // the credentials page reads them again
-	// The desktop name is kept by setName when the server tells it.
-	a.saveConfig()
+	if saved {
+		t.server = server
+		c := a.cfg.Computers[server]
+		c.Username, c.Last = user, time.Now()
+		a.cfg.Computers[server] = c
+		a.credRows = nil // the credentials page reads them again
+		// The desktop name is kept by setName when the server tells it.
+		a.saveConfig()
+	}
 	t.emb = emulatemb.New(a.cfg.EmulateMiddleButton, func(x, y int, m uint16) { s.Pointer(m, x, y) })
 	t.stats = statsSample{}
-	t.name, t.buttons, t.ptrMove, a.pass, t.errText = "", 0, false, "", ""
+	t.name, t.buttons, t.ptrMove, t.errText = "", 0, false, ""
 	t.wheelPend = nil
 	t.ungrabbed, t.menuOpen, t.srvLED = false, false, keymap.LEDUnknown
 	t.dyn, t.dynUrgent, t.dynRefused, t.dynHint = viewer.Resizer{}, true, false, false
@@ -1336,7 +1347,7 @@ func (a *app) connectRDP(t *tab, target viewer.Target, server string) {
 	a.cfg.Username = a.user
 	a.saveConfig()
 	addr := target.Addr()
-	user, pass := a.user, a.pass
+	user, pass := a.user, t.pass // what was typed for this computer only
 	if c := a.cfg.Computers[server]; user == "" && c.Username != "" {
 		user = c.Username
 	}
@@ -1389,7 +1400,7 @@ func (a *app) connectRDP(t *tab, target viewer.Target, server string) {
 				a.log.Info("RDP state", "connected", connected, "width", w, "height", h)
 				// The control authenticates by itself; once it says it is
 				// in, the account it was given is the one that worked.
-				if connected && a.cfg.Remember && pass != "" {
+				if connected && a.cfg.Remember && pass != "" && slices.Contains(a.cfg.Servers, server) {
 					a.saveCredential(addr, credential{User: account, Pass: pass})
 					c := a.cfg.Computers[server]
 					c.Username, c.Last = account, time.Now()
@@ -1896,6 +1907,43 @@ func main() {
 	}
 }
 
+// hookKey takes a key message of the window for the active tab before
+// mygo sees it; true drops the message.
+func (a *app) hookKey(k keymap.WinKey) bool {
+	t := a.active
+	if t != nil && t.rdp != nil {
+		// The control gets every key but two: Ctrl+Alt+Shift+Q closes
+		// its tab, and the tab shortcuts switch tabs.
+		if k.VK == 0x51 && !k.Up && k.State[0x11]&0x80 != 0 &&
+			k.State[0x12]&0x80 != 0 && k.State[0x10]&0x80 != 0 {
+			a.post(func() { a.closeTab(t) })
+			return true
+		}
+		if act := hookTabAction(k, a.mods); act != keymap.ActionNone {
+			a.post(func() { a.tabAction(act) })
+			return true
+		}
+		return false
+	}
+	if t == nil || t.sess == nil || a.cfg.ViewOnly || a.modal() {
+		return false
+	}
+	// A tab change forgets the keys held for the shortcut handler, and a
+	// Remote Desktop tab never gave them to it: with the modifiers still
+	// down, the next tab shortcut is read from the key state.
+	if act := hookTabAction(k, a.mods); act != keymap.ActionNone && (a.sc == nil || !a.sc.Bypass()) {
+		a.tabAction(act)
+		return true
+	}
+	a.keys(a.kb.Handle(k))
+	if id, ok := a.kb.AltGrTimer(); ok {
+		time.AfterFunc(100*time.Millisecond, func() {
+			mygo.RunOnMain(func() { a.keys(a.kb.ExpireAltGr(id)) })
+		})
+	}
+	return true
+}
+
 // wireKeyboard sends the window's keys to the session while one runs,
 // before mygo sees them.
 func wireKeyboard(a *app, win *mygo.Window) {
@@ -1903,33 +1951,7 @@ func wireKeyboard(a *app, win *mygo.Window) {
 	a.sc = keymap.NewShortcuts(a.kb, a.mods)
 	a.localLED, a.setLED = win32.LEDState, win32.SetLEDState
 	hwnd := win.NativeHandle()
-	_, err := win32.Install(hwnd, func(k keymap.WinKey) bool {
-		t := a.active
-		if t != nil && t.rdp != nil {
-			// The control gets every key but two: Ctrl+Alt+Shift+Q closes
-			// its tab, and the tab shortcuts switch tabs.
-			if k.VK == 0x51 && !k.Up && k.State[0x11]&0x80 != 0 &&
-				k.State[0x12]&0x80 != 0 && k.State[0x10]&0x80 != 0 {
-				a.post(func() { a.closeTab(t) })
-				return true
-			}
-			if act := hookTabAction(k, a.mods); act != keymap.ActionNone {
-				a.post(func() { a.tabAction(act) })
-				return true
-			}
-			return false
-		}
-		if t == nil || t.sess == nil || a.cfg.ViewOnly || a.modal() {
-			return false
-		}
-		a.keys(a.kb.Handle(k))
-		if id, ok := a.kb.AltGrTimer(); ok {
-			time.AfterFunc(100*time.Millisecond, func() {
-				mygo.RunOnMain(func() { a.keys(a.kb.ExpireAltGr(id)) })
-			})
-		}
-		return true
-	})
+	_, err := win32.Install(hwnd, a.hookKey)
 	if err != nil {
 		a.log.Warn("keyboard hook", "err", err)
 		return

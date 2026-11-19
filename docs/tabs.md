@@ -400,9 +400,10 @@ Ctrl+Alt+Shift+Q closes only the active one.
   protection, also while the tab strip shows the protection color.
 - **Clean end.** A session that the server ends cleanly (no error to
   reconnect for) closes its tab; only a dropped connection reconnects.
-- **Passwords.** `connectTo` uses the tab's own password (`tab.pass`,
-  taken from the form when the tab opens), so a reconnect or Retry does
-  not read a form the user has since changed for another computer.
+- **Passwords.** `connectTo` and `connectRDP` use the tab's own password
+  (`tab.pass`). Only a tab opened with Connect in "+ Add computer" takes
+  the form's password, and the form forgets it at once, so a reconnect,
+  a Retry or another computer's tab never sends it elsewhere.
 - **Tab order of the shortcuts.** Next and previous step through the
   tabs and the home tab, which comes after the last tab, and wrap around.
 - **Shortcuts in the window.** Where the keyboard hook leaves the keys to
@@ -412,6 +413,11 @@ Ctrl+Alt+Shift+Q closes only the active one.
 - **RDP keys.** The hook takes the tab shortcuts from the RDP control
   only with exactly the shortcut modifiers, and counts the left Alt only:
   the right Alt is AltGr on many layouts, which types with Ctrl+Alt.
+- **Held modifiers.** A tab change resets the shortcut handler, so with
+  the modifiers still down the hook reads the next tab shortcut from the
+  key state (as for RDP), and Page Down pressed again or repeating keeps
+  switching. Before an RDP control is hidden, it gets a release of each
+  modifier still down (`RDP.ReleaseKeys`), as it took their presses.
 - **RDP and full screen.** RDP tabs have no full screen. Showing one
   leaves full screen; a VNC tab shown after it goes back to full screen
   when the setting is on.

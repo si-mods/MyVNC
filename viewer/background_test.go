@@ -68,6 +68,28 @@ func TestVideoPipeBackgroundShowCap(t *testing.T) {
 	}
 }
 
+// In the background the display cap is two pictures a second, or the
+// user's lower MaxFPS.
+func TestVideoPipeBackgroundShowCapLower(t *testing.T) {
+	old := newVideoDecoder
+	t.Cleanup(func() { newVideoDecoder = old })
+	newVideoDecoder = func(media.Codec, mf.Mode) (videoDecoder, error) { return &countDecoder{}, nil }
+	for _, c := range []struct{ maxFPS, want int }{{0, 2}, {1, 1}, {2, 2}, {30, 2}} {
+		var n counters
+		p := newVideoPipe(mf.Software, c.maxFPS, func() {},
+			func(*image.RGBA, string, mf.Info) {}, func(error) {}, nil, nil, &n)
+		p.setBackground(true)
+		if got := p.showCap(); got != c.want {
+			t.Errorf("MaxFPS %d: background cap %d, want %d", c.maxFPS, got, c.want)
+		}
+		p.setBackground(false)
+		if got := p.showCap(); got != c.maxFPS {
+			t.Errorf("MaxFPS %d: cap %d after the background", c.maxFPS, got)
+		}
+		p.close()
+	}
+}
+
 // The decode cap is the smaller non-zero of the limiter's and the
 // background's, and leaving the background gives the limiter's back.
 func TestVideoPipeBackgroundDecodeCap(t *testing.T) {
