@@ -3,8 +3,12 @@
 Each release needs its own `## <version>` section below: `mygo build` takes the update notes
 from it and fails when the file exists but has no section for the version in `mygo.json`.
 
-## Unreleased
+## 0.1.6
 
+- A signed and notarized macOS build ships alongside the Windows one, as
+  `MyVNC-<version>-arm64.dmg` on the release page and through the in-app updater. It is
+  signed with a Developer ID certificate and notarized by Apple, so Gatekeeper opens it
+  without a warning.
 - Tabs: one window holds several sessions, VNC, ARD and Remote Desktop mixed, one tab each in
   the title bar. Opening another computer no longer ends the session that runs; opening a
   computer that has a tab shows that tab, and the `+` tab shows the computer cards. A tab in
